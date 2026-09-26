@@ -280,6 +280,16 @@ Text \cite{knuth84}.
         self.assertEqual((r["exit"], r["engine"]), (0, "xelatex"), r["output"][-2000:])
         self.assertTrue((root / "build/main.pdf").exists())
 
+    @unittest.skipUnless(shutil.which("xelatex") and has_package("ctex.sty"), "needs xelatex and ctex")
+    def test_ctex_in_a_chinese_folder(self):
+        """Fails on a TeX distribution whose ctex is newer than its LaTeX kernel ("Support
+        package `expl3' too old"): update the distribution."""
+        r, root, log = self.run_build({"main.tex": "\\documentclass{ctexart}\n\\begin{document}\n"
+                                                   "\\section{引言}\\label{s}\n见第~\\ref{s}~节。\n"
+                                                   "\\end{document}\n"}, name="中文 路径")
+        self.assertReadable(r, log)
+        self.assertEqual(r["engine"], "xelatex")
+
     def test_bibtex_in_a_chinese_folder(self):
         r, root, log = self.run_build({"main.tex": "\\documentclass{article}\\begin{document}\n"
                                                    "\\section{A}\\label{a} See \\ref{a} and "
