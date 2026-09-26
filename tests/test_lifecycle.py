@@ -5,12 +5,13 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
+from tmpdirs import tmpdir  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 SERVER = REPO / "prism_local" / "server.py"
@@ -71,7 +72,7 @@ def wait_file(path, timeout=15):
 
 class ServerLifecycle(unittest.TestCase):
     def start(self, timings, *extra):
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = tmpdir()
         self.ready = self.tmp / "ready.json"
         self.proc = subprocess.Popen(
             [sys.executable, str(SERVER), str(PROJECT), "--port", "0", "--no-browser",
@@ -178,7 +179,7 @@ class ServerLifecycle(unittest.TestCase):
 
 class LauncherLifecycle(unittest.TestCase):
     def test_launcher_starts_server_and_exits(self):
-        state = Path(tempfile.mkdtemp())
+        state = tmpdir()
         env = {**os.environ, "PRISM_STATE_DIR": str(state)}
         cmd = [sys.executable, str(LAUNCHER), str(PROJECT), "--browser", "none", "--quiet",
                "--idle-timings", "30,1,30"]

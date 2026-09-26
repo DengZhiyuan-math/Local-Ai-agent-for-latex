@@ -15,6 +15,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
+from tmpdirs import tmpdir  # noqa: E402
 import agent  # noqa: E402
 import backends  # noqa: E402
 from backend_claude import ClaudeCode  # noqa: E402
@@ -423,7 +425,7 @@ class ClaudeAccountGuard(unittest.TestCase):
 
     def test_project_settings_that_switch_to_an_api_key_are_found(self):
         import json, tempfile
-        root = Path(tempfile.mkdtemp())
+        root = tmpdir()
         (root / ".claude").mkdir()
         (root / ".claude" / "settings.json").write_text(json.dumps({"apiKeyHelper": "get-key.sh"}))
         (root / ".claude" / "settings.local.json").write_text(json.dumps({"env": {"ANTHROPIC_API_KEY": "x"}}))

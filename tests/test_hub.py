@@ -3,12 +3,13 @@ import json
 import os
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 from pathlib import Path
 
-from test_lifecycle import NO_WINDOW, beat, bye, request, stop, wait_file
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
+from tmpdirs import tmpdir  # noqa: E402
+from test_lifecycle import NO_WINDOW, beat, bye, request, stop, wait_file  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
 HUB = REPO / "prism_local" / "hub.py"
@@ -22,7 +23,7 @@ HEADERS = {"Content-Type": "application/json", "X-Prism-Local": "1"}
 
 class TempState(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = tmpdir()
         self.old = os.environ.get("PRISM_STATE_DIR")
         os.environ["PRISM_STATE_DIR"] = str(self.tmp / "state")
 
@@ -35,7 +36,7 @@ class TempState(unittest.TestCase):
 
 class Title(unittest.TestCase):
     def title(self, tex):
-        f = Path(tempfile.mkdtemp()) / "main.tex"
+        f = tmpdir() / "main.tex"
         f.write_text(tex, encoding="utf-8")
         return hub.tex_title(f)
 
@@ -163,7 +164,7 @@ class SettingsAndGitHub(TempState):
 
 class HubServer(unittest.TestCase):
     def setUp(self):
-        self.tmp = Path(tempfile.mkdtemp())
+        self.tmp = tmpdir()
         self.ready = self.tmp / "ready.json"
         self.proc = subprocess.Popen(
             [sys.executable, str(HUB), "--port", "0", "--no-browser", "--exit-when-idle",

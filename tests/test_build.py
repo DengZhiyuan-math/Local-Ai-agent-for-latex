@@ -9,7 +9,6 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unittest
@@ -18,6 +17,8 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 import build  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
+from tmpdirs import tmpdir  # noqa: E402
 
 HAVE_TEX = bool(shutil.which("pdflatex")) and not os.environ.get("PRISM_SKIP_TEX")
 BIB = ("@article{knuth84, author = {Donald E. Knuth}, title = {Literate Programming},\n"
@@ -25,7 +26,7 @@ BIB = ("@article{knuth84, author = {Donald E. Knuth}, title = {Literate Programm
 
 
 def project(files: dict, name: str = "p") -> Path:
-    root = Path(tempfile.mkdtemp()) / name
+    root = tmpdir() / name
     root.mkdir(parents=True)
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)

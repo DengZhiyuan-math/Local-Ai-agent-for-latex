@@ -4,17 +4,18 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 import server  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
+from tmpdirs import tmpdir  # noqa: E402
 
 
 def project(files: dict) -> Path:
-    root = Path(tempfile.mkdtemp())
+    root = tmpdir()
     for rel, text in files.items():
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
@@ -97,7 +98,7 @@ class GitState(unittest.TestCase):
                        check=True, capture_output=True)
 
     def test_project_inside_a_larger_repository(self):
-        top = Path(tempfile.mkdtemp())
+        top = tmpdir()
         paper = top / "papers" / "我的 论文"
         paper.mkdir(parents=True)
         (paper / "main.tex").write_text("a\n", encoding="utf-8")
