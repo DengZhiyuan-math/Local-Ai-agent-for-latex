@@ -43,6 +43,7 @@ const ICONS = {
   down: '<path d="m7 10 5 5 5-5"/>',
   up: '<path d="m7 14 5-5 5 5"/>',
   play: '<path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke-width="1.2"/>',
+  stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5" fill="currentColor" stroke="none"/>',
   popout: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3L19.5 9"/><path d="M19.5 4.5V9H15"/>',
   arrow: '<path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5"/>',

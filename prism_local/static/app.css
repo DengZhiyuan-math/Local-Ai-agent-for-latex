@@ -84,6 +84,10 @@ button.flip .ico { transform: rotate(180deg); }
 .dropdown .dd-item:hover { background: var(--panel2); }
 .dropdown .dd-item small { color: var(--muted); margin-left: auto; padding-left: 12px; }
 .dropdown hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
+.dropdown button.dd-item { width: 100%; height: auto; border: none; background: none; justify-content: flex-start; line-height: 1.4; }
+.dropdown .dd-note { font-size: 11px; color: var(--muted); padding: 4px 9px 5px; max-width: 290px; white-space: normal; }
+.dropdown .dd-note:empty { display: none; }
+#btn-compile.stop { background-color: var(--err); border-color: var(--err); }
 #pdf-toolbar #compile-box { margin-right: 6px; }
 .toggle { display: flex; align-items: center; gap: 4px; color: var(--muted); white-space: nowrap; }
 .status { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }

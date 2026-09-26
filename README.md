@@ -5,9 +5,10 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
 - **Editor**: CodeMirror 5 with tabs, LaTeX highlighting and search. It autocompletes
   `\cref{…}`/`\eqref{…}` from your labels, `\cite{…}` from your `.bib` files, and `\…` from your
   own `\newcommand`s.
-- **Compile and see errors**: one click (⌘↵) builds the project. Errors and warnings
-  (undefined references and citations included) are listed with their source lines, and a click
-  jumps to the line.
+- **Compile and see errors**: one click (⌘↵) builds the project. The engine (pdflatex,
+  XeLaTeX or LuaLaTeX) is chosen from the document, bibtex/biber and makeindex run when needed,
+  and the engine reruns until references settle. Errors and warnings (undefined references and
+  citations included) are listed with their source lines, and a click jumps to the line.
 - **PDF preview with SyncTeX**: the preview reloads after every build and keeps its scroll position.
   Double-click the PDF to jump to the source; ⌘J jumps from the source to the PDF. The PDF can
   **pop out into its own tab** and stays in sync there.
@@ -32,13 +33,11 @@ needs nothing from npm. The front-end libraries are vendored, so it also works o
 ## Requirements
 
 - Python ≥ 3.9 (tested with 3.11)
-- A LaTeX build tool:
-  - [Tectonic](https://tectonic-typesetting.github.io/), used by default if it is on `PATH`, or
-  - `latexmk` with a TeX distribution, used if Tectonic is not found. latexmk is a Perl
-    script. On Windows, where Perl is rarely on `PATH` (MiKTeX does not ship it), builds use
-    the Perl that comes with Git for Windows if no other is found. Otherwise install
-    [Strawberry Perl](https://strawberryperl.com). Or
-  - any command you configure in `prism.json`.
+- A TeX distribution: [MiKTeX](https://miktex.org) or [TeX Live](https://tug.org/texlive/).
+  prism-local runs its programs directly (pdflatex, xelatex, lualatex, bibtex, biber,
+  makeindex), so it needs neither Perl nor latexmk. Without a TeX distribution,
+  [Tectonic](https://tectonic-typesetting.github.io/) is used if it is on `PATH`. latexmk, or
+  commands of your own, can be chosen in `prism.json`.
 - Optional: `git`, for the file status markers and the Diff view.
 - Optional, for the agent panel, one of:
   - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), logged in (`claude` works
@@ -202,14 +201,36 @@ python launcher/prism_launcher.pyw --home         # the Home page
 | ⌘B / Ctrl-B | Show/hide the file sidebar |
 | Ctrl-Space | Completion |
 
-## Build modes
+## Building
 
-The mode picker next to **Compile** offers:
+**Compile** (⌘↵) saves every file and builds the project. The built-in builder:
 
-- **Draft**: keeps going after TeX errors, so you still get a PDF while you write. Errors are
-  still reported in red. Tectonic uses `-Z continue-on-errors`; latexmk uses `-f`.
-- **Strict**: stops at the first error.
-- **Check**: only appears if you configure it, for example as a project script that runs extra lint checks.
+1. picks the engine: `"engine"` in `prism.json`, else a `% !TEX program = xelatex` line at the
+   top of the main file, else the packages the preamble loads (fontspec, unicode-math, xeCJK,
+   ctex … need XeLaTeX; luacode, luatexja … LuaLaTeX), else pdflatex;
+2. runs bibtex or biber when the citations or the `.bib` files changed, and makeindex for
+   indexes, glossaries and nomenclature;
+3. runs the engine again until the `.aux`, `.toc`, `.bbl` … files stop changing (at most five
+   passes), so references and citations are resolved after one click;
+4. if a file left by an interrupted build breaks the first pass, removes what earlier builds
+   left and starts again.
+
+An unchanged document builds in one pass. Folders with spaces or Chinese names work. biber and
+latexmk, which are Perl programs, reach such folders through an ASCII junction on Windows.
+
+The ▾ menu next to **Compile**:
+
+- **Draft** keeps going after TeX errors, so you still get a PDF while you write. Errors are
+  still reported in red.
+- **Strict** stops at the first error.
+- **Check** only appears if you configure it, for example as a project script that runs extra
+  lint checks.
+- **Auto-compile** builds shortly after you stop typing.
+- **Recompile from scratch** deletes what earlier builds left (`.aux`, `.bbl`, …) and builds
+  again. The menu also says what the last build ran.
+
+While a build runs, the **Compile** button stops it. A build that takes longer than 10 minutes
+(an endless loop in a macro, say) is stopped, and the Output tab shows where TeX was.
 
 ## Configuration: `prism.json` (optional)
 
@@ -219,10 +240,11 @@ Place `prism.json` in the project root. Every key is optional:
 {
   "main": "main.tex",
   "outdir": "build",
+  "engine": "xelatex",
+  "builder": "auto",
+  "shell_escape": false,
   "build": {
-    "draft":  ["tectonic", "-o", "{outdir}", "--keep-logs", "--synctex", "-Z", "continue-on-errors", "{main}"],
-    "strict": "scripts/build.sh",
-    "check":  "scripts/check.sh"
+    "check": ["python", "scripts/check.py", "{main}"]
   },
   "files":   ["main.tex", "chapters/**/*.tex", "*.bib"],
   "exclude": ["drafts/old/**"]
@@ -232,12 +254,22 @@ Place `prism.json` in the project root. Every key is optional:
 - `main`: the root document. Default: `main.tex`, otherwise the first top-level `.tex` file
   containing `\documentclass`.
 - `outdir`: where the build writes `<main>.pdf`, `.log` and `.synctex.gz`. Default: `build`.
-- `build`: commands for the `draft`, `strict` and `check` modes. Each is either an argv list or a
-  shell string (run with `bash -c`). `{main}` and `{outdir}` are substituted. The build must
-  produce SyncTeX data (`--synctex` for Tectonic, `-synctex=1` for latexmk/pdflatex).
+- `engine`: `pdflatex`, `xelatex` or `lualatex`. Default: chosen from the document (see
+  [Building](#building)).
+- `builder`: `auto`, the built-in builder (Tectonic if no TeX distribution is found);
+  `latexmk`; or `tectonic`.
+- `shell_escape`: `true` lets the document run programs (`-shell-escape`), which minted, svg
+  and gnuplottex need. Set it only for documents you trust.
+- `build`: commands of your own for the `draft`, `strict` or `check` mode, each an argv list or
+  a shell string. `{main}` and `{outdir}` are substituted. A shell string runs with `bash -c`;
+  on Windows that is Git for Windows' bash, never WSL's. Your build must produce SyncTeX data
+  (`-synctex=1`) for the PDF ↔ source jumps.
 - `files`: globs for the file tree. By default every `.tex/.bib/.md/.sty/.cls/.txt` file is listed,
   skipping hidden directories, `outdir` and `node_modules`.
 - `exclude`: globs to hide from the file tree.
+
+Changes to `prism.json` apply at once, without restarting. A `prism.json` that cannot be used
+is reported in the Compile menu and the build output, and the defaults apply.
 
 ## The agent panel
 
@@ -391,6 +423,8 @@ prism-local is meant for a single user on their own machine.
   the same origin, so other sites cannot keep the server running.
 - It reads and writes only text source files inside the project directory. Hidden directories
   and the build directory are excluded.
+- Builds allow only TeX's restricted shell escape (a few safe helpers such as makeindex), so a
+  document cannot run arbitrary programs, unless `prism.json` sets `"shell_escape": true`.
 - Anyone who can reach the port can run your build commands and the agent. Do not expose
   the port to a network: no port forwarding, no `0.0.0.0`.
 - With an API provider, the files the model reads and your messages are sent to that
@@ -402,7 +436,9 @@ prism-local is meant for a single user on their own machine.
 bin/prism-local            command-line launcher
 bin/prism-home             command-line launcher for the Home page
 launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1, icon
-prism_local/server.py      HTTP server: files, builds, log parsing, SyncTeX, idle exit
+prism_local/server.py      HTTP server: files, SyncTeX, idle exit
+prism_local/build.py       builds: engine choice, bibliographies, indexes, reruns, log parsing
+prism_local/proc.py        starting and stopping programs (process trees on Windows)
 prism_local/hub.py         Home page server: project list, templates, starting editors
 prism_local/registry.py    shared state: project list, running instances, ports
 prism_local/presence.py    which pages are open, for --exit-when-idle
@@ -419,8 +455,9 @@ tests/                     python -m unittest discover -s tests
 
 - SyncTeX lookup is a compact reimplementation, not the `synctex` library. It is accurate to the
   line for ordinary text and math. Inside complex constructs (tables, TikZ, floats) it can land a few lines off.
-- The Tectonic build path is the one tested most. The latexmk defaults use standard flags
-  (`-pdf -synctex=1 -file-line-error`).
+- The built-in builder does not run xindy or bib2gls (xindy-style glossaries and indexes,
+  glossaries-extra's `\GlsXtrLoadResources`). Use `"builder": "latexmk"` with a latexmkrc
+  for those.
 - No collaborative editing, and no file creation, rename or delete inside the editor. Use your
   file manager, git or Claude for those. (The Home page can create new projects.)
 

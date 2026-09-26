@@ -7,9 +7,9 @@ Editor + PDF preview with SyncTeX + an AI agent panel, served from
     python3 prism_local/server.py [PROJECT_DIR] [--port 8765] [--no-browser]
                                   [--exit-when-idle] [--port-tries N] [--ready-file F]
 
-Besides the configured build commands it runs only read-only `git status` /
-`git diff` and, for the agent panel, the chosen AI backend (agent.py, backends.py):
-the Claude Code or Codex CLI, or calls to an OpenAI-compatible API such as DeepSeek.
+Besides the builds (build.py) it runs only read-only `git status` / `git diff`
+and, for the agent panel, the chosen AI backend (agent.py, backends.py): the
+Claude Code or Codex CLI, or calls to an OpenAI-compatible API such as DeepSeek.
 Optional per-project settings live in PROJECT_DIR/prism.json (see README).
 """
 from __future__ import annotations
@@ -20,7 +20,6 @@ import gzip
 import json
 import os
 import re
-import shutil
 import socket
 import subprocess
 import sys
@@ -34,6 +33,7 @@ from urllib.parse import parse_qs, urlparse
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import NO_WINDOW, AgentManager  # noqa: E402
 from presence import Presence, serve_stream, valid_id  # noqa: E402
+import build  # noqa: E402
 import registry  # noqa: E402
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -48,19 +48,41 @@ STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition
 
 
 class Config:
-    """Project settings: defaults, overridden by PROJECT_DIR/prism.json."""
+    """Project settings: defaults, overridden by PROJECT_DIR/prism.json. A prism.json
+    that cannot be used is reported (`error`) and the defaults apply instead."""
 
     def __init__(self, root: Path):
         self.root = root.resolve()
-        data = {}
+        self.error: str | None = None
         cfg = self.root / "prism.json"
-        if cfg.is_file():
-            data = json.loads(cfg.read_text(encoding="utf-8"))
-        self.main = data.get("main") or self._guess_main()
-        self.outdir = data.get("outdir", "build").strip("/") or "build"
-        self.files = data.get("files")                 # optional list of globs
-        self.exclude = data.get("exclude", [])
-        self.build = self._build_cmds(data.get("build") or {})
+        self.stamp = cfg.stat().st_mtime_ns if cfg.is_file() else None
+        data: dict = {}
+        if self.stamp is not None:
+            try:
+                data = json.loads(cfg.read_text(encoding="utf-8"))
+                if not isinstance(data, dict):
+                    raise ValueError("it must hold a JSON object")
+            except (OSError, ValueError) as e:
+                data, self.error = {}, f"prism.json cannot be used ({e}); using the defaults."
+        self.main = str(data.get("main") or self._guess_main())
+        outdir = str(data.get("outdir") or "build").replace("\\", "/").strip("/") or "build"
+        if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
+            self.error = "prism.json: outdir must be a folder inside the project; using build."
+            outdir = "build"
+        self.outdir = outdir
+        lists = {k: data.get(k) for k in ("files", "exclude")}
+        for k, v in lists.items():
+            if v is not None and not (isinstance(v, list) and all(isinstance(g, str) for g in v)):
+                self.error, lists[k] = f"prism.json: {k} must be a list of patterns; ignored.", None
+        self.files = lists["files"]                    # optional list of globs
+        self.exclude = lists["exclude"] or []
+        self.builder = str(data.get("builder") or "auto")       # auto (built-in), latexmk, tectonic
+        self.engine = data.get("engine") or None                 # pdflatex, xelatex, lualatex
+        self.shell_escape = data.get("shell_escape") is True
+        # Commands of your own per mode: an argv list, or a shell string (see build.py).
+        self.custom = {k: v for k, v in (data.get("build") or {}).items()
+                       if isinstance(v, (str, list)) and v}
+        self.modes = [m for m in ("draft", "strict", "check") if m != "check" or m in self.custom]
         stem = Path(self.main).stem
         out = self.root / self.outdir
         self.pdf = out / f"{stem}.pdf"
@@ -74,26 +96,21 @@ class Config:
                  and "\\documentclass" in p.read_text(encoding="utf-8", errors="replace")[:5000]]
         return cands[0].name if cands else "main.tex"
 
-    def _build_cmds(self, user: dict) -> dict:
-        tect, lmk = shutil.which("tectonic"), shutil.which("latexmk")
-        if tect:
-            base = [tect, "-o", "{outdir}", "--keep-logs", "--keep-intermediates", "--synctex"]
-            auto = {"draft": base + ["-Z", "continue-on-errors", "{main}"],
-                    "strict": base + ["{main}"]}
-        elif lmk:
-            base = [lmk, "-pdf", "-synctex=1", "-interaction=nonstopmode", "-file-line-error",
-                    "-outdir={outdir}"]
-            auto = {"draft": base + ["-f", "{main}"], "strict": base + ["-halt-on-error", "{main}"]}
-        else:
-            auto = {}
-        cmds = {**auto, **{k: v for k, v in user.items() if v}}
-        for k, v in cmds.items():
-            if isinstance(v, str):                     # allow a shell-style string
-                cmds[k] = ["bash", "-c", v]
-        return cmds
+    def expand(self, cmd: list[str] | str) -> list[str] | str:
+        sub = lambda a: str(a).replace("{main}", self.main).replace("{outdir}", self.outdir)  # noqa: E731
+        return sub(cmd) if isinstance(cmd, str) else [sub(a) for a in cmd]
 
-    def expand(self, argv: list[str]) -> list[str]:
-        return [a.replace("{main}", self.main).replace("{outdir}", self.outdir) for a in argv]
+    def describe(self, mode: str) -> str:
+        """What a build in `mode` runs, for the Compile menu."""
+        cmd = self.custom.get(mode)
+        if cmd:
+            return cmd if isinstance(cmd, str) else " ".join(self.expand(cmd))
+        how = "stops at the first error" if mode == "strict" else "continues after errors"
+        engine = self.engine or "chosen from the document"
+        if self.builder in ("latexmk", "tectonic"):
+            return f"{self.builder}; engine {engine}; {how}"
+        return (f"built-in: engine {engine}, then bibtex/biber and makeindex as needed, "
+                f"rerun until stable; {how}")
 
 
 CFG: Config = None  # type: ignore[assignment]
@@ -104,6 +121,16 @@ def set_root(root: Path) -> None:
     global CFG, ROOT
     CFG = Config(root)
     ROOT = CFG.root
+
+
+def refresh_config() -> None:
+    """Load prism.json again when it changed, so a new engine or outdir applies at once."""
+    try:
+        stamp = (ROOT / "prism.json").stat().st_mtime_ns
+    except OSError:
+        stamp = None
+    if stamp != CFG.stamp:
+        set_root(ROOT)
 
 
 MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
@@ -271,148 +298,44 @@ def symbols() -> dict:
 
 # ---------------------------------------------------------------- build
 
-DIAG_RE = re.compile(r"^(error|warning): (.+?):(\d+): (.*)$")        # Tectonic
-FLE_RE = re.compile(r"^(\.?/?[^:\s]+\.(?:tex|sty|cls)):(\d+): (.*)$")    # -file-line-error
-LOG_WARN_RE = re.compile(
-    r"(LaTeX|Package \S+) Warning: (.*?)(?: on input line (\d+))?\.?$")
-
-
 def resolve_tex_name(name: str) -> str | None:
-    for cand in (name, name + ".tex"):
-        p = ROOT / cand
-        if p.is_file():
-            try:
-                return p.resolve().relative_to(ROOT).as_posix()
-            except ValueError:      # absolute path outside the project (a TeX distribution file)
-                return None
-    return None
+    return build.project_file(ROOT, name)
 
 
-def parse_stdout(out: str) -> list[dict]:
-    diags, seen = [], set()
-    for line in out.splitlines():
-        m = DIAG_RE.match(line.strip())
-        if m:
-            sev, name, ln, msg = m.groups()
-        else:
-            m = FLE_RE.match(line.strip())
-            if not m:
-                continue
-            sev, (name, ln, msg) = "error", m.groups()
-            name = name[2:] if name.startswith("./") else name
-        key = (sev, name, ln, msg)
-        if key in seen:           # engines repeat errors on every rerun
-            continue
-        seen.add(key)
-        diags.append({"severity": sev, "file": resolve_tex_name(name),
-                      "line": int(ln), "message": msg})
-    return diags
+RUNNING: dict = {"build": None}      # the build in progress, for /api/build/stop
 
 
-def parse_log_warnings() -> list[dict]:
-    """LaTeX warnings (undefined refs/citations, ...) from the main .log file.
-
-    TeX's log records the current file by '(' path ... ')' nesting. We track a
-    stack of the repo files we recognise; this is a heuristic, good enough to
-    attribute warnings to a source file.
-    """
-    if not CFG.log.exists():
-        return []
-    text = CFG.log.read_text(encoding="utf-8", errors="replace")
-    diags, seen, stack = [], set(), []
-    lines = text.splitlines()
-    i = 0
-    while i < len(lines):
-        msg = lines[i]         # rejoin TeX's hard-wrapped (79-column) lines
-        while len(lines[i]) >= 79 and i + 1 < len(lines):
-            i += 1
-            msg += lines[i]
-        # Update file stack (approximate): opens then closes in order.
-        for tok in re.finditer(r"\(([^\s()]*)|\)", msg):
-            if tok.group(0) == ")":
-                if stack:
-                    stack.pop()
-            else:
-                name = tok.group(1)
-                # Unresolvable file names (e.g. main.bbl, package files) are kept
-                # as "?name" so warnings inside them are not misattributed.
-                rel = resolve_tex_name(name.lstrip("./")) if name else None
-                stack.append(rel or ("?" + name if "." in name or "/" in name else None))
-        m = LOG_WARN_RE.search(msg)
-        if m and "Rerun" not in msg:
-            cur = next((s for s in reversed(stack) if s), None)
-            cur = cur if cur and cur.endswith(".tex") and cur[0] != "?" else None
-            ln = int(m.group(3)) if m.group(3) else None
-            text_msg = m.group(2).strip()
-            key = (cur, ln, text_msg)
-            if key not in seen:
-                seen.add(key)
-                diags.append({"severity": "warning", "file": cur if ln else None,
-                              "line": ln, "message": text_msg})
-        i += 1
-    return diags
-
-
-def git_perl_dir() -> str | None:
-    """Where Git for Windows keeps its perl.exe, if it is installed.
-
-    latexmk is a Perl script. MiKTeX does not ship Perl, and on Windows Perl is rarely on
-    PATH, yet Git for Windows brings one along. Builds use it when no other Perl is found.
-    """
-    if os.name != "nt" or shutil.which("perl"):
-        return None
-    cands = []
-    git = shutil.which("git")
-    if git:                                   # <Git>/cmd/git.exe -> <Git>/usr/bin
-        cands.append(Path(git).resolve().parent.parent / "usr" / "bin")
-    for var in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"):
-        if os.environ.get(var):
-            cands.append(Path(os.environ[var]) / "Git" / "usr" / "bin")
-    if os.environ.get("LOCALAPPDATA"):
-        cands.append(Path(os.environ["LOCALAPPDATA"]) / "Programs" / "Git" / "usr" / "bin")
-    return next((str(d) for d in cands if (d / "perl.exe").is_file()), None)
-
-
-def uses_latexmk(argv: list[str]) -> bool:
-    return any(Path(a).stem.lower() == "latexmk" for a in argv[:3])
-
-
-def run_build(mode: str) -> dict:
-    argv = CFG.build.get(mode)
-    if not argv:
+def run_build(mode: str, clean: bool = False) -> dict:
+    """One build (see build.py). Only one runs at a time."""
+    if mode not in CFG.modes:
         return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
-                "output": f"No '{mode}' build command. Install Tectonic or latexmk, "
-                          "or set \"build\" in prism.json.", "pdf_mtime": None}
+                "output": f"There is no '{mode}' build.", "pdf_mtime": None}
     if not BUILD_LOCK.acquire(blocking=False):
         return {"busy": True}
     try:
         t0 = time.time()
-        (ROOT / CFG.outdir).mkdir(exist_ok=True)
-        # bibtex runs inside outdir under latexmk; let it find .bib files in the project root.
-        env = {**os.environ,
-               "BIBINPUTS": os.pathsep.join([str(ROOT), os.environ.get("BIBINPUTS", "")])}
-        note = ""
-        if uses_latexmk(argv) and os.name == "nt" and not shutil.which("perl"):
-            perl = git_perl_dir()
-            if perl:      # appended, so Git's other tools never shadow anything on PATH
-                env["PATH"] = env.get("PATH", "") + os.pathsep + perl
-            else:
-                note = ("prism-local: latexmk needs Perl, and none was found. Install Strawberry "
-                        "Perl (https://strawberryperl.com) or Git for Windows, or install "
-                        "Tectonic, which needs no Perl.\n\n")
-        proc = subprocess.run(CFG.expand(argv), cwd=ROOT, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=900, env=env,
-                              **NO_WINDOW)
-        out = note + proc.stdout + proc.stderr
-        diags = parse_stdout(out)
-        known = {(d["message"]) for d in diags}
-        diags += [d for d in parse_log_warnings() if d["message"] not in known]
-        return {"busy": False, "exit": proc.returncode, "mode": mode,
-                "seconds": round(time.time() - t0, 1), "output": out,
-                "diagnostics": diags,
-                "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None}
+        before = mtime(CFG.pdf) if CFG.pdf.exists() else None
+        cmd = CFG.custom.get(mode)
+        b = build.Build(ROOT, CFG.main, CFG.outdir, mode, builder=CFG.builder, engine=CFG.engine,
+                        command=CFG.expand(cmd) if cmd else None, clean=clean,
+                        shell_escape=CFG.shell_escape)
+        RUNNING["build"] = b
+        r = b.run()
+        if CFG.error:
+            r["output"] = f"prism-local: {CFG.error}\n" + r["output"]
+        pdf = mtime(CFG.pdf) if CFG.pdf.exists() else None
+        return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
+                "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
     finally:
+        RUNNING["build"] = None
         BUILD_LOCK.release()
+
+
+def stop_build() -> bool:
+    b = RUNNING["build"]
+    if b is not None:
+        b.stop()
+    return b is not None
 
 
 # ---------------------------------------------------------------- synctex
@@ -562,6 +485,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self._host_ok():
             return self._err(403, "bad host")
+        refresh_config()
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
@@ -596,9 +520,10 @@ class Handler(BaseHTTPRequestHandler):
                                    "order": document_order(),
                                    "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
             if u.path == "/api/config":
-                return self._json({"main": CFG.main, "outdir": CFG.outdir,
-                                   "modes": [m for m in ("draft", "strict", "check") if m in CFG.build],
-                                   "build": {k: CFG.expand(v) for k, v in CFG.build.items()}})
+                return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
+                                   "builder": CFG.builder, "engine": CFG.engine,
+                                   "error": CFG.error,
+                                   "build": {m: CFG.describe(m) for m in CFG.modes}})
             if u.path == "/api/agent/events":
                 job = AGENT.jobs.get(int(q["job"]))
                 if not job:
@@ -674,6 +599,7 @@ class Handler(BaseHTTPRequestHandler):
         # web pages cannot drive this server from the browser.
         if not self._host_ok() or self.headers.get("X-Prism-Local") != "1":
             return self._err(403, "forbidden")
+        refresh_config()
         try:
             n = int(self.headers.get("Content-Length") or 0)
             body = json.loads(self.rfile.read(n) or b"{}")
@@ -718,8 +644,10 @@ class Handler(BaseHTTPRequestHandler):
             if u.path == "/api/agent/undo":
                 return self._json(AGENT.undo(int(body["turn"])))
             if u.path == "/api/build":
-                r = run_build(body.get("mode", "draft"))
+                r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
                 return self._json(r, 409 if r.get("busy") else 200)
+            if u.path == "/api/build/stop":
+                return self._json({"ok": stop_build()})
             return self._err(404, "not found")
         except (ValueError, KeyError) as e:
             return self._err(400, str(e))
@@ -823,7 +751,7 @@ def main():
         sys.exit(f"prism-local: cannot listen on 127.0.0.1:{a.port}: {err}")
     port = srv.server_address[1]
     url = f"http://127.0.0.1:{port}/"
-    modes = ", ".join(CFG.build) or "none (see README)"
+    modes = ", ".join(CFG.modes)
     stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
     print(f"prism-local: {url}\n  project: {ROOT}\n  main:    {CFG.main}\n"
           f"  builds:  {modes}\n  {stop}", flush=True)

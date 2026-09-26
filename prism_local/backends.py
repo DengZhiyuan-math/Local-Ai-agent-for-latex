@@ -42,24 +42,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-# When the server runs without a console (started by the launcher), every console
-# program it starts (git, tectonic, claude) would otherwise flash its own window.
-NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
-
-
-def kill_tree(proc: subprocess.Popen) -> None:
-    """Stop a process and its children (on Windows a CLI may be a .cmd shim around node)."""
-    if proc.poll() is not None:
-        return
-    if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                       capture_output=True, timeout=15, **NO_WINDOW)
-    else:
-        proc.terminate()
-    try:
-        proc.wait(5)
-    except subprocess.TimeoutExpired:
-        proc.kill()
+from proc import NO_WINDOW, kill_tree  # noqa: F401 — re-exported
 
 
 SYSTEM_APPEND = """\

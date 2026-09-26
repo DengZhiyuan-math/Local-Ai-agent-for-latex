@@ -328,40 +328,63 @@ async function loadConfig() {
   const want = store.get("buildmode", "draft");
   BUILD.mode = BUILD.modes.includes(want) ? want : BUILD.modes[0] || "";
   renderCompileMenu();
+  if (r.error) { $("#build-info").textContent = r.error; toast(r.error); }
 }
 
 
 /* ------------------------------------------------------------------ build */
-async function compile() {
+// While a build runs, the Compile button stops it.
+function setCompileButton(running) {
+  const b = $("#btn-compile");
+  b.classList.toggle("stop", running);
+  b.querySelector("svg").outerHTML = icon(running ? "stop" : "play");
+  $("#compile-label").textContent = running ? "Stop" : "Compile";
+  b.title = running ? "Stop the build" : `Save all and compile (${(MODE_INFO[BUILD.mode] || [BUILD.mode])[0]}) (⌘↵)`;
+}
+const plural = (n, w, ws = w + "s") => `${n} ${n === 1 ? w : ws}`;
+
+async function compile(clean = false) {
   if (S.building) return;
   if (!(await saveAll())) return;
   const mode = BUILD.mode;
   S.building = true;
   const st = $("#build-status");
-  st.className = "status busy"; st.textContent = `compiling (${mode})…`;
-  $("#btn-compile").disabled = true;
+  st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
+  setCompileButton(true);
   try {
-    const r = await api("/api/build", { mode });
+    const r = await api("/api/build", { mode, clean });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
-    S.diagnostics = r.diagnostics || [];
+    if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
+    if (!r.cancelled) S.diagnostics = r.diagnostics || [];      // a stopped build keeps the last list
     $("#output").textContent = r.output || "";
     const errs = S.diagnostics.filter((d) => d.severity === "error").length;
     const warns = S.diagnostics.length - errs;
-    const failed = r.exit !== 0;
-    st.className = "status " + (failed || errs ? "err" : warns ? "warn" : "ok");
-    st.textContent = (failed ? `FAILED (exit ${r.exit})` : errs ? `PDF built with ${errs} TeX error${errs > 1 ? "s" : ""}` : "OK")
-      + (warns ? ` · ${warns} warning${warns > 1 ? "s" : ""}` : "") + ` · ${r.seconds}s`;
+    let text, cls = "err";
+    if (r.cancelled) [text, cls] = ["build stopped", "warn"];
+    else if (r.timed_out) text = "stopped: the build took too long";
+    else if (r.exit === 0 || r.pdf_updated) {
+      text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
+      cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
+    } else text = `FAILED (exit ${r.exit})`;
+    st.className = "status " + cls;
+    st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
+    // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
+    const how = [r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
+      r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
+      ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
+    st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
     renderProblems();
     applyDiagnostics();
-    if (failed || errs) openPanel(errs || !r.output ? "problems" : "output");
+    if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");
     if (r.pdf_mtime) await showPdf(r.pdf_mtime);
   } catch (e) {
     st.className = "status err"; st.textContent = "build request failed: " + e;
   } finally {
-    S.building = false; $("#btn-compile").disabled = false;
+    S.building = false; setCompileButton(false);
   }
 }
-$("#btn-compile").onclick = () => compile();
+$("#btn-compile").onclick = () => S.building ? api("/api/build/stop", {}) : compile();
+$("#btn-clean-build").onclick = () => { compileMenu(false); compile(true); };
 
 /* Compile menu: build mode and auto-compile, on the ▾ half of the Compile button. */
 const BUILD = { modes: [], cmds: {}, mode: store.get("buildmode", "draft") };
@@ -371,14 +394,14 @@ const MODE_INFO = {
 function renderCompileMenu() {
   $("#build-modes").innerHTML = BUILD.modes.map((m) => {
     const [name, note] = MODE_INFO[m] || [m, ""];
-    return `<label class="dd-item" title="${esc((BUILD.cmds[m] || []).join(" "))}"><input type="radio" name="build-mode" value="${m}" ${m === BUILD.mode ? "checked" : ""}> ${esc(name)}${note ? `<small>${esc(note)}</small>` : ""}</label>`;
+    return `<label class="dd-item" title="${esc(BUILD.cmds[m] || "")}"><input type="radio" name="build-mode" value="${m}" ${m === BUILD.mode ? "checked" : ""}> ${esc(name)}${note ? `<small>${esc(note)}</small>` : ""}</label>`;
   }).join("") || `<div class="dd-item"><small>No build command (see README)</small></div>`;
   updateCompileLabel();
 }
 function updateCompileLabel() {
   const name = (MODE_INFO[BUILD.mode] || [BUILD.mode || "—"])[0];
   $("#compile-mode-label").innerHTML = esc(name) + ($("#auto-compile").checked ? '<span class="auto-tag">AUTO</span>' : "");
-  $("#btn-compile").title = `Save all and compile (${name}) (⌘↵)`;
+  if (!S.building) $("#btn-compile").title = `Save all and compile (${name}) (⌘↵)`;
 }
 function compileMenu(open) {
   $("#compile-menu").hidden = !open;

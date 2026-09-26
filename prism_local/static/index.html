@@ -53,13 +53,16 @@
   <section id="pdf-pane">
     <div id="pdf-toolbar">
       <div id="compile-box" class="split-btn">
-        <button id="btn-compile" class="primary" data-icon="play" title="Save all and compile (⌘↵)">Compile</button>
+        <button id="btn-compile" class="primary" data-icon="play" title="Save all and compile (⌘↵)"><span id="compile-label">Compile</span></button>
         <button id="btn-compile-menu" class="primary caret" title="Build mode and auto-compile" aria-haspopup="menu" aria-expanded="false" data-icon-end="down"><span id="compile-mode-label">Draft</span></button>
         <div id="compile-menu" class="dropdown" role="menu" hidden>
           <div class="dd-head">Build mode</div>
           <div id="build-modes"></div>
           <hr>
           <label class="dd-item" title="Compile automatically a moment after you stop typing"><input type="checkbox" id="auto-compile"> Auto-compile</label>
+          <hr>
+          <button type="button" class="dd-item" id="btn-clean-build" title="Delete what earlier builds left (.aux, .bbl, …) and compile again. Helps when a build keeps failing for no visible reason.">Recompile from scratch</button>
+          <div class="dd-note" id="build-info"></div>
         </div>
       </div>
       <button id="zoom-out" class="icon" data-icon="minus" title="Zoom out" aria-label="Zoom out"></button>
