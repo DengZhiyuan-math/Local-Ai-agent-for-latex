@@ -190,6 +190,7 @@ class Platform(unittest.TestCase):
         if build.ansi_safe(root):
             self.skipTest("this code page can spell Chinese")
         alias = build.ascii_alias(root)
+        self.addCleanup(os.rmdir, alias)       # the junction only, never its target
         self.assertTrue(build.ansi_safe(alias))
         self.assertEqual((alias / "main.tex").read_text(encoding="utf-8"), "x")
         self.assertEqual(build.ascii_alias(root), alias, "the junction is reused")
@@ -201,6 +202,9 @@ class RealBuilds(unittest.TestCase):
 
     def run_build(self, files, name="p", root=None, **kw):
         root = root or project(files, name)
+        alias = build.alias_path(root)
+        if not build.ansi_safe(root) and alias:  # remove the junction biber may get (only the link)
+            self.addCleanup(lambda: os.path.lexists(alias) and os.rmdir(alias))
         b = build.Build(root, "main.tex", "build", kw.pop("mode", "draft"), **kw)
         r = b.run()
         log = root / "build" / "main.log"

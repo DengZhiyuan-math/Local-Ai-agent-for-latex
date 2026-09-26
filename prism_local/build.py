@@ -142,6 +142,15 @@ def ansi_safe(path: Path) -> bool:
         return False
 
 
+def alias_path(root: Path) -> Path | None:
+    """Where the ASCII junction for `root` goes (see ascii_alias)."""
+    bases = [tempfile.gettempdir(), os.environ.get("PUBLIC", ""), r"C:\Users\Public"]
+    base = next((Path(b) for b in bases if b and ansi_safe(Path(b)) and Path(b).is_dir()), None)
+    if base is None:
+        return None
+    return base / "prism-local-links" / hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
+
+
 def ascii_alias(root: Path) -> Path:
     """`root`, or a junction to it that the Windows code page can spell.
 
@@ -150,11 +159,9 @@ def ascii_alias(root: Path) -> Path:
     name for the same folder. Only the junction is ever removed, never its target."""
     if ansi_safe(root):
         return root
-    bases = [tempfile.gettempdir(), os.environ.get("PUBLIC", ""), r"C:\Users\Public"]
-    base = next((Path(b) for b in bases if b and ansi_safe(Path(b)) and Path(b).is_dir()), None)
-    if base is None:
+    alias = alias_path(root)
+    if alias is None:
         return root
-    alias = base / "prism-local-links" / hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:12]
     try:
         if alias.exists() and alias.resolve() == root.resolve():
             return alias
