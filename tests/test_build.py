@@ -184,6 +184,14 @@ class Platform(unittest.TestCase):
         self.assertIn("pdflatex was not found", r["output"])
         self.assertEqual(r["diagnostics"][0]["severity"], "error")
 
+    def test_a_program_that_cannot_start_is_explained(self):
+        root = project({"main.tex": "\\documentclass{article}\\begin{document}x\\end{document}"})
+        b = build.Build(root, "main.tex", "build")
+        with mock.patch.object(b.runner, "run", side_effect=PermissionError(13, "Access is denied")):
+            r = b.run()
+        self.assertEqual(r["exit"], 127)
+        self.assertIn("could not be started: [Errno 13] Access is denied", r["output"])
+
     @unittest.skipUnless(os.name == "nt", "Windows code pages")
     def test_ascii_alias_for_names_the_code_page_cannot_spell(self):
         root = project({"main.tex": "x"}, name="论文 草稿")

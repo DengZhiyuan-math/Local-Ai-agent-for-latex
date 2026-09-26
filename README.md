@@ -168,8 +168,8 @@ Details:
 - **Server gone.** If the server stopped while a page was still open, for example because the
   browser discarded a background tab, the page says so. Click the shortcut again and the page
   reconnects by itself.
-- **Environment.** The shortcut runs in your normal user environment, so `tectonic`, `latexmk`,
-  `git` and `claude` must be on your user `PATH`.
+- **Environment.** The shortcut runs in your normal user environment, so your TeX distribution
+  (`pdflatex`, `bibtex` …), `git` and `claude` must be on your user `PATH`.
 - **Browser modes.** `-Browser` picks how the editor opens:
   - `window`, the default: a new Chrome or Edge window with a tab strip, holding only Prism.
   - `app`: an app window without tabs or address bar. The pop-out PDF then gets its own app

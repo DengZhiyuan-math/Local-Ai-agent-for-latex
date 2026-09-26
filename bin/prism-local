@@ -2,5 +2,12 @@
 # prism-local [PROJECT_DIR] [--port 8765] [--no-browser]
 # Symlink this script onto your PATH, or call it by its full path.
 set -euo pipefail
-SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || python3 -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
-exec python3 "$(dirname "$SELF")/../prism_local/server.py" "$@"
+# The first Python 3.9+ that really runs: on Windows `python3` is often only the Microsoft
+# Store placeholder, which prints "Python was not found".
+PY=""
+for cand in python3 python py; do
+  if "$cand" -c "import sys; sys.exit(sys.version_info < (3, 9))" >/dev/null 2>&1; then PY=$cand; break; fi
+done
+[ -n "$PY" ] || { echo "prism-local: Python 3.9 or newer was not found" >&2; exit 1; }
+SELF="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || "$PY" -c 'import os,sys;print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
+exec "$PY" "$(dirname "$SELF")/../prism_local/server.py" "$@"

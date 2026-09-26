@@ -263,7 +263,10 @@ class Runner:
             self.stopped.set()
             proc = self.proc
         if proc is not None:
-            kill_tree(proc)
+            try:
+                kill_tree(proc)
+            except (OSError, subprocess.SubprocessError):
+                proc.kill()           # taskkill itself failed: at least the program goes
 
 
 # ---------------------------------------------------------------- the output folder
@@ -602,10 +605,13 @@ class Build:
         self.steps.append(name)
         try:
             rc, out = self.runner.run(argv, cwd, env)
-        except (FileNotFoundError, NotADirectoryError):
+        except OSError as e:          # not there, or not allowed to start (an antivirus …)
             prog = Path(str(argv[0])).stem.lower()
-            msg = MISSING.get(prog) or (f"{Path(str(argv[0])).name} was not found. Install it, "
-                                        "or add its folder to PATH, then restart Prism.")
+            if isinstance(e, (FileNotFoundError, NotADirectoryError)):
+                msg = MISSING.get(prog) or (f"{Path(str(argv[0])).name} was not found. Install "
+                                            "it, or add its folder to PATH, then restart Prism.")
+            else:
+                msg = f"{Path(str(argv[0])).name} could not be started: {e}"
             if not tool:
                 raise BuildError(msg) from None
             self.diags.append(_diag("error", msg))

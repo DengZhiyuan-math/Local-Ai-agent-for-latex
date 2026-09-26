@@ -50,7 +50,7 @@ class Config:
 
     def __init__(self, root: Path):
         self.root = root.resolve()
-        self.error: str | None = None
+        problems: list[str] = []
         cfg = self.root / "prism.json"
         self.stamp = cfg.stat().st_mtime_ns if cfg.is_file() else None
         data: dict = {}
@@ -60,26 +60,37 @@ class Config:
                 if not isinstance(data, dict):
                     raise ValueError("it must hold a JSON object")
             except (OSError, ValueError) as e:
-                data, self.error = {}, f"prism.json cannot be used ({e}); using the defaults."
+                data = {}
+                problems.append(f"prism.json cannot be used ({e}); the defaults apply.")
         self.main = str(data.get("main") or self._guess_main())
         outdir = str(data.get("outdir") or "build").replace("\\", "/").strip("/") or "build"
         if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
-            self.error = "prism.json: outdir must be a folder inside the project; using build."
+            problems.append("outdir must be a folder inside the project; build is used.")
             outdir = "build"
         self.outdir = outdir
         lists = {k: data.get(k) for k in ("files", "exclude")}
         for k, v in lists.items():
             if v is not None and not (isinstance(v, list) and all(isinstance(g, str) for g in v)):
-                self.error, lists[k] = f"prism.json: {k} must be a list of patterns; ignored.", None
+                problems.append(f"{k} must be a list of patterns; it is ignored.")
+                lists[k] = None
         self.files = lists["files"]                    # optional list of globs
         self.exclude = lists["exclude"] or []
         self.builder = str(data.get("builder") or "auto")       # auto (built-in), latexmk, tectonic
         self.engine = data.get("engine") or None                 # pdflatex, xelatex, lualatex
+        if self.engine is not None and str(self.engine).lower() not in build.ENGINES:
+            problems.append(f"unknown engine {self.engine!r} (use pdflatex, xelatex or "
+                            "lualatex); it is chosen from the document instead.")
+            self.engine = None
         self.shell_escape = data.get("shell_escape") is True
         # Commands of your own per mode: an argv list, or a shell string (see build.py).
-        self.custom = {k: v for k, v in (data.get("build") or {}).items()
-                       if isinstance(v, (str, list)) and v}
+        cmds = data.get("build") or {}
+        if not isinstance(cmds, dict):
+            problems.append("build must map modes to commands; it is ignored.")
+            cmds = {}
+        self.custom = {k: v for k, v in cmds.items() if isinstance(v, (str, list)) and v}
         self.modes = [m for m in ("draft", "strict", "check") if m != "check" or m in self.custom]
+        self.error = " ".join(p if p.startswith("prism.json") else "prism.json: " + p
+                              for p in problems) or None
         stem = Path(self.main).stem
         out = self.root / self.outdir
         self.pdf = out / f"{stem}.pdf"

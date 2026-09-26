@@ -1,0 +1,2 @@
+# Shell scripts keep LF line ends, also in a Windows checkout (CRLF breaks bash).
+bin/* text eol=lf

@@ -127,7 +127,10 @@ class Handler(BaseHTTPRequestHandler):
         if u.path == "/api/bye":
             if not self._host_ok() or not self._same_origin():
                 return self._err(403, "forbidden")
-            n = max(0, min(int(self.headers.get("Content-Length") or 0), 200))
+            try:
+                n = max(0, min(int(self.headers.get("Content-Length") or 0), 200))
+            except ValueError:
+                return self._err(400, "bad request")
             cid = self.rfile.read(n).decode("utf-8", "replace").strip()
             return self._json({"ok": self.presence.bye(cid)})
         if not self._host_ok() or self.headers.get("X-Prism-Local") != "1":

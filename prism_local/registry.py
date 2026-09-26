@@ -144,7 +144,13 @@ def server_alive(pid) -> bool:
         import ctypes
         from ctypes import wintypes
         k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
         k32.OpenProcess.restype = wintypes.HANDLE
+        k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+        k32.WaitForSingleObject.restype = wintypes.DWORD
+        k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                                   ctypes.POINTER(wintypes.DWORD))
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
         h = k32.OpenProcess(0x1000 | 0x00100000, False, pid)  # query limited info | synchronize
         if not h:
             return ctypes.get_last_error() == 5                # access denied: it exists

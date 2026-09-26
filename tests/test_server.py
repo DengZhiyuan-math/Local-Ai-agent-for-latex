@@ -22,6 +22,27 @@ def project(files: dict) -> Path:
     return server.ROOT
 
 
+class Config(unittest.TestCase):
+    def test_a_bad_prism_json_is_reported_and_the_defaults_apply(self):
+        project({"main.tex": "", "prism.json": '{"engine": "xetex2", "outdir": "../x", '
+                                               '"build": ["pdflatex", "{main}"]}'})
+        self.assertIsNone(server.CFG.engine)
+        self.assertEqual(server.CFG.outdir, "build")
+        for part in ("outdir", "unknown engine 'xetex2'", "build must map"):
+            self.assertIn(part, server.CFG.error, "every problem is reported")
+        project({"main.tex": "", "prism.json": "{not json"})
+        self.assertIn("cannot be used", server.CFG.error)
+        self.assertEqual((server.CFG.main, server.CFG.modes), ("main.tex", ["draft", "strict"]))
+
+    def test_changes_apply_without_a_restart(self):
+        root = project({"main.tex": "", "prism.json": '{"engine": "pdflatex"}'})
+        self.assertEqual(server.CFG.engine, "pdflatex")
+        time.sleep(0.02)
+        (root / "prism.json").write_text('{"engine": "lualatex"}', encoding="utf-8")
+        server.refresh_config()
+        self.assertEqual(server.CFG.engine, "lualatex")
+
+
 class Files(unittest.TestCase):
     def test_only_editable_files_inside_the_project(self):
         root = project({"main.tex": "", "fig.tikz": "", "build/main.log": "", "build/x.tex": "",

@@ -815,45 +815,48 @@ async function chatSend() {
   // log follows it only while you have not scrolled up to read something.
   const log = $("#chat-log");
   const flush = (stick) => { if (C.cur) { C.cur.innerHTML = renderMd(buf); if (stick) log.scrollTop = log.scrollHeight; } };
-  while (!done) {
-    let d;
-    try { d = await api(`/api/agent/events?job=${r.job}&after=${after}`); }
-    catch { await new Promise((res) => setTimeout(res, 1000)); continue; }
-    if (d._status !== 200) break;
-    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-    let pending = false;
-    for (const e of d.events) {
-      if (e.t !== "delta" && pending) { flush(stick); pending = false; }
-      if (e.t === "init") {
-        // The session belongs to the provider that ran the turn, even if the menu changed since.
-        store.set(`chat.session.${provider}`, e.session_id);
-        if (C.provider === provider) C.session = e.session_id;
+  try {
+    while (!done) {
+      let d;
+      try { d = await api(`/api/agent/events?job=${r.job}&after=${after}`); }
+      catch { await new Promise((res) => setTimeout(res, 1000)); continue; }
+      if (d._status !== 200) break;
+      const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+      let pending = false;
+      for (const e of d.events) {
+        if (e.t !== "delta" && pending) { flush(stick); pending = false; }
+        if (e.t === "init") {
+          // The session belongs to the provider that ran the turn, even if the menu changed since.
+          store.set(`chat.session.${provider}`, e.session_id);
+          if (C.provider === provider) C.session = e.session_id;
+        }
+        else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
+        else if (e.t === "delta") {
+          if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; }
+          streamed = true; buf += e.text; pending = true;
+        } else if (e.t === "text") {
+          if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(stick); C.cur = null; }
+        } else if (e.t === "tool") {
+          C.cur = null;
+          tools.set(e.id, chatAppend(`<span class="st">▸</span>${esc(e.name)} ${esc(e.summary || "")}`, "tool"));
+          tools.get(e.id).title = `${e.name} ${e.summary || ""}`;
+        } else if (e.t === "tool_result") {
+          const el = tools.get(e.id);
+          if (el) { el.querySelector(".st").textContent = e.error ? "✗" : "✓"; if (e.error) { el.classList.add("err"); el.title += "\n" + e.preview; } }
+        } else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
+        else if (e.t === "done") { renderTurnCard(e); loadAccount(); }
       }
-      else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
-      else if (e.t === "delta") {
-        if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; }
-        streamed = true; buf += e.text; pending = true;
-      } else if (e.t === "text") {
-        if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(stick); C.cur = null; }
-      } else if (e.t === "tool") {
-        C.cur = null;
-        tools.set(e.id, chatAppend(`<span class="st">▸</span>${esc(e.name)} ${esc(e.summary || "")}`, "tool"));
-        tools.get(e.id).title = `${e.name} ${e.summary || ""}`;
-      } else if (e.t === "tool_result") {
-        const el = tools.get(e.id);
-        if (el) { el.querySelector(".st").textContent = e.error ? "✗" : "✓"; if (e.error) { el.classList.add("err"); el.title += "\n" + e.preview; } }
-      } else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
-      else if (e.t === "done") { renderTurnCard(e); loadAccount(); }
+      if (pending) flush(stick);
+      after += d.events.length; done = d.done;
     }
-    if (pending) flush(stick);
-    after += d.events.length; done = d.done;
+  } finally {            // whatever happened above, the panel and saving work again
+    C.job = null; C.editTurn = false;
+    $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
+    $("#chat-status").className = "status"; $("#chat-status").textContent = "";
+    saveChatLog();
+    await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
+    flushSaves();        // … then save what you typed meanwhile
   }
-  C.job = null; C.editTurn = false;
-  $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
-  $("#chat-status").className = "status"; $("#chat-status").textContent = "";
-  saveChatLog();
-  await poll();          // first take in the agent's changes (a file it changed under your edits gets the banner) …
-  flushSaves();          // … then save what you typed meanwhile
 }
 
 // Usage limits as reported by Claude Code's rate_limit_event (utilization 0–1 per window).
