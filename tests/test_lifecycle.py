@@ -165,6 +165,14 @@ class ServerLifecycle(unittest.TestCase):
         with HTTP.open(urllib.request.Request(url, headers=cross), timeout=5) as r:
             self.assertEqual((r.status, r.headers["X-Frame-Options"]), (200, "DENY"))
 
+    @unittest.skipIf(os.name == "nt", "signals: Linux and macOS")
+    def test_sigterm_stops_the_server_cleanly(self):
+        import signal
+        self.start("30,1,30")
+        self.proc.send_signal(signal.SIGTERM)
+        self.assertEqual(self.proc.wait(10), 0)
+        self.assertFalse(self.ready.exists(), "the instance file goes, as after the last page")
+
     def test_port_in_use_moves_up(self):
         blocker = socket.socket()
         blocker.bind(("127.0.0.1", 0))

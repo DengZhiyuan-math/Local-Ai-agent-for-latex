@@ -495,8 +495,37 @@ sys.stdout.write(p or "")
 """
 
 
+def native_folder_dialogs(start: str, title: str) -> list[list[str]]:
+    """Folder dialogs of the desktop: zenity (GNOME and most others) or kdialog (KDE) on
+    Linux, the Finder's on macOS. None on Windows, where tkinter's is the native one."""
+    if sys.platform == "darwin":
+        where = f" default location POSIX file {json.dumps(start)}" if start else ""
+        return [["osascript", "-e", f"POSIX path of (choose folder with prompt "
+                                    f"{json.dumps(title)}{where})"]]
+    if os.name == "nt":
+        return []
+    cmds = []
+    if shutil.which("zenity"):
+        cmds.append(["zenity", "--file-selection", "--directory", f"--title={title}"]
+                    + ([f"--filename={start.rstrip('/')}/"] if start else []))
+    if shutil.which("kdialog"):
+        cmds.append(["kdialog", "--getexistingdirectory", start or str(Path.home()),
+                     "--title", title])
+    return cmds
+
+
 def pick_folder(start: str, title: str) -> dict:
-    """A native folder dialog (tkinter, in a child process so it has its own main loop)."""
+    """A native folder dialog: the desktop's (native_folder_dialogs), else tkinter's, in a
+    child process so that it has its own main loop."""
+    title = title or "Choose a folder"
+    for cmd in native_folder_dialogs(start, title):
+        try:
+            r = subprocess.run(cmd, capture_output=True, timeout=900)
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if r.returncode in (0, 1):                  # 1: cancelled
+            p = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
+            return {"path": str(Path(p).resolve()) if p else None}
     try:
         r = subprocess.run([sys.executable, "-c", PICK_FOLDER, start or "", title or "Choose a folder"],
                            capture_output=True, timeout=900,
@@ -504,7 +533,8 @@ def pick_folder(start: str, title: str) -> dict:
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"folder dialog unavailable: {e}"}
     if r.returncode != 0:
-        return {"error": "folder dialog unavailable (tkinter missing?)"}
+        return {"error": "no folder dialog is available (on Linux, install zenity or python3-tk)"
+                if os.name != "nt" else "folder dialog unavailable (tkinter missing?)"}
     p = r.stdout.decode("utf-8", "replace").strip()
     return {"path": str(Path(p).resolve()) if p else None}
 
@@ -608,6 +638,7 @@ def main():
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
         threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
+    httpbase.stop_on_signals(srv)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

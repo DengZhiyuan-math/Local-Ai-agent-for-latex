@@ -22,14 +22,19 @@ import time
 from pathlib import Path
 
 import registry
-from backends import NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, find_bin, kill_tree
+from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, find_bin, kill_tree
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 
 
 def claude_bin() -> str | None:
+    # Where the installers put it, for a server started from a desktop menu whose PATH
+    # lacks ~/.local/bin or npm's folder.
+    home = Path.home()
     return find_bin("CLAUDE_BIN", "claude",
-                    ("/opt/homebrew/bin/claude", str(Path.home() / ".local/bin/claude")))
+                    (str(home / ".local/bin/claude"), str(home / ".claude/local/claude"),
+                     str(home / ".npm-global/bin/claude"), "/usr/local/bin/claude",
+                     "/opt/homebrew/bin/claude"))
 
 
 # ---------------------------------------------------------------- which account
@@ -273,7 +278,7 @@ class ClaudeCode(CliBackend):
             try:
                 proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
                                         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
+                                        text=True, encoding="utf-8", errors="replace", **TREE)
             except OSError as e:
                 return {"error": f"Could not start Claude Code: {e}"}
             timer = threading.Timer(60, kill_tree, args=(proc,))

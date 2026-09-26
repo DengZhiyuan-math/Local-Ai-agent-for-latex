@@ -42,7 +42,7 @@ import threading
 from pathlib import Path
 from typing import Callable
 
-from proc import NO_WINDOW, kill_tree  # noqa: F401 — re-exported
+from proc import NO_WINDOW, TREE, kill_tree  # noqa: F401 — re-exported
 
 
 SYSTEM_APPEND = """\
@@ -184,11 +184,12 @@ class CliBackend(Backend):
         cmd, stdin = self.command(job)
         st: dict = {}
         stderr_lines: list[str] = []
-        # The prompt goes through stdin so it can never be parsed as a flag.
+        # The prompt goes through stdin so it can never be parsed as a flag. TREE: Stop
+        # also ends the commands the CLI started.
         job.proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     text=True, encoding="utf-8", errors="replace", bufsize=1,
-                                    **NO_WINDOW)
+                                    **TREE)
         job.proc.stdin.write(stdin)
         job.proc.stdin.close()
         threading.Thread(target=lambda: stderr_lines.extend(job.proc.stderr), daemon=True).start()

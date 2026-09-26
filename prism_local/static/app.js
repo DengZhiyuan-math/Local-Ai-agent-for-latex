@@ -371,7 +371,7 @@ function setCompileButton(running) {
   b.classList.toggle("stop", running);
   b.querySelector("svg").outerHTML = icon(running ? "stop" : "play");
   $("#compile-label").textContent = running ? "Stop" : "Compile";
-  b.title = running ? "Stop the build" : `Save all and compile (${(MODE_INFO[BUILD.mode] || [BUILD.mode])[0]}) (⌘↵)`;
+  b.title = running ? "Stop the build" : keys(`Save all and compile (${(MODE_INFO[BUILD.mode] || [BUILD.mode])[0]}) (⌘↵)`);
 }
 const plural = (n, w, ws = w + "s") => `${n} ${n === 1 ? w : ws}`;
 
@@ -434,7 +434,7 @@ function renderCompileMenu() {
 function updateCompileLabel() {
   const name = (MODE_INFO[BUILD.mode] || [BUILD.mode || "—"])[0];
   $("#compile-mode-label").innerHTML = esc(name) + ($("#auto-compile").checked ? '<span class="auto-tag">AUTO</span>' : "");
-  if (!S.building) $("#btn-compile").title = `Save all and compile (${name}) (⌘↵)`;
+  if (!S.building) $("#btn-compile").title = keys(`Save all and compile (${name}) (⌘↵)`);
 }
 function compileMenu(open) {
   $("#compile-menu").hidden = !open;
@@ -696,7 +696,7 @@ function chatIntro() {
 Pick who runs it in the menu above: Claude Code, Codex CLI, or an API model such as DeepSeek.
 <b>Edit</b> mode may change files — every turn ends with a diff and an Undo button.
 <b>Ask</b> mode is read-only. Type <code>@</code> to point the agent at a file or the selection
-(or select text and press <code>⌘L</code>): it may then change only those files.
+(or select text and press <code>${keys("⌘L")}</code>): it may then change only those files.
 Without <code>@</code>, it may change any file in the project. Type <code>/</code> for commands.
 Commits, pushes and non-allowlisted shell commands are not permitted from here.`, "msg intro");
 }

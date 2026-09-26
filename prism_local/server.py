@@ -683,6 +683,7 @@ def main():
         busy = lambda: BUILD_LOCK.locked() or AGENT.busy()  # noqa: E731
         threading.Thread(target=httpbase.idle_watchdog, daemon=True,
                          args=(srv, PRESENCE, busy, "build or agent turn")).start()
+    httpbase.stop_on_signals(srv)
     try:
         srv.serve_forever()
     except KeyboardInterrupt:

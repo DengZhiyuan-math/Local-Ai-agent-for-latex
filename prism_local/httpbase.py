@@ -20,6 +20,7 @@ import json
 import os
 import socket
 import sys
+import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -168,6 +169,24 @@ def quiet_stdio() -> None:
 
 def log(msg: str) -> None:
     print(time.strftime("%H:%M:%S ") + msg, flush=True)
+
+
+def stop_on_signals(srv: Server) -> None:
+    """Let SIGTERM (kill, a logout, systemd) and SIGHUP (a closed terminal) end the server
+    the way the idle watchdog does, so its cleanup runs: the instance file goes and
+    running work is stopped. (Called from the main thread, before serve_forever.)"""
+    import signal
+
+    def handler(signum, frame):
+        threading.Thread(target=srv.shutdown, daemon=True).start()   # not from serve_forever's thread
+
+    for name in ("SIGTERM", "SIGHUP"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            try:
+                signal.signal(sig, handler)
+            except (ValueError, OSError):
+                pass
 
 
 def listen(handler, port: int, tries: int) -> Server:

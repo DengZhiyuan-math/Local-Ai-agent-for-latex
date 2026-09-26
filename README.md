@@ -32,7 +32,10 @@ needs nothing from npm. The front-end libraries are vendored, so it also works o
 
 ## Requirements
 
-- Python ≥ 3.9 (tested with 3.11)
+prism-local runs on Windows, Linux and macOS. For Linux packages and menu entries, see
+[Linux](#linux).
+
+- Python ≥ 3.9 (tested with 3.12 and 3.14)
 - A TeX distribution: [MiKTeX](https://miktex.org) or [TeX Live](https://tug.org/texlive/).
   prism-local runs its programs directly (pdflatex, xelatex, lualatex, bibtex, biber,
   makeindex), so it needs neither Perl nor latexmk. Without a TeX distribution,
@@ -187,6 +190,55 @@ python launcher/prism_launcher.pyw --home         # the Home page
 ```
 
 `launcher/make_icon.py` redraws `launcher/prism.ico`.
+
+## Linux
+
+prism-local works the same way on Linux. This section covers what is set up differently.
+
+**Install** a TeX distribution and git. Python 3.9 or newer comes with every distribution.
+
+| Distribution | Command |
+|---|---|
+| Debian, Ubuntu | `sudo apt install texlive-latex-extra texlive-xetex texlive-luatex texlive-bibtex-extra biber git` |
+| Fedora | `sudo dnf install texlive-scheme-medium biber git` |
+| Arch | `sudo pacman -S texlive-basic texlive-latexextra texlive-xetex texlive-luatex texlive-bibtexextra biber git` |
+
+- Chinese documents also need `texlive-lang-chinese` (Debian, Ubuntu) or `texlive-langchinese`
+  (Arch).
+- The [TeX Live installer](https://tug.org/texlive/) and TinyTeX work too.
+- Optional: `zenity`, or `kdialog` on KDE, for the Browse… folder dialog and for error
+  messages from the launcher (`python3-tk` also does for the folder dialog). A Chrome,
+  Chromium, Edge or Brave browser for the window and app modes.
+
+**Start** from a terminal:
+
+```sh
+bin/prism-home                            # the Home page
+bin/prism-local ~/papers/my-paper         # one project
+```
+
+**Menu entries**, the counterpart of the Windows shortcut:
+
+```sh
+python3 launcher/make_desktop_entry.py                                   # "Prism": the Home page
+python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop
+```
+
+- The entry goes to `~/.local/share/applications`, where GNOME, KDE, Xfce and the other
+  desktops find it. `--desktop` also puts an icon on the desktop.
+- Options: `--name`, `--browser window|app|default`, and `--remove` to take an entry away.
+- The entry runs `launcher/prism_launcher.pyw` with the Python that created it.
+- With `--browser window` (the default), Prism opens in a window of its own when your default
+  browser is Chromium-based (Chrome, Chromium, Edge, Brave, Vivaldi). With Firefox as the
+  default browser, it opens as a Firefox tab.
+- Programs started from a desktop menu do not read `~/.bashrc`. prism-local still finds
+  TeX Live in `/usr/local/texlive`, `/opt/texlive` or `~/texlive`, TinyTeX, and `claude` in
+  `~/.local/bin`, `~/.npm-global/bin` or `/usr/local/bin`. Anything else must be on the
+  `PATH` set in `~/.profile`.
+- The Home list, logs and running servers are kept in `~/.local/state/prism-local` (or
+  `$XDG_STATE_HOME/prism-local`).
+- A server stopped with `kill` (SIGTERM) or by a logout cleans up as it does after its last
+  page. Stopping a build or an agent turn also stops the programs they started.
 
 ## Keyboard
 
@@ -441,7 +493,8 @@ prism-local is meant for a single user on their own machine.
 ```
 bin/prism-local            command-line launcher
 bin/prism-home             command-line launcher for the Home page
-launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1, icon
+launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1 (Windows),
+                           make_desktop_entry.py (Linux menu entries), icon
 prism_local/server.py      HTTP server: files, SyncTeX, idle exit
 prism_local/build.py       builds: engine choice, bibliographies, indexes, reruns, log parsing
 prism_local/proc.py        starting and stopping programs (process trees on Windows)

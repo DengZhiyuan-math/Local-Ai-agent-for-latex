@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -39,6 +40,10 @@ def write_bytes(path: Path, data: bytes) -> None:
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.prism-tmp")
     try:
         tmp.write_bytes(data)
+        try:
+            shutil.copymode(path, tmp)      # the new file keeps the old one's permissions
+        except OSError:
+            pass                            # a new file: the default permissions
         for attempt in range(20):
             try:
                 os.replace(tmp, path)

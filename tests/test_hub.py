@@ -68,6 +68,17 @@ class Registry(TempState):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 
 
+@unittest.skipIf(os.name == "nt", "desktop dialogs: Linux")
+class FolderDialog(unittest.TestCase):
+    def test_zenity_or_kdialog_before_tkinter(self):
+        from unittest import mock
+        with mock.patch.object(hub.sys, "platform", "linux"), \
+                mock.patch.object(hub.shutil, "which", side_effect=lambda c: c in ("zenity", "kdialog") and c):
+            cmds = hub.native_folder_dialogs("/home/me/papers", "Location")
+        self.assertEqual([c[0] for c in cmds], ["zenity", "kdialog"])
+        self.assertIn("--filename=/home/me/papers/", cmds[0])
+
+
 class Instances(TempState):
     """An instance file goes only when its server has ended, not when it is slow."""
 

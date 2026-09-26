@@ -185,6 +185,52 @@ class Platform(unittest.TestCase):
         self.assertIn("pdflatex was not found", r["output"])
         self.assertEqual(r["diagnostics"][0]["severity"], "error")
 
+    def test_tex_is_found_where_distributions_install_it(self):
+        """A server started from a desktop menu has no TeX on PATH (no ~/.bashrc)."""
+        base = tmpdir()
+        if os.name == "nt":
+            bindir = base / "Programs" / "MiKTeX" / "miktex" / "bin" / "x64"
+            env = {"LOCALAPPDATA": str(base), "PATH": str(base / "nothing")}
+            home = Path.home()
+        else:
+            bindir = base / "texlive" / "2025" / "bin" / "x86_64-linux"
+            env, home = {"PATH": str(base / "nothing")}, base
+        bindir.mkdir(parents=True)
+        engine = bindir / ("pdflatex.exe" if os.name == "nt" else "pdflatex")
+        engine.write_text("", encoding="utf-8")
+        engine.chmod(0o755)
+        with mock.patch.dict(os.environ, env), mock.patch.object(Path, "home", return_value=home):
+            self.assertIn(bindir, build.tex_dirs())
+            self.assertTrue(build.build_env()["PATH"].startswith(str(bindir) + os.pathsep))
+
+    @unittest.skipIf(os.name == "nt", "Linux and macOS")
+    def test_shell_commands_without_bash(self):
+        with mock.patch("build.shutil.which", return_value=None):
+            self.assertEqual(build.shell_argv("make")[:2], ["sh", "-c"])
+
+    @unittest.skipIf(os.name == "nt", "process groups: Linux and macOS")
+    def test_stopping_ends_the_programs_a_program_started(self):
+        from proc import TREE, kill_tree
+        pidfile = tmpdir() / "grandchild.pid"
+        code = ("import subprocess, sys, time; "
+                "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"open({str(pidfile)!r}, 'w').write(str(p.pid)); time.sleep(60)")
+        proc = subprocess.Popen([sys.executable, "-c", code], **TREE)
+        for _ in range(100):
+            if pidfile.exists() and pidfile.read_text():
+                break
+            time.sleep(0.05)
+        grandchild = int(pidfile.read_text())
+        kill_tree(proc)
+        for _ in range(100):                   # reaped by init: gone from the process table
+            try:
+                os.kill(grandchild, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            self.fail("the grandchild still runs")
+
     def test_a_program_that_cannot_start_is_explained(self):
         root = project({"main.tex": "\\documentclass{article}\\begin{document}x\\end{document}"})
         b = build.Build(root, "main.tex", "build")

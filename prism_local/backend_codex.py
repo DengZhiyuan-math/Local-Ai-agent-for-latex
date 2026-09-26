@@ -23,7 +23,10 @@ SANDBOX = {"edit": "workspace-write", "ask": "read-only"}
 
 
 def codex_bin() -> str | None:
-    return find_bin("CODEX_BIN", "codex", (str(Path.home() / ".local/bin/codex"),))
+    home = Path.home()
+    return find_bin("CODEX_BIN", "codex", (str(home / ".local/bin/codex"),
+                                           str(home / ".npm-global/bin/codex"),
+                                           "/usr/local/bin/codex", "/opt/homebrew/bin/codex"))
 
 
 def _rel(p: str, root: Path) -> str:

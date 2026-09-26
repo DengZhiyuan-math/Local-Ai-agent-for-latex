@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 
 from fsutil import SKIP_DIRS
-from proc import NO_WINDOW, kill_tree
+from proc import TREE, kill_tree
 
 MAX_PASSES = 5            # engine runs per build (at most 3 while the document has errors)
 TIMEOUT = 600.0           # seconds for one whole build
@@ -131,6 +131,45 @@ def needs_shell_escape(root: Path, main: str) -> str | None:
 
 # ---------------------------------------------------------------- platform help
 
+def tex_dirs() -> list[Path]:
+    """Folders where TeX distributions put their programs, newest first.
+
+    A server started from a desktop menu or a shortcut does not get the PATH that a
+    terminal gets from ~/.bashrc, so a TeX Live installed in /usr/local/texlive, or a
+    MacTeX, is not found there by name."""
+    home = Path.home()
+    if os.name == "nt":
+        local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData" / "Local")
+        progs = [Path(os.environ[v]) for v in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)")
+                 if os.environ.get(v)]
+        cands = [local / "Programs" / "MiKTeX" / "miktex" / "bin" / "x64"]
+        cands += [p / "MiKTeX" / "miktex" / "bin" / "x64" for p in progs]
+        roots = [Path("C:/texlive")]
+    else:
+        cands = []
+        roots = [Path("/usr/local/texlive"), Path("/opt/texlive"), home / "texlive"]
+    for root in roots:                              # TeX Live: <root>/<year>/bin/<platform>
+        years = sorted((d for d in root.glob("*") if d.name.isdigit()), reverse=True) \
+            if root.is_dir() else []
+        cands += [b for y in years for b in sorted((y / "bin").glob("*"))]
+    if os.name != "nt":
+        cands += [p for base in (home / ".TinyTeX", home / "Library" / "TinyTeX")
+                  for p in sorted((base / "bin").glob("*"))]
+        cands += [Path("/Library/TeX/texbin"), Path("/usr/texbin")]
+    return [p for p in cands if p.is_dir()]
+
+
+def build_env() -> dict:
+    """The environment builds run in: this process's, with the first TeX distribution
+    folder added to PATH when no TeX engine can be found on PATH itself."""
+    env = dict(os.environ)
+    if not any(shutil.which(e) for e in ("pdflatex", "xelatex", "lualatex")):
+        found = next((d for d in tex_dirs() if shutil.which("pdflatex", path=str(d))), None)
+        if found:
+            env["PATH"] = str(found) + os.pathsep + env.get("PATH", "")
+    return env
+
+
 def ansi_safe(path: Path) -> bool:
     """Whether Windows programs that use the ANSI code page (Perl) can spell `path`."""
     if os.name != "nt":
@@ -193,7 +232,7 @@ def git_bash() -> str | None:
 
 def shell_argv(cmd: str) -> list[str]:
     if os.name != "nt":
-        return ["bash", "-c", cmd]
+        return ["bash" if shutil.which("bash") else "sh", "-c", cmd]
     bash = git_bash()
     if not bash:
         raise BuildError("prism.json gives this build as a shell command, which needs Git for "
@@ -243,7 +282,7 @@ class Runner:
             # No stdin: a program that asks something gets end-of-file instead of waiting.
             proc = self.proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                **NO_WINDOW)
+                                                **TREE)
         try:
             out, _ = proc.communicate(timeout=max(1.0, self.deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
@@ -531,6 +570,7 @@ class Build:
         self.strict = mode == "strict"
         self.want_builder, self.want_engine, self.command = builder, engine, command
         self.clean, self.shell_escape = clean, shell_escape
+        self.env = build_env()              # every program of the build runs with this
         self.runner = Runner(timeout)
         self.parts: list[str] = []          # what the Output panel shows
         self.last = ""                      # the output of the last engine pass
@@ -579,20 +619,25 @@ class Build:
                 "timed_out": self.runner.timed_out}
 
     # ------------------------------------------------------------ choosing
+    def _which(self, name: str) -> str | None:
+        """A program on the build's PATH (Windows looks up programs on the server's own
+        PATH, not on the one passed to them, so steps get full paths)."""
+        return shutil.which(name, path=self.env.get("PATH"))
+
     def _choose_builder(self) -> str:
         if self.command:
             return "custom"
         want = str(self.want_builder or "auto").lower()
         if want in ("latexmk", "tectonic"):
-            if not shutil.which(want):
+            if not self._which(want):
                 raise BuildError(f"prism.json asks for {want}, which was not found on PATH.")
             return want
         if want not in ("auto", "builtin"):
             raise BuildError(f"prism.json: unknown builder {self.want_builder!r} "
                              "(use \"auto\", \"latexmk\" or \"tectonic\").")
-        if shutil.which(self.engine):
+        if self._which(self.engine):
             return "builtin"
-        if shutil.which("tectonic"):
+        if self._which("tectonic"):
             self.notes.append(f"{self.engine} was not found, so Tectonic builds this project.")
             return "tectonic"
         raise BuildError(f"{self.engine} was not found. Install MiKTeX (miktex.org) or TeX Live, "
@@ -603,8 +648,9 @@ class Build:
         """Run one program. A missing tool (bibtex …) is reported and the build goes on;
         a missing engine ends it."""
         self.steps.append(name)
+        argv = [self._which(str(argv[0])) or argv[0], *argv[1:]]
         try:
-            rc, out = self.runner.run(argv, cwd, env)
+            rc, out = self.runner.run(argv, cwd, env or self.env)
         except OSError as e:          # not there, or not allowed to start (an antivirus …)
             prog = Path(str(argv[0])).stem.lower()
             if isinstance(e, (FileNotFoundError, NotADirectoryError)):
@@ -623,7 +669,7 @@ class Build:
 
     # ------------------------------------------------------------ built-in
     def _engine_argv(self) -> list[str]:
-        argv = [shutil.which(self.engine) or self.engine, "-synctex=1",
+        argv = [self._which(self.engine) or self.engine, "-synctex=1",
                 "-interaction=nonstopmode", "-file-line-error", f"-output-directory={self.outdir}"]
         if self.shell_escape:
             argv.append("-shell-escape")
@@ -693,8 +739,8 @@ class Build:
                 continue
             # bibtex runs in the output folder; the project folder, relative to it, is
             # where the .bib and .bst files are (relative, so any folder name works)
-            env = {**os.environ, **{v: rel_root + os.pathsep + os.environ.get(v, "")
-                                    for v in ("BIBINPUTS", "BSTINPUTS")}}
+            env = {**self.env, **{v: rel_root + os.pathsep + self.env.get(v, "")
+                                  for v in ("BIBINPUTS", "BSTINPUTS")}}
             rc, text = self._step(f"bibtex {target}", ["bibtex", target], out, env, tool=True)
             found = parse_bibtex(text, root, out) if rc != 127 else []
             self.diags += found
@@ -767,20 +813,20 @@ class Build:
 
     # ------------------------------------------------------------ latexmk, Tectonic, own commands
     def _command(self) -> int:
-        root, env, cwd = self.root, {**os.environ}, self.root
+        root, env, cwd = self.root, dict(self.env), self.root
         if self.builder == "custom":
             argv = shell_argv(self.command) if isinstance(self.command, str) else list(self.command)
         elif self.builder == "tectonic":
-            argv = [shutil.which("tectonic"), "-o", self.outdir, "--keep-logs",
-                    "--keep-intermediates", "--synctex"]
+            argv = ["tectonic", "-o", self.outdir, "--keep-logs", "--keep-intermediates",
+                    "--synctex"]
             argv += ([] if self.strict else ["-Z", "continue-on-errors"]) + [self.main]
         else:                                           # latexmk
-            argv = [shutil.which("latexmk"), LATEXMK_FLAG[self.engine], "-synctex=1",
+            argv = ["latexmk", LATEXMK_FLAG[self.engine], "-synctex=1",
                     "-interaction=nonstopmode", "-file-line-error", f"-outdir={self.outdir}",
                     "-halt-on-error" if self.strict else "-f"]
             argv += (["-shell-escape"] if self.shell_escape else []) + [self.main]
             cwd = ascii_alias(root)                     # Perl: a path the code page can spell
-            if os.name == "nt" and not shutil.which("perl"):
+            if os.name == "nt" and not self._which("perl"):
                 perl = git_perl_dir()
                 if not perl:
                     raise BuildError("latexmk needs Perl, and none was found. Install Strawberry "
@@ -789,7 +835,7 @@ class Build:
                 env["PATH"] = env.get("PATH", "") + os.pathsep + perl   # appended: shadows nothing
         # bibtex runs inside the output folder under latexmk; let it find the project's files.
         for v in ("BIBINPUTS", "BSTINPUTS"):
-            env[v] = os.pathsep.join([str(cwd), os.environ.get(v, "")])
+            env[v] = os.pathsep.join([str(cwd), self.env.get(v, "")])
         rc, text = self._step(Path(str(argv[0])).stem, argv, cwd, env)
         self.passes = 1
         self.diags += parse_stdout(text, root)

@@ -66,6 +66,13 @@ class Files(unittest.TestCase):
         server.save_file("new.tex", "x\ny\n", None, False)
         self.assertEqual((root / "new.tex").read_bytes(), b"x\ny\n")
 
+    @unittest.skipIf(os.name == "nt", "file modes: Linux and macOS")
+    def test_save_keeps_the_files_permissions(self):
+        root = project({"main.tex": "old\n"})
+        (root / "main.tex").chmod(0o640)
+        server.save_file("main.tex", "new\n", server.mtime(root / "main.tex"), False)
+        self.assertEqual((root / "main.tex").stat().st_mode & 0o777, 0o640)
+
     def test_save_refuses_to_overwrite_a_newer_file(self):
         root = project({"main.tex": "old\n"})
         loaded = server.mtime(root / "main.tex")

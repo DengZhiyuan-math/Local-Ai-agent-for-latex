@@ -56,6 +56,14 @@ function icon(name, cls = "") {
 for (const el of document.querySelectorAll("[data-icon]")) el.insertAdjacentHTML("afterbegin", icon(el.dataset.icon));
 for (const el of document.querySelectorAll("[data-icon-end]")) el.insertAdjacentHTML("beforeend", icon(el.dataset.iconEnd, "end"));
 
+/* Key hints are written for macOS (⌘); on Windows and Linux the same keys use Ctrl. */
+const IS_MAC = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+const keys = (s) => (IS_MAC ? s : String(s).replace(/⌘/g, "Ctrl+"));
+if (!IS_MAC) for (const el of document.querySelectorAll("[title*='⌘'], [placeholder*='⌘']")) {
+  if (el.title) el.title = keys(el.title);
+  if (el.placeholder) el.placeholder = keys(el.placeholder);
+}
+
 // Editor tab <-> pop-out PDF tab. Messages:
 //   viewer -> editor: {type:"alive"} (heartbeat), {type:"bye"}, {type:"inverse", page, x, y}
 //   editor -> viewer: {type:"forward", r} (SyncTeX box), {type:"pdf", mtime}
