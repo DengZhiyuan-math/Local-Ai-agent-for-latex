@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import NO_WINDOW, AgentManager  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
+from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
@@ -238,8 +239,9 @@ def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> 
 
 LABEL_RE = re.compile(r"\\label\{([^}]+)\}")
 BEGIN_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}(?:\[([^\]]*)\])?")
+# \section{…}, \section*{…}, \section[short]{long}; the title is read with its braces paired.
 SECTION_RE = re.compile(
-    r"\\(section|subsection|subsubsection)\*?\{([^{}]*(?:\{[^{}]*\}[^{}]*)*)\}")
+    r"\\(part|chapter|section|subsection|subsubsection)\*?\s*(?:\[[^\]]*\])?\s*\{")
 INPUT_RE = re.compile(r"\\(?:input|include)\{([^}]+)\}")
 MACRO_RE = re.compile(
     r"\\(?:newcommand|renewcommand|providecommand|DeclareMathOperator|DeclarePairedDelimiter)\*?"
@@ -310,13 +312,14 @@ def symbols() -> dict:
             line = strip_comment(raw)
             m = SECTION_RE.search(line)
             if m:
+                g = group(line, m.end() - 1)          # a title that runs on: this line's part
                 outline.append({"file": rel, "line": n, "kind": m.group(1),
-                                "title": m.group(2)})
+                                "title": plain_text(g[0] if g else line[m.end():])})
                 env = m.group(1)
             for m in BEGIN_RE.finditer(line):
                 if m.group(1) in outline_envs:
                     outline.append({"file": rel, "line": n, "kind": m.group(1),
-                                    "title": m.group(2) or ""})
+                                    "title": plain_text(m.group(2) or "")})
                 env = m.group(1)
             for m in MACRO_RE.finditer(line):
                 macros.append({"name": m.group(1), "file": rel, "line": n})

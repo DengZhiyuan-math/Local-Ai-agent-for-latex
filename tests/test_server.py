@@ -123,6 +123,52 @@ class Symbols(unittest.TestCase):
         project({"main.tex": "\\documentclass{article}\\begin{document}\\end{document}\n"})
         self.assertEqual(server.symbols()["env_titles"]["lemma"], "Lemma")
 
+    def test_section_titles(self):
+        project({"main.tex": "\\begin{document}\n\\chapter{One}\n"
+                             "\\section[Short]{Long $\\frac{a}{b^{2}}$}\n"
+                             "\\subsection*{\\texorpdfstring{$\\mathbb{R}^d$}{Rd} and $\\SO(n)$}\n"
+                             "\\end{document}\n"})
+        self.assertEqual([(o["kind"], o["title"]) for o in server.symbols()["outline"]],
+                         [("chapter", "One"), ("section", "Long a/b^2"),
+                          ("subsection", "Rd and SO(n)")])
+
+
+@unittest.skipUnless(shutil.which("pdflatex") and not os.environ.get("PRISM_SKIP_TEX"),
+                     "needs a TeX distribution")
+class SyncTeX(unittest.TestCase):
+    def test_source_to_pdf_and_back(self):
+        import build
+        root = project({})
+        shutil.copytree(Path(__file__).resolve().parents[1] / "examples" / "minimal", root,
+                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("build"))
+        server.set_root(root)
+        r = build.Build(root, server.CFG.main, server.CFG.outdir).run()
+        self.assertEqual(r["exit"], 0, r["output"][-2000:])
+        sync = server.SyncTex()
+        self.assertTrue(sync.load())
+        line = next(n for n, t in enumerate((root / "sections/intro.tex").read_text(
+            encoding="utf-8").splitlines(), 1) if len(t) > 40 and not t.startswith(("\\", "%")))
+        box = sync.forward("sections/intro.tex", line)
+        self.assertIsNotNone(box)
+        back = sync.inverse(box["page"], box["x"] + 20, box["y"] + box["h"] / 2)
+        self.assertEqual(back["file"], "sections/intro.tex")
+        self.assertLessEqual(abs(back["line"] - line), 1)
+
+
+class PlainText(unittest.TestCase):
+    def test_titles_read_as_text(self):
+        from texutil import plain_text
+        cases = {
+            r"Computation of $\sum\limits_{j=1}^{n}\langle f_j, g\rangle$":
+                "Computation of Σ_j=1^n⟨ f_j, g⟩",
+            r"\texorpdfstring{$\SO(n)$}{SO(n)} acting on $\mathbb{R}^d$": "SO(n) acting on ℝ^d",
+            r"The \emph{main}~estimate\label{sec:main}": "The main estimate",
+            r"Bounds for $\|\alpha\|_{L^2} \leq \varepsilon$": "Bounds for ‖α‖_L^2 ≤ ε",
+            r"On convex sets\thanks{Funded by {X}.} \\[2pt] and cones": "On convex sets and cones",
+        }
+        for tex, text in cases.items():
+            self.assertEqual(plain_text(tex), text, tex)
+
 
 if __name__ == "__main__":
     unittest.main()

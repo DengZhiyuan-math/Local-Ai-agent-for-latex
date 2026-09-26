@@ -49,7 +49,7 @@ needs nothing from npm. The front-end libraries are vendored, so it also works o
 ## Quick start
 
 ```sh
-git clone https://github.com/DengZhiyuan-math/prism-local.git
+git clone https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git prism-local
 cd prism-local
 bin/prism-local examples/minimal          # opens http://127.0.0.1:8765/
 ```

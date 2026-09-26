@@ -35,6 +35,7 @@ from backend_claude import claude_account, claude_bin  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
 from presence import Presence  # noqa: E402
 from proc import NO_WINDOW  # noqa: E402
+from texutil import tex_title  # noqa: E402
 
 PRESENCE = Presence()
 MAX_SCAN = 3000
@@ -62,54 +63,6 @@ def guess_main(root: Path) -> str | None:
         except OSError:
             pass
     return None
-
-
-def balanced(text: str, i: int) -> str | None:
-    """The contents of the {...} group whose '{' is at text[i]."""
-    depth = 0
-    for j in range(i, len(text)):
-        c = text[j]
-        if c == "\\":
-            continue
-        if c == "{" and (j == 0 or text[j - 1] != "\\"):
-            depth += 1
-        elif c == "}" and text[j - 1] != "\\":
-            depth -= 1
-            if depth == 0:
-                return text[i + 1:j]
-    return None
-
-
-def drop_command(text: str, name: str) -> str:
-    """Remove every \\name{...} (with its argument) from text."""
-    while True:
-        m = re.search(r"\\" + name + r"\s*\{", text)
-        if not m:
-            return text
-        arg = balanced(text, m.end() - 1)
-        text = text[:m.start()] + (text[m.end() + len(arg) + 1:] if arg is not None else "")
-
-
-def tex_title(path: Path) -> str | None:
-    """The \\title{...} of a LaTeX file as plain text, roughly."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")[:40000]
-    except OSError:
-        return None
-    text = "\n".join(re.sub(r"(?<!\\)%.*", "", ln) for ln in text.splitlines())
-    m = re.search(r"\\title\s*(?:\[[^\]]*\])?\s*\{", text)
-    if not m:
-        return None
-    t = balanced(text, m.end() - 1)
-    if t is None:
-        return None
-    for cmd in ("thanks", "footnote", "label"):
-        t = drop_command(t, cmd)
-    t = re.sub(r"\\\\(\[[^\]]*\])?|~|\\ ", " ", t)
-    t = re.sub(r"\\[A-Za-z]+\*?\s*", "", t)
-    t = re.sub(r"[{}]", "", t)
-    t = re.sub(r"\s+", " ", t).strip()
-    return t[:240] or None
 
 
 def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:

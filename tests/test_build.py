@@ -130,6 +130,18 @@ class Parsing(unittest.TestCase):
         self.assertEqual([(x["file"], x["line"]) for x in d],
                          [("main.tex", 3), ("my chapter.tex", 7), ("sub/a.tex", 1), (None, 12)])
 
+    def test_log_warnings_are_attributed_to_source_files(self):
+        root = project({"main.tex": "", "sections/intro.tex": "", "build/main.log": (
+            "(./main.tex (./sections/intro.tex\n"
+            "LaTeX Warning: Reference `sec:x' on page 1 undefined on input line 7.\n"
+            ") (./build/main.bbl\nLaTeX Warning: Citation `k' on page 2 undefined on input line 3.\n"
+            ")\nLaTeX Warning: There were undefined references.\n"
+            "LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.\n)")})
+        d = build.parse_log_warnings(root / "build/main.log", root)
+        self.assertEqual([(x["file"], x["line"], x["message"][:9]) for x in d],
+                         [("sections/intro.tex", 7, "Reference"), (None, 3, "Citation "),
+                          (None, None, "There wer")])
+
     def test_bibtex_messages(self):
         root = project({"refs.bib": ""})
         out = ("I was expecting a `,' or a `}'---line 5 of file ../refs.bib\n"
