@@ -90,8 +90,8 @@ class Job:
         self.root = Path(".")
         self.files: Callable[[], list[str]] = lambda: []    # editable files
         self.writable: Callable[[str], bool] = lambda rel: False
-        self.before: dict[str, str | None] = {}
-        self.after: dict[str, str | None] = {}
+        self.before: dict[str, bytes | None] = {}     # file contents around the turn
+        self.after: dict[str, bytes | None] = {}
 
     def emit(self, ev: dict) -> None:
         with self.cond:

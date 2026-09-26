@@ -139,15 +139,17 @@ def main() -> int:
             return 2
         what = str(project)
 
+    # Run with pythonw there is no console: whatever goes wrong must end in a dialog.
     try:
         r = ensure_server(project, a.port, extra)
-    except TimeoutError as e:
-        message(str(e))
+        if "error" in r:
+            message(f"prism-local did not start for\n{what}\n\n{r['error']}\n\n{r['log']}"
+                    f"\n\nLog: {r['logfile']}")
+            return 1
+        open_page(r["url"], a.browser)
+    except Exception as e:  # noqa: BLE001
+        message(f"prism-local could not be opened for\n{what}\n\n{type(e).__name__}: {e}")
         return 1
-    if "error" in r:
-        message(f"prism-local did not start for\n{what}\n\n{r['log']}\n\nLog: {r['logfile']}")
-        return 1
-    open_page(r["url"], a.browser)
     return 0
 
 

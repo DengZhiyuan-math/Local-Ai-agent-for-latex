@@ -33,11 +33,11 @@ import threading
 import time
 from pathlib import Path
 
+from fsutil import SKIP_DIRS
 from proc import NO_WINDOW, kill_tree
 
 MAX_PASSES = 5            # engine runs per build (at most 3 while the document has errors)
 TIMEOUT = 600.0           # seconds for one whole build
-SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 
 ENGINES = {"pdflatex": "pdflatex", "pdftex": "pdflatex", "latex": "pdflatex",
            "pdflatex-dev": "pdflatex", "xelatex": "xelatex", "xetex": "xelatex",
@@ -85,12 +85,11 @@ def _loaded(tex: str) -> set[str]:
     return {n.strip() for m in LOAD_RE.finditer(tex) for n in m.group(1).split(",") if n.strip()}
 
 
-def _preamble(root: Path, main: str) -> str | None:
+def _main_text(root: Path, main: str) -> str | None:
     try:
-        text = (root / main).read_text(encoding="utf-8", errors="replace")
+        return (root / main).read_text(encoding="utf-8", errors="replace")
     except OSError:
         return None
-    return text
 
 
 def detect_engine(root: Path, main: str, configured: str | None = None) -> tuple[str, str]:
@@ -99,7 +98,7 @@ def detect_engine(root: Path, main: str, configured: str | None = None) -> tuple
         eng = ENGINES.get(str(configured).strip().lower())
         if eng:
             return eng, "prism.json"
-    text = _preamble(root, main)
+    text = _main_text(root, main)
     if text is None:
         return "pdflatex", "default"
     m = MAGIC_RE.search("\n".join(text.splitlines()[:30]))
@@ -123,7 +122,7 @@ def detect_engine(root: Path, main: str, configured: str | None = None) -> tuple
 
 def needs_shell_escape(root: Path, main: str) -> str | None:
     """A package in the preamble that only works with shell escape, if any."""
-    text = _preamble(root, main)
+    text = _main_text(root, main)
     if text is None:
         return None
     names = _loaded(strip_comments(text.split("\\begin{document}", 1)[0]))

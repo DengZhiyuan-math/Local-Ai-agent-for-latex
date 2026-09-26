@@ -975,7 +975,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (u) {
     if (S.tabs.some(isDirty) && !(await saveAll())) return;
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
-    if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (server restarted)" : r.error; u.disabled = true; return; }
+    if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
     u.textContent = `undone (${r.restored.length})` + (r.skipped.length ? `; kept ${r.skipped.length} edited since` : "");
     u.disabled = true; saveChatLog(); await poll();
   }

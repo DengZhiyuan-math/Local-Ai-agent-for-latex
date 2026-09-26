@@ -20,25 +20,21 @@ import gzip
 import json
 import os
 import re
-import socket
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import NO_WINDOW, AgentManager  # noqa: E402
-from presence import Presence, serve_stream, valid_id  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, with_line_ends_of, write_bytes  # noqa: E402
+from presence import Presence  # noqa: E402
 import build  # noqa: E402
+import httpbase  # noqa: E402
 import registry  # noqa: E402
 
-STATIC = Path(__file__).resolve().parent / "static"
-EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".txt"}
-SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
 SAVE_LOCK = threading.Lock()
@@ -133,11 +129,6 @@ def refresh_config() -> None:
         set_root(ROOT)
 
 
-MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8",
-        ".css": "text/css; charset=utf-8", ".pdf": "application/pdf",
-        ".svg": "image/svg+xml", ".png": "image/png"}
-
-
 # ---------------------------------------------------------------- files
 
 def _excluded(rel: str) -> bool:
@@ -185,22 +176,62 @@ def list_files() -> list[str]:
     return sorted(seen, key=lambda s: (s != CFG.main, s.count("/") == 0, s))
 
 
+def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
+    """Read-only git in the project. --no-optional-locks: the editor asks every two
+    seconds, and must never hold .git/index.lock when a git command of yours starts."""
+    return subprocess.run(["git", "--no-optional-locks", *args], cwd=ROOT, capture_output=True,
+                          text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                          **NO_WINDOW)
+
+
+_GIT_PREFIX: dict = {}
+
+
+def git_prefix() -> str:
+    """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
+    if ROOT not in _GIT_PREFIX:
+        try:
+            _GIT_PREFIX[ROOT] = git("rev-parse", "--show-prefix").stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            return ""
+    return _GIT_PREFIX[ROOT]
+
+
 def git_status() -> dict[str, str]:
+    """{project-relative path: status} of the files git reports as changed."""
     try:
-        out = subprocess.run(["git", "status", "--porcelain", "-uall"], cwd=ROOT,
-                             capture_output=True, text=True, encoding="utf-8", errors="replace",
-                             timeout=10, **NO_WINDOW).stdout
-    except Exception:
+        out = git("status", "--porcelain", "-z", "-uall", "--", ".").stdout
+    except (OSError, subprocess.SubprocessError):
         return {}
-    st = {}
-    for line in out.splitlines():
-        if len(line) > 3:
-            st[line[3:].split(" -> ")[-1].strip('"')] = line[:2].strip() or "M"
+    # -z: unquoted paths (any characters), relative to the repository's top, "XY path";
+    # a rename or copy is followed by its old path.
+    prefix, st, entries, i = git_prefix(), {}, out.split("\0"), 0
+    while i < len(entries):
+        e = entries[i]
+        i += 1
+        if len(e) < 4:
+            continue
+        if "R" in e[:2] or "C" in e[:2]:
+            i += 1
+        if e[3:].startswith(prefix):
+            st[e[3:][len(prefix):]] = e[:2].strip() or "M"
     return st
 
 
 def mtime(p: Path) -> float:
     return p.stat().st_mtime_ns / 1e9
+
+
+def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> tuple[dict, int]:
+    """Write an editor buffer to disk, unless the file changed on disk since the editor
+    loaded it (a conflict). The file keeps its line ends (the editor sends \\n)."""
+    p = resolve(rel)
+    with SAVE_LOCK:     # check-then-write must not interleave with another save
+        if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
+                and not force:
+            return {"conflict": True, "mtime": mtime(p)}, 409
+        write_bytes(p, with_line_ends_of(content, p).encode("utf-8"))
+        return {"ok": True, "mtime": mtime(p)}, 200
 
 
 # ---------------------------------------------------------------- symbols
@@ -463,273 +494,140 @@ PRESENCE = Presence()
 
 # ---------------------------------------------------------------- http
 
-class Handler(BaseHTTPRequestHandler):
-    server_version = "prism-local/1"
+class Handler(httpbase.Handler):
+    """The editor's requests. The checks every request passes are in httpbase.py."""
 
-    def log_message(self, fmt, *args):  # quiet
-        pass
+    presence = PRESENCE
+    pages = {"/": "index.html", "/index.html": "index.html", "/viewer": "viewer.html"}
 
-    # -- helpers
-    def _host_ok(self) -> bool:
-        host = (self.headers.get("Host") or "").split(":")[0]
-        return host in ("127.0.0.1", "localhost")
-
-    def _send(self, code, body: bytes, ctype="application/json", extra=None):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        for k, v in (extra or {}).items():
-            self.send_header(k, v)
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj).encode())
-
-    def _err(self, code, msg):
-        self._json({"error": msg}, code)
-
-    # -- GET
-    def do_GET(self):
-        if not self._host_ok():
-            return self._err(403, "bad host")
+    def get(self, path, q):
         refresh_config()
-        u = urlparse(self.path)
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
         try:
-            if u.path in ("/", "/index.html"):
-                return self._static("index.html")
-            if u.path == "/viewer":
-                return self._static("viewer.html")
-            if u.path == "/api/ping":
-                return self._json({"app": "prism-local", "root": str(ROOT), "pid": os.getpid(),
-                                   "pages": PRESENCE.count()})
-            if u.path == "/api/presence/stream":
-                # Only this app's own pages may hold the server open.
-                site = self.headers.get("Sec-Fetch-Site", "same-origin")
-                if not self._same_origin() or site not in ("same-origin", "none"):
-                    return self._err(403, "forbidden")
-                if not valid_id(q.get("client")):
-                    return self._err(400, "bad client id")
-                return serve_stream(self, PRESENCE, q["client"])
-            if u.path == "/api/pdfstat":
-                return self._json({"mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
-            if u.path.startswith("/static/"):
-                return self._static(u.path[len("/static/"):])
-            if u.path == "/pdf":
-                if not CFG.pdf.exists():
-                    return self._err(404, "no PDF yet")
-                return self._send(200, CFG.pdf.read_bytes(), "application/pdf")
-            if u.path == "/api/tree":
-                st = git_status()
-                files = [{"path": f, "git": st.get(f, ""),
-                          "mtime": mtime(ROOT / f)} for f in list_files()]
-                return self._json({"root": ROOT.name, "files": files,
-                                   "order": document_order(),
-                                   "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
-            if u.path == "/api/config":
-                return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
-                                   "builder": CFG.builder, "engine": CFG.engine,
-                                   "error": CFG.error,
-                                   "build": {m: CFG.describe(m) for m in CFG.modes}})
-            if u.path == "/api/agent/events":
-                job = AGENT.jobs.get(int(q["job"]))
-                if not job:
-                    return self._err(404, "unknown job")
-                evs, done = job.wait_events(int(q.get("after", 0)), 20.0)
-                return self._json({"events": evs, "done": done})
-            if u.path == "/api/agent/commands":
-                r = AGENT.commands(q.get("provider") or None, refresh=q.get("refresh") == "1")
-                return self._json(r, 502 if "error" in r else 200)
-            if u.path == "/api/agent/account":
-                b = AGENT.backend(q.get("provider") or None)
-                if b is None or not hasattr(b, "account"):
-                    return self._json({"account": None})
-                return self._json(b.account(ROOT, fresh=q.get("fresh") == "1"))
-            if u.path == "/api/agent/info":
-                return self._json(AGENT.info())
-            if u.path == "/api/symbols":
-                return self._json(symbols())
-            if u.path == "/api/file":
-                p = resolve(q.get("path", ""))
-                return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
-                                   "mtime": mtime(p)})
-            if u.path == "/api/diff":
-                args = ["git", "diff", "--no-color", "--"]
-                args += [q["path"]] if q.get("path") else []
-                if q.get("path"):
-                    resolve(q["path"])
-                out = subprocess.run(args, cwd=ROOT, capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", timeout=20,
-                                     **NO_WINDOW).stdout
-                return self._json({"diff": out})
-            if u.path == "/api/synctex/forward":
-                with SYNC_LOCK:
-                    if not SYNC.load():
-                        return self._err(404, "no synctex data; build first")
-                    r = SYNC.forward(q["file"], int(q["line"]))
-                return self._json(r or {"error": "no match"}, 200 if r else 404)
-            if u.path == "/api/synctex/inverse":
-                with SYNC_LOCK:
-                    if not SYNC.load():
-                        return self._err(404, "no synctex data; build first")
-                    r = SYNC.inverse(int(q["page"]), float(q["x"]), float(q["y"]))
-                return self._json(r or {"error": "no match"}, 200 if r else 404)
-            return self._err(404, "not found")
+            return self._get(path, q)
+        except UnicodeDecodeError:
+            return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
         except (ValueError, KeyError) as e:
             return self._err(400, str(e))
         except FileNotFoundError:
             return self._err(404, "file not found")
+        except OSError as e:                 # e.g. the file is locked by another program
+            return self._err(500, f"{type(e).__name__}: {e}")
 
-    def _static(self, rel):
-        p = (STATIC / rel).resolve()
-        if STATIC not in p.parents or not p.is_file():
-            return self._err(404, "not found")
-        self._send(200, p.read_bytes(), MIME.get(p.suffix, "application/octet-stream"))
+    def _get(self, path, q):
+        if path == "/api/ping":
+            return self._json({"app": "prism-local", "root": str(ROOT), "pid": os.getpid(),
+                               "pages": PRESENCE.count()})
+        if path == "/api/pdfstat":
+            return self._json({"mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
+        if path == "/pdf":
+            if not CFG.pdf.exists():
+                return self._err(404, "no PDF yet")
+            return self._send(200, CFG.pdf.read_bytes(), "application/pdf")
+        if path == "/api/tree":
+            st = git_status()
+            files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f)}
+                     for f in list_files()]
+            return self._json({"root": ROOT.name, "files": files, "order": document_order(),
+                               "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
+        if path == "/api/config":
+            return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
+                               "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
+                               "build": {m: CFG.describe(m) for m in CFG.modes}})
+        if path == "/api/agent/events":
+            job = AGENT.jobs.get(int(q["job"]))
+            if not job:
+                return self._err(404, "unknown job")
+            evs, done = job.wait_events(int(q.get("after", 0)), 20.0)
+            return self._json({"events": evs, "done": done})
+        if path == "/api/agent/commands":
+            r = AGENT.commands(q.get("provider") or None, refresh=q.get("refresh") == "1")
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/agent/account":
+            b = AGENT.backend(q.get("provider") or None)
+            if b is None or not hasattr(b, "account"):
+                return self._json({"account": None})
+            return self._json(b.account(ROOT, fresh=q.get("fresh") == "1"))
+        if path == "/api/agent/info":
+            return self._json(AGENT.info())
+        if path == "/api/symbols":
+            return self._json(symbols())
+        if path == "/api/file":
+            p = resolve(q.get("path", ""))
+            return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
+                               "mtime": mtime(p)})
+        if path == "/api/diff":
+            if q.get("path"):
+                resolve(q["path"])
+            # --relative: paths as the project sees them, and nothing from outside it
+            return self._json({"diff": git("diff", "--no-color", "--relative", "--",
+                                           q.get("path") or ".", timeout=20).stdout})
+        if path == "/api/synctex/forward":
+            with SYNC_LOCK:
+                if not SYNC.load():
+                    return self._err(404, "no synctex data; build first")
+                r = SYNC.forward(q["file"], int(q["line"]))
+            return self._json(r or {"error": "no match"}, 200 if r else 404)
+        if path == "/api/synctex/inverse":
+            with SYNC_LOCK:
+                if not SYNC.load():
+                    return self._err(404, "no synctex data; build first")
+                r = SYNC.inverse(int(q["page"]), float(q["x"]), float(q["y"]))
+            return self._json(r or {"error": "no match"}, 200 if r else 404)
+        return self._err(404, "not found")
 
-    # -- POST
-    def _same_origin(self) -> bool:
-        origin = self.headers.get("Origin")
-        return not origin or urlparse(origin).netloc == self.headers.get("Host")
-
-    def do_POST(self):
-        u = urlparse(self.path)
-        # A closing page says goodbye with navigator.sendBeacon, which cannot set the
-        # custom header below. It only removes a page id that sent a heartbeat, and
-        # other sites cannot know those random ids.
-        if u.path == "/api/bye":
-            if not self._host_ok() or not self._same_origin():
-                return self._err(403, "forbidden")
-            n = max(0, min(int(self.headers.get("Content-Length") or 0), 200))
-            cid = self.rfile.read(n).decode("utf-8", "replace").strip()
-            return self._json({"ok": PRESENCE.bye(cid)})
-        # Custom header forces a CORS preflight, which we never answer, so other
-        # web pages cannot drive this server from the browser.
-        if not self._host_ok() or self.headers.get("X-Prism-Local") != "1":
-            return self._err(403, "forbidden")
+    def post(self, path, body):
         refresh_config()
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}")
-            if u.path == "/api/presence":
-                cid = body["client"]
-                if not valid_id(cid):
-                    raise ValueError("bad client id")
-                PRESENCE.beat(cid)
-                return self._json({"ok": True})
-            if u.path == "/api/file":
-                p = resolve(body["path"])
-                base = body.get("base_mtime")
-                with SAVE_LOCK:     # check-then-write must not interleave with another save
-                    if p.exists() and base is not None and abs(mtime(p) - base) > 1e-6 \
-                            and not body.get("force"):
-                        return self._json({"conflict": True, "mtime": mtime(p)}, 409)
-                    tmp = p.with_name(f"{p.name}.{threading.get_ident()}.prism-tmp")
-                    try:
-                        tmp.write_text(body["content"], encoding="utf-8")
-                        os.replace(tmp, p)
-                    finally:
-                        tmp.unlink(missing_ok=True)
-                    return self._json({"ok": True, "mtime": mtime(p)})
-            if u.path == "/api/agent":
-                scope = body.get("scope") or None
-                if scope is not None:
-                    if not isinstance(scope, list) or not all(isinstance(f, str) for f in scope):
-                        raise ValueError("scope must be a list of files")
-                    for f in scope:
-                        resolve(f)          # an editable project file, or ValueError
-                r = AGENT.start(body["prompt"], body.get("session_id") or None,
-                                body.get("mode", "ask"), body.get("model") or None,
-                                body.get("effort") or None, scope, body.get("provider") or None)
-                return self._json(r, 409 if "error" in r else 200)
-            if u.path == "/api/home":
-                r = registry.ensure_server(None)
-                return self._json(r, 502 if "error" in r else 200)
-            if u.path == "/api/agent/usage":
-                return self._json(AGENT.probe_rate(body.get("provider") or None))
-            if u.path == "/api/agent/stop":
-                return self._json(AGENT.stop(int(body["job"])))
-            if u.path == "/api/agent/undo":
-                return self._json(AGENT.undo(int(body["turn"])))
-            if u.path == "/api/build":
-                r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
-                return self._json(r, 409 if r.get("busy") else 200)
-            if u.path == "/api/build/stop":
-                return self._json({"ok": stop_build()})
-            return self._err(404, "not found")
+            return self._post(path, body)
         except (ValueError, KeyError) as e:
             return self._err(400, str(e))
         except OSError as e:                 # e.g. the file is locked by another program
             return self._err(500, f"{type(e).__name__}: {e}")
 
-
-class Server(ThreadingHTTPServer):
-    # http.server sets SO_REUSEADDR, which on Windows lets a second server bind a port
-    # that is already in use. Ask for exclusive use there instead.
-    allow_reuse_address = os.name != "nt"
-
-    def server_bind(self):
-        if os.name == "nt":
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
-
-
-def log(msg: str) -> None:
-    print(time.strftime("%H:%M:%S ") + msg, flush=True)
-
-
-RESUME_GAP = 20.0      # seconds between watchdog ticks that mean the machine slept
-BUSY_CAP = 600.0       # longest wait for a running build or Claude turn before exiting
-
-
-def idle_watchdog(srv: ThreadingHTTPServer) -> None:
-    """Shut the server down once no page has been open for a while (see presence.py)."""
-    last_m, last_w, busy_since = time.monotonic(), time.time(), None
-    while True:
-        time.sleep(1.0)
-        m, w = time.monotonic(), time.time()
-        if m - last_m > RESUME_GAP or w - last_w > RESUME_GAP:
-            log("resumed after sleep; waiting for pages to check in again")
-            PRESENCE.resume()
-        last_m, last_w = m, w
-        if not PRESENCE.idle():
-            busy_since = None
-            continue
-        if BUILD_LOCK.locked() or AGENT.busy():
-            if busy_since is None:
-                busy_since = m
-                log("no open pages; waiting for the running build or Claude turn")
-            if m - busy_since < BUSY_CAP:
-                continue
-        log("no open pages; shutting down")
-        srv.shutdown()
-        return
+    def _post(self, path, body):
+        if path == "/api/file":
+            r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
+                                bool(body.get("force")))
+            return self._json(r, code)
+        if path == "/api/agent":
+            scope = body.get("scope") or None
+            if scope is not None:
+                if not isinstance(scope, list) or not all(isinstance(f, str) for f in scope):
+                    raise ValueError("scope must be a list of files")
+                for f in scope:
+                    resolve(f)          # an editable project file, or ValueError
+            r = AGENT.start(body["prompt"], body.get("session_id") or None,
+                            body.get("mode", "ask"), body.get("model") or None,
+                            body.get("effort") or None, scope, body.get("provider") or None)
+            return self._json(r, 409 if "error" in r else 200)
+        if path == "/api/home":
+            r = registry.ensure_server(None)
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/agent/usage":
+            return self._json(AGENT.probe_rate(body.get("provider") or None))
+        if path == "/api/agent/stop":
+            return self._json(AGENT.stop(int(body["job"])))
+        if path == "/api/agent/undo":
+            return self._json(AGENT.undo(int(body["turn"])))
+        if path == "/api/build":
+            r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
+            return self._json(r, 409 if r.get("busy") else 200)
+        if path == "/api/build/stop":
+            return self._json({"ok": stop_build()})
+        return self._err(404, "not found")
 
 
-def write_ready_file(path: Path, info: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(info), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def remove_ready_file(path: Path) -> None:
-    try:
-        if json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
-            path.unlink()
-    except (OSError, ValueError):
-        pass
+def is_scratch(root: Path) -> bool:
+    """A project in the system's temp folder (a test, a throwaway copy)."""
+    import tempfile
+    tmp = Path(tempfile.gettempdir()).resolve()
+    return root == tmp or tmp in root.parents
 
 
 def main():
-    # Started without a console (pythonw), there is no stdout to print to.
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = sys.stdout
+    httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local: local LaTeX studio "
-                                 "(editor, PDF + SyncTeX, Claude Code panel)")
+                                 "(editor, PDF + SyncTeX, AI agent panel)")
     ap.add_argument("project", nargs="?", type=Path, default=Path.cwd(),
                     help="LaTeX project directory (default: current directory)")
     ap.add_argument("--port", type=int, default=8765, help="port (0: any free port)")
@@ -749,40 +647,42 @@ def main():
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
     if not (ROOT / CFG.main).is_file():
         print(f"prism-local: warning: main file {CFG.main} not found in {ROOT}", file=sys.stderr)
-    srv, err = None, None
-    for port in range(a.port, a.port + max(1, a.port_tries)) if a.port else [0]:
-        try:
-            srv = Server(("127.0.0.1", port), Handler)
-            break
-        except OSError as e:
-            err = e
-    if srv is None:
-        sys.exit(f"prism-local: cannot listen on 127.0.0.1:{a.port}: {err}")
+    try:
+        srv = httpbase.listen(Handler, a.port, a.port_tries)
+    except OSError as e:
+        sys.exit(f"prism-local: {e}")
     port = srv.server_address[1]
     url = f"http://127.0.0.1:{port}/"
-    modes = ", ".join(CFG.modes)
     stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
     print(f"prism-local: {url}\n  project: {ROOT}\n  main:    {CFG.main}\n"
-          f"  builds:  {modes}\n  {stop}", flush=True)
-    registry.safe_touch(ROOT)       # list the project on the Home page
+          f"  builds:  {', '.join(CFG.modes)}\n  {stop}", flush=True)
+    if CFG.error:
+        print(f"  warning: {CFG.error}", flush=True)
+    if not is_scratch(ROOT):
+        registry.safe_touch(ROOT)       # list the project on the Home page
     if a.ready_file:
-        write_ready_file(a.ready_file, {"app": "prism-local", "pid": os.getpid(), "port": port,
-                                        "url": url, "root": str(ROOT)})
+        httpbase.write_ready_file(a.ready_file, {"app": "prism-local", "pid": os.getpid(),
+                                                 "port": port, "url": url, "root": str(ROOT)})
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
-        threading.Thread(target=idle_watchdog, args=(srv,), daemon=True).start()
+        busy = lambda: BUILD_LOCK.locked() or AGENT.busy()  # noqa: E731
+        threading.Thread(target=httpbase.idle_watchdog, daemon=True,
+                         args=(srv, PRESENCE, busy, "build or agent turn")).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
-        AGENT.shutdown()
         srv.server_close()
-        if a.ready_file:
-            remove_ready_file(a.ready_file)
-        log("stopped")
+        if a.ready_file:            # first, so that a new server can start at once
+            httpbase.remove_ready_file(a.ready_file)
+        stop_build()
+        AGENT.shutdown()
+        httpbase.log("stopped")
 
 
 if __name__ == "__main__":
     sys.exit(main())
+
+

@@ -26,17 +26,15 @@ import threading
 import time
 import webbrowser
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import httpbase  # noqa: E402
 import registry  # noqa: E402
-from presence import Presence, serve_stream, valid_id  # noqa: E402
-from server import (EDITABLE_SUFFIXES, MIME, SKIP_DIRS, STATIC, Server,  # noqa: E402
-                    log, remove_ready_file, write_ready_file)
-from agent import NO_WINDOW  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
+from presence import Presence  # noqa: E402
+from proc import NO_WINDOW  # noqa: E402
 
 PRESENCE = Presence()
 MAX_SCAN = 3000
@@ -158,8 +156,9 @@ def project_info(entry: dict) -> dict:
     d.update(main=main, title=tex_title(root / main) if main else None,
              files=files, edited=edited,
              pdf_mtime=pdf.stat().st_mtime if pdf and pdf.is_file() else None)
+    # Only a look: a server that is slow to answer right now keeps its instance file.
     inst = registry.running_instance(registry.instance_file(d["id"]), "prism-local", root,
-                                     timeout=0.8)
+                                     timeout=0.8, cleanup=False)
     if inst:
         d["running"] = {"url": inst["url"], "pages": inst.get("pages", 0)}
     return d
@@ -193,9 +192,9 @@ def default_parent(data: dict) -> str:
 def git_info(root: Path) -> dict | None:
     """Branch and changes of the project's own repository. A project folder inside some
     other repository (such as prism-local's) has none of its own: report which one."""
-    def git(*args):
-        return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=8, **NO_WINDOW)
+    def git(*args):      # read-only, and never holding .git/index.lock (see server.git)
+        return subprocess.run(["git", "--no-optional-locks", *args], cwd=root, capture_output=True,
+                              text=True, encoding="utf-8", errors="replace", timeout=8, **NO_WINDOW)
     try:
         top = git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
@@ -341,7 +340,7 @@ def git_init(root: Path) -> None:
     """A repository of the project's own, with build output ignored."""
     gi = root / ".gitignore"
     if not gi.exists():
-        gi.write_text(GITIGNORE, encoding="utf-8")
+        gi.write_bytes(GITIGNORE.encode("utf-8"))
     if not (root / ".git").exists():
         try:
             run_git(root, "init", "-q", "-b", "main")
@@ -460,13 +459,12 @@ def create_project(body: dict) -> dict:
     title = str(body.get("title") or "").strip() or name
     author = str(body.get("author") or "").strip()
     root.mkdir(parents=True, exist_ok=True)
-    for rel, text in tpl.items():
+    for rel, text in tpl.items():           # \n line ends on every system, as git stores them
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
-        f.write_text(text.replace("@TITLE@", title).replace("@AUTHOR@", author),
-                     encoding="utf-8")
-    (root / "prism.json").write_text(json.dumps({"main": "main.tex", "outdir": "build"},
-                                                indent=2) + "\n", encoding="utf-8")
+        f.write_bytes(text.replace("@TITLE@", title).replace("@AUTHOR@", author).encode("utf-8"))
+    (root / "prism.json").write_bytes((json.dumps({"main": "main.tex", "outdir": "build"},
+                                                  indent=2) + "\n").encode("utf-8"))
     git_note, github = None, None
     if body.get("git") or body.get("github"):
         try:
@@ -560,66 +558,27 @@ def pick_folder(start: str, title: str) -> dict:
 
 # ---------------------------------------------------------------- http
 
-class Handler(BaseHTTPRequestHandler):
+class Handler(httpbase.Handler):
+    """The Home page's requests. The checks every request passes are in httpbase.py."""
+
     server_version = "prism-home/1"
+    presence = PRESENCE
+    pages = {"/": "home.html", "/index.html": "home.html"}
 
-    def log_message(self, fmt, *args):  # quiet
-        pass
-
-    def _host_ok(self) -> bool:
-        host = (self.headers.get("Host") or "").split(":")[0]
-        return host in ("127.0.0.1", "localhost")
-
-    def _send(self, code, body: bytes, ctype="application/json"):
-        self.send_response(code)
-        self.send_header("Content-Type", ctype)
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
-        self.end_headers()
-        self.wfile.write(body)
-
-    def _json(self, obj, code=200):
-        self._send(code, json.dumps(obj).encode())
-
-    def _err(self, code, msg):
-        self._json({"error": msg}, code)
-
-    def _static(self, rel):
-        p = (STATIC / rel).resolve()
-        if STATIC not in p.parents or not p.is_file():
-            return self._err(404, "not found")
-        self._send(200, p.read_bytes(), MIME.get(p.suffix, "application/octet-stream"))
-
-    def do_GET(self):
-        if not self._host_ok():
-            return self._err(403, "bad host")
-        u = urlparse(self.path)
-        q = {k: v[0] for k, v in parse_qs(u.query).items()}
+    def get(self, path, q):
         try:
-            if u.path in ("/", "/index.html"):
-                return self._static("home.html")
-            if u.path.startswith("/static/"):
-                return self._static(u.path[len("/static/"):])
-            if u.path == "/api/ping":
+            if path == "/api/ping":
                 return self._json({"app": "prism-home", "pid": os.getpid(),
                                    "pages": PRESENCE.count()})
-            if u.path == "/api/presence/stream":
-                # Only this app's own pages may hold the server open.
-                site = self.headers.get("Sec-Fetch-Site", "same-origin")
-                if not self._same_origin() or site not in ("same-origin", "none"):
-                    return self._err(403, "forbidden")
-                if not valid_id(q.get("client")):
-                    return self._err(400, "bad client id")
-                return serve_stream(self, PRESENCE, q["client"])
-            if u.path == "/api/projects":
+            if path == "/api/projects":
                 return self._json(list_projects())
-            if u.path == "/api/settings":
+            if path == "/api/settings":
                 return self._json({"settings": load_settings(),
                                    "github": gh_status(refresh=q.get("refresh") == "1"),
                                    "claude": claude_status(q.get("refresh") == "1")})
-            if u.path == "/api/git":
+            if path == "/api/git":
                 return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
-            if u.path == "/api/pdf":
+            if path == "/api/pdf":
                 pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
                 if not pdf or not pdf.is_file():
                     return self._err(404, "no PDF yet")
@@ -629,53 +588,32 @@ class Handler(BaseHTTPRequestHandler):
             if e.args[0] == "unknown project":
                 return self._err(404, "unknown project")
             return self._err(400, f"missing {e.args[0]}")
-        except ValueError as e:
+        except (ValueError, OSError) as e:
             return self._err(400, str(e))
 
-    def _same_origin(self) -> bool:
-        origin = self.headers.get("Origin")
-        return not origin or urlparse(origin).netloc == self.headers.get("Host")
-
-    def do_POST(self):
-        u = urlparse(self.path)
-        if u.path == "/api/bye":            # sendBeacon; see server.py
-            if not self._host_ok() or not self._same_origin():
-                return self._err(403, "forbidden")
-            n = max(0, min(int(self.headers.get("Content-Length") or 0), 200))
-            cid = self.rfile.read(n).decode("utf-8", "replace").strip()
-            return self._json({"ok": PRESENCE.bye(cid)})
-        if not self._host_ok() or self.headers.get("X-Prism-Local") != "1":
-            return self._err(403, "forbidden")
+    def post(self, path, body):
         try:
-            n = int(self.headers.get("Content-Length") or 0)
-            body = json.loads(self.rfile.read(n) or b"{}")
-            if u.path == "/api/presence":
-                cid = body["client"]
-                if not valid_id(cid):
-                    raise ValueError("bad client id")
-                PRESENCE.beat(cid)
-                return self._json({"ok": True})
-            if u.path == "/api/settings":
+            if path == "/api/settings":
                 return self._json({"settings": save_settings(body), "github": gh_status(),
                                    "claude": claude_status()})
-            if u.path == "/api/projects/add":
+            if path == "/api/projects/add":
                 return self._json(add_project(str(body["path"])))
-            if u.path == "/api/projects/create":
+            if path == "/api/projects/create":
                 return self._json(create_project(body))
-            if u.path == "/api/projects/update":
+            if path == "/api/projects/update":
                 return self._json(change_project(body["id"], body))
-            if u.path == "/api/projects/remove":
+            if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
-            if u.path == "/api/projects/open":
+            if path == "/api/projects/open":
                 r = open_project(body["id"])
                 return self._json(r, 502 if "error" in r else 200)
-            if u.path == "/api/projects/reveal":
+            if path == "/api/projects/reveal":
                 p = Path(entry_for(body["id"])["path"])
                 if not p.is_dir():
                     raise ValueError(f"folder not found: {p}")
                 reveal(p)
                 return self._json({"ok": True})
-            if u.path == "/api/pick-folder":
+            if path == "/api/pick-folder":
                 return self._json(pick_folder(str(body.get("start") or ""),
                                               str(body.get("title") or "")))
             return self._err(404, "not found")
@@ -687,26 +625,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._err(400, str(e))
 
 
-def idle_watchdog(srv) -> None:
-    last = time.monotonic()
-    while True:
-        time.sleep(1.0)
-        now = time.monotonic()
-        if now - last > 20.0:
-            log("resumed after sleep; waiting for pages to check in again")
-            PRESENCE.resume()
-        last = now
-        if PRESENCE.idle():
-            log("no open pages; shutting down")
-            srv.shutdown()
-            return
-
-
 def main():
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = sys.stdout
+    httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local Home: manage your LaTeX projects")
     ap.add_argument("--port", type=int, default=registry.HOME_PORT, help="port (0: any free port)")
     ap.add_argument("--port-tries", type=int, default=1,
@@ -721,25 +641,20 @@ def main():
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
-    srv, err = None, None
-    for port in range(a.port, a.port + max(1, a.port_tries)) if a.port else [0]:
-        try:
-            srv = Server(("127.0.0.1", port), Handler)
-            break
-        except OSError as e:
-            err = e
-    if srv is None:
-        sys.exit(f"prism-home: cannot listen on 127.0.0.1:{a.port}: {err}")
+    try:
+        srv = httpbase.listen(Handler, a.port, a.port_tries)
+    except OSError as e:
+        sys.exit(f"prism-home: {e}")
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"prism-local Home: {url}\n  projects: {registry.state_dir() / 'projects.json'}",
           flush=True)
     if a.ready_file:
-        write_ready_file(a.ready_file, {"app": "prism-home", "pid": os.getpid(),
-                                        "port": srv.server_address[1], "url": url})
+        httpbase.write_ready_file(a.ready_file, {"app": "prism-home", "pid": os.getpid(),
+                                                 "port": srv.server_address[1], "url": url})
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
-        threading.Thread(target=idle_watchdog, args=(srv,), daemon=True).start()
+        threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -747,9 +662,10 @@ def main():
     finally:
         srv.server_close()
         if a.ready_file:
-            remove_ready_file(a.ready_file)
-        log("stopped")
+            httpbase.remove_ready_file(a.ready_file)
+        httpbase.log("stopped")
 
 
 if __name__ == "__main__":
     sys.exit(main())
+

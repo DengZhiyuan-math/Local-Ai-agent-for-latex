@@ -17,13 +17,13 @@ from __future__ import annotations
 import json
 import os
 import re
-import time
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 
 from backends import SYSTEM_APPEND, Backend, Job
+from fsutil import with_line_ends_of, write_bytes
 
 MAX_READ = 200_000        # characters of one read_file result
 MAX_HITS = 200            # search results
@@ -323,7 +323,7 @@ class OpenAICompat(Backend):
                 raise ToolError(f"you may not change {rel} in this turn"
                                 + (f"; only {', '.join(job.scope)}" if job.scope else ""))
             if name == "write_file":
-                new = str(args["content"])
+                new = with_line_ends_of(str(args["content"]), p)     # an existing file keeps its line ends
             else:
                 if not p.is_file():
                     raise ToolError(f"no such file: {rel}")
@@ -339,13 +339,6 @@ class OpenAICompat(Backend):
                     raise ToolError(f"old_string occurs {n} times; give more context "
                                     "or set replace_all")
                 new = cur.replace(old, rep) if args.get("replace_all") else cur.replace(old, rep, 1)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_name(f"{p.name}.{time.time_ns()}.prism-tmp")
-            try:
-                with open(tmp, "w", encoding="utf-8", newline="") as f:
-                    f.write(new)
-                os.replace(tmp, p)
-            finally:
-                tmp.unlink(missing_ok=True)
+            write_bytes(p, new.encode("utf-8"))
             return f"{'Wrote' if name == 'write_file' else 'Edited'} {rel}"
         raise ToolError(f"unknown tool {name}")

@@ -34,8 +34,18 @@ def job_for(**kw):
     return j
 
 
+def no_account_lock(test):
+    """Ignore the allowed Claude account in the user's own settings, which would make a
+    test run the real `claude auth status`."""
+    from unittest import mock
+    patcher = mock.patch("backend_claude.allowed_account", return_value="")
+    patcher.start()
+    test.addCleanup(patcher.stop)
+
+
 class ModelAndEffort(unittest.TestCase):
     def setUp(self):
+        no_account_lock(self)
         self.claude = ClaudeCode("claude", {"bin": "claude"})     # never actually started
         self.m = manager(claude=self.claude)
 
@@ -64,6 +74,7 @@ class ClaudeScope(unittest.TestCase):
     """The scope note comes from the manager; the permission rules from the backend."""
 
     def setUp(self):
+        no_account_lock(self)
         self.claude = ClaudeCode("claude", {"bin": "claude"})
         self.m = manager(claude=self.claude)
         self.jobs = []
@@ -173,6 +184,28 @@ class RevertOutsideScope(unittest.TestCase):
             self.assertEqual([c["path"] for c in done["changed"]], ["a.tex"])
             self.assertEqual((root / "b.tex").read_text(encoding="utf-8"), "b\n")
             self.assertEqual((root / "a.tex").read_text(encoding="utf-8"), "A\n")
+
+
+class Snapshots(unittest.TestCase):
+    def test_undo_puts_back_the_exact_bytes(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\r\ntwo\r\n")
+            (root / "latin1.tex").write_bytes("caf\xe9\n".encode("latin-1"))   # not UTF-8
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    (job.root / "a.tex").write_bytes(b"ONE\ntwo\n")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex", "latin1.tex"], edit=Edit("edit"))
+            r = m.start("go", None, "edit")
+            done = wait_done(m.jobs[r["job"]])
+            self.assertEqual([c["path"] for c in done["changed"]], ["a.tex"])
+            self.assertEqual(list(m.turns[done["turn"]].before), ["a.tex"],
+                             "only the changed files stay in memory")
+            self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
+            self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
 
 
 def wait_done(job, timeout=10):

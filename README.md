@@ -25,7 +25,7 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
   Save button. Auto-compile (in the Compile menu) builds shortly after that.
 - **Works with other tools**: files changed on disk (by Claude Code in a terminal, `git
   checkout`, another editor) reload automatically. A save never silently overwrites a newer
-  version on disk.
+  version on disk, and keeps the file's line endings (CRLF or LF).
 
 It is a single Python process that uses only the standard library, listens on `127.0.0.1`, and
 needs nothing from npm. The front-end libraries are vendored, so it also works offline.
@@ -264,8 +264,8 @@ Place `prism.json` in the project root. Every key is optional:
   a shell string. `{main}` and `{outdir}` are substituted. A shell string runs with `bash -c`;
   on Windows that is Git for Windows' bash, never WSL's. Your build must produce SyncTeX data
   (`-synctex=1`) for the PDF ↔ source jumps.
-- `files`: globs for the file tree. By default every `.tex/.bib/.md/.sty/.cls/.txt` file is listed,
-  skipping hidden directories, `outdir` and `node_modules`.
+- `files`: globs for the file tree. By default every `.tex/.bib/.md/.sty/.cls/.txt/.tikz` file is
+  listed, skipping hidden directories, `outdir` and `node_modules`.
 - `exclude`: globs to hide from the file tree.
 
 Changes to `prism.json` apply at once, without restarting. A `prism.json` that cannot be used
@@ -325,9 +325,12 @@ Consequences:
 - Nothing from the editor is sent unless you @-mention it.
 - The conversation continues across messages until you press **New chat**.
 - After each turn, a card lists the changed files with diffs and offers **Undo this turn**.
-  - Undo restores a file only if nobody edited it since that turn.
-  - Undo history lives in server memory, so it is lost when the server restarts.
+  - Undo restores a file byte for byte, and only if nobody edited it since that turn.
+  - Undo history lives in server memory: the last 50 turns, lost when the server restarts.
   - For durable history, use git.
+- While a turn runs in Edit mode, what you type is saved when the turn ends, so it never
+  becomes part of the agent's diff or its Undo. If the agent changed the same file, you get
+  the conflict banner instead.
 - **Cost**: each message is a full Claude Code run, billed to your Claude plan or API account
   like any other Claude Code usage.
 - **Usage limits**: the bars show the 5-hour and 7-day utilization that Claude Code reports.
@@ -414,6 +417,9 @@ panel understands. The agent manager takes care of scopes, diffs and undo for ev
 prism-local is meant for a single user on their own machine.
 
 - It binds to `127.0.0.1` only and rejects requests whose `Host` header is not `127.0.0.1` or `localhost`.
+- Requests that another website makes your browser send (an image or script tag, a form, a
+  fetch) are refused for everything except the pages themselves, so no other site can start a
+  build or the agent, or read your files. Other sites cannot frame the pages either.
 - Every state-changing request needs the header `X-Prism-Local: 1`. Browsers send a custom
   header cross-origin only after a CORS preflight, and the server never answers preflights, so
   other websites cannot drive the server.
@@ -439,6 +445,8 @@ launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut
 prism_local/server.py      HTTP server: files, SyncTeX, idle exit
 prism_local/build.py       builds: engine choice, bibliographies, indexes, reruns, log parsing
 prism_local/proc.py        starting and stopping programs (process trees on Windows)
+prism_local/httpbase.py    what both servers share: request checks, presence, idle exit
+prism_local/fsutil.py      project files: which ones are shown, safe writes, line endings
 prism_local/hub.py         Home page server: project list, templates, starting editors
 prism_local/registry.py    shared state: project list, running instances, ports
 prism_local/presence.py    which pages are open, for --exit-when-idle

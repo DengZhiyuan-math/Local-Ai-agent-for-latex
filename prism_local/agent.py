@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import difflib
 import itertools
-import os
 import re
 import threading
 import time
@@ -19,10 +18,12 @@ from typing import Callable
 
 from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
+from fsutil import write_bytes
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
+MAX_TURNS = 50          # turns kept in memory for their events and Undo
 
 
 class AgentManager:
@@ -48,21 +49,25 @@ class AgentManager:
                 "providers": [b.info() for b in self.backends.values()]}
 
     # ------------------------------------------------------------ snapshots
-    def _snapshot(self) -> dict[str, str | None]:
+    # Files are kept as bytes: Undo puts back exactly what was there (line ends, encoding),
+    # and a file that is not UTF-8 cannot stop a turn.
+    def _snapshot(self) -> dict[str, bytes | None]:
         root, snap = self.root_fn(), {}
         for rel in self.files_fn():
             try:
-                snap[rel] = (root / rel).read_text(encoding="utf-8")
+                snap[rel] = (root / rel).read_bytes()
             except OSError:
                 snap[rel] = None
         return snap
 
     @staticmethod
-    def _diff(rel: str, a: str | None, b: str | None) -> str:
-        return "".join(difflib.unified_diff(
-            (a or "").splitlines(keepends=True), (b or "").splitlines(keepends=True),
+    def _diff(rel: str, a: bytes | None, b: bytes | None) -> str:
+        text = lambda d: d.decode("utf-8", "replace").replace("\r\n", "\n")  # noqa: E731
+        diff = "".join(difflib.unified_diff(
+            text(a or b"").splitlines(keepends=True), text(b or b"").splitlines(keepends=True),
             fromfile=f"a/{rel}" if a is not None else "/dev/null",
             tofile=f"b/{rel}" if b is not None else "/dev/null", n=2))
+        return diff or f"(only the line ends or the encoding of {rel} changed)\n"
 
     def _writable(self, job: Job, rel: str) -> bool:
         if job.mode != "edit":
@@ -148,7 +153,16 @@ class AgentManager:
                 if a != b:
                     changed.append({"path": rel, "diff": self._diff(rel, a, b),
                                     "created": a is None, "deleted": b is None})
+            # Undo needs only the files this turn changed: keep just those in memory.
+            keep = [c["path"] for c in changed]
+            job.before = {r: job.before.get(r) for r in keep}
+            job.after = {r: job.after.get(r) for r in keep}
             self.turns[job.id] = job
+            with self.lock:
+                while len(self.turns) > MAX_TURNS:
+                    self.turns.pop(next(iter(self.turns)))
+                while len(self.jobs) > MAX_TURNS and next(iter(self.jobs)) != job.id:
+                    self.jobs.pop(next(iter(self.jobs)))
             ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
                   "exit": res.get("exit"), "scope": job.scope,
                   "out_of_scope": [r for r in out_of_scope if r not in reverted],
@@ -206,17 +220,18 @@ class AgentManager:
             a, b = job.before.get(rel), job.after.get(rel)
             p = root / rel
             try:
-                cur = p.read_text(encoding="utf-8") if p.exists() else None
+                cur = p.read_bytes() if p.exists() else None
             except OSError:
-                cur = None
+                continue                 # cannot tell what is there now; leave it
             if cur != b:
                 continue                 # edited again since; never clobber
-            if a is None:
-                p.unlink()
-            else:
-                tmp = p.with_name(p.name + ".prism-tmp")
-                tmp.write_text(a, encoding="utf-8")
-                os.replace(tmp, p)
+            try:
+                if a is None:
+                    p.unlink()
+                else:
+                    write_bytes(p, a)
+            except OSError:
+                continue                 # locked by another program: reported as not restored
             restored.append(rel)
         return restored
 

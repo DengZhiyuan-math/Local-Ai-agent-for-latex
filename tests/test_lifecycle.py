@@ -151,6 +151,19 @@ class ServerLifecycle(unittest.TestCase):
         self.assertEqual(status, 403)
         self.assertEqual(request(url, "/api/ping")[1]["pages"], 0)
 
+    def test_other_sites_cannot_use_the_api(self):
+        url = self.start("30,1,30")
+        cross = {"Sec-Fetch-Site": "cross-site"}
+        # an <img> or <script> on another website: no data, no programs started
+        self.assertEqual(request(url, "/api/tree", headers=cross)[0], 403)
+        self.assertEqual(request(url, "/api/agent/commands?refresh=1", headers=cross)[0], 403)
+        self.assertEqual(request(url, "/api/tree", headers={"Origin": "https://evil.example"})[0], 403)
+        self.assertEqual(request(url, "/api/tree", headers={"Sec-Fetch-Site": "same-origin"})[0], 200)
+        self.assertEqual(request(url, "/api/ping")[0], 200)          # the launcher, no browser
+        # the editor page itself may be opened from anywhere (a link, a bookmark), unframed
+        with HTTP.open(urllib.request.Request(url, headers=cross), timeout=5) as r:
+            self.assertEqual((r.status, r.headers["X-Frame-Options"]), (200, "DENY"))
+
     def test_port_in_use_moves_up(self):
         blocker = socket.socket()
         blocker.bind(("127.0.0.1", 0))

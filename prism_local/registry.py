@@ -72,7 +72,14 @@ def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
     tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-    os.replace(tmp, path)
+    for attempt in range(40):      # Windows refuses while another process is reading the file
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if attempt == 39:
+                raise
+            time.sleep(0.05)
 
 
 class FileLock:
@@ -128,16 +135,51 @@ def ping(url: str, app: str = "prism-local", root: Path | None = None,
     return info
 
 
+def server_alive(pid) -> bool:
+    """Whether `pid` is a running Python process (a prism-local server), not a process
+    that got the number of a server that ended long ago."""
+    if not isinstance(pid, int) or pid <= 0:
+        return False
+    if WIN:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        h = k32.OpenProcess(0x1000 | 0x00100000, False, pid)  # query limited info | synchronize
+        if not h:
+            return ctypes.get_last_error() == 5                # access denied: it exists
+        try:
+            if k32.WaitForSingleObject(h, 0) != 0x102:         # not WAIT_TIMEOUT: it has ended
+                return False
+            buf, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
+            if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                return "python" in Path(buf.value).name.lower()
+            return True
+        finally:
+            k32.CloseHandle(h)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    try:
+        return "python" in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode(
+            "utf-8", "replace").lower()
+    except OSError:
+        return True                     # no /proc (macOS): trust the process table
+
+
 def running_instance(inst: Path, app: str = "prism-local", root: Path | None = None,
                      timeout: float = 2.0, cleanup: bool = True) -> dict | None:
-    """The instance file's contents if that server still answers; otherwise remove
-    the stale file (left behind by a server that did not exit cleanly)."""
+    """The instance file's contents if that server answers. A file whose server has
+    ended (it did not exit cleanly) is removed; a server that is only slow keeps it."""
     info = read_json(inst)
     if info and info.get("url"):
         live = ping(info["url"], app, root, timeout)
         if live:
             return {**info, "pages": live.get("pages", 0)}
-    if cleanup and inst.exists():
+    if cleanup and inst.exists() and not server_alive((info or {}).get("pid")):
         try:
             inst.unlink()
         except OSError:
@@ -242,15 +284,32 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
         info = running_instance(inst, app, project)
         if info:
             return {"url": info["url"], "started": False}
+        old = read_json(inst)
+        if old and server_alive(old.get("pid")):
+            # It runs but did not answer in time (busy, or waking up): give it a little
+            # longer rather than start a second server for the same project.
+            deadline = time.monotonic() + 10
+            while time.monotonic() < deadline:
+                info = running_instance(inst, app, project, timeout=2.0, cleanup=False)
+                if info:
+                    return {"url": info["url"], "started": False}
+                time.sleep(0.5)
+            return {"error": f"prism-local for this project runs (process {old.get('pid')}) but "
+                             "does not answer. Close its pages and try again in a minute.",
+                    "log": tail(log), "logfile": str(log)}
         log.parent.mkdir(parents=True, exist_ok=True)
-        if log.exists():
-            os.replace(log, log.with_name(log.name + ".1"))
+        mode = "w"
+        try:
+            if log.exists():
+                os.replace(log, log.with_name(log.name + ".1"))
+        except OSError:                 # still open by a server that is just exiting
+            mode = "a"
         cmd = [server_python(), "-u", str(script), *target, "--port", str(port),
                "--port-tries", str(tries), "--no-browser", "--exit-when-idle",
                "--ready-file", str(inst), *extra]
         kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
               if WIN else {"start_new_session": True})
-        with open(log, "w", encoding="utf-8") as logf:     # the child keeps its own handle
+        with open(log, mode, encoding="utf-8") as logf:     # the child keeps its own handle
             proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=logf,
                                     stderr=subprocess.STDOUT, close_fds=True,
                                     env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **kw)

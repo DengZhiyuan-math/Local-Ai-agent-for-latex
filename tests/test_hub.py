@@ -67,6 +67,29 @@ class Registry(TempState):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 
 
+class Instances(TempState):
+    """An instance file goes only when its server has ended, not when it is slow."""
+
+    def test_a_live_server_that_does_not_answer_keeps_its_file(self):
+        inst = registry.instance_file("slow")
+        registry.write_json(inst, {"pid": os.getpid(), "url": "http://127.0.0.1:9/"})
+        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertTrue(inst.exists())
+
+    def test_the_file_of_a_server_that_ended_is_removed(self):
+        ended = subprocess.Popen([sys.executable, "-c", "pass"])
+        ended.wait()
+        inst = registry.instance_file("gone")
+        registry.write_json(inst, {"pid": ended.pid, "url": "http://127.0.0.1:9/"})
+        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertFalse(inst.exists())
+
+    def test_server_alive(self):
+        self.assertTrue(registry.server_alive(os.getpid()))
+        self.assertFalse(registry.server_alive(None))
+        self.assertFalse(registry.server_alive(-5))
+
+
 class Create(TempState):
     def test_creates_template_and_lists_it(self):
         r = hub.create_project({"name": "paper", "parent": str(self.tmp), "template": "amsart",
