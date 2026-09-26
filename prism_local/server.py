@@ -214,7 +214,11 @@ MACRO_RE = re.compile(
     r"\\(?:newcommand|renewcommand|providecommand|DeclareMathOperator|DeclarePairedDelimiter)\*?"
     r"\s*\{?\\([A-Za-z]+)\}?")
 BIBKEY_RE = re.compile(r"^\s*@(\w+)\s*\{\s*([^,\s]+)\s*,", re.M)
-NEWTHEOREM_RE = re.compile(r"\\(?:newtheorem|declaretheorem|spnewtheorem)\*?\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}")
+# \newtheorem{thm}{Theorem}[section], \newtheorem{lem}[thm]{Lemma}, llncs, mdframed, tcolorbox …
+NEWTHEOREM_RE = re.compile(r"\\(?:newtheorem|spnewtheorem|newmdtheoremenv|newtcbtheorem)\*?\s*"
+                           r"\{([^}]+)\}\s*(?:\[[^\]]*\]\s*)?(?:\{([^}]*)\})?")
+# thmtools: \declaretheorem[name=Theorem, numberwithin=section]{thm}
+DECLARETHEOREM_RE = re.compile(r"\\declaretheorem\*?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}")
 
 
 def strip_comment(line: str) -> str:
@@ -244,16 +248,21 @@ def document_order() -> list[str]:
     return order + rest
 
 
-def theorem_envs(files: list[str]) -> list[str]:
-    envs: list[str] = []
+def theorem_envs(files: list[str]) -> dict[str, str]:
+    """Theorem-like environments and the names they print: {"thm": "Theorem", …}."""
+    envs: dict[str, str] = {}
     for rel in files:
         if Path(rel).suffix not in (".tex", ".sty", ".cls"):
             continue
         for raw in (ROOT / rel).read_text(encoding="utf-8", errors="replace").splitlines():
-            for m in NEWTHEOREM_RE.finditer(strip_comment(raw)):
-                if m.group(1) not in envs:
-                    envs.append(m.group(1))
-    return envs or list(STANDARD_THEOREMS)
+            line = strip_comment(raw)
+            for m in NEWTHEOREM_RE.finditer(line):
+                envs.setdefault(m.group(1).strip(), (m.group(2) or m.group(1)).strip())
+            for m in DECLARETHEOREM_RE.finditer(line):
+                name = m.group(2).strip()
+                opt = re.search(r"(?:^|,)\s*(?:name|title)\s*=\s*\{?([^,}]+)", m.group(1) or "")
+                envs.setdefault(name, opt.group(1).strip() if opt else name.capitalize())
+    return envs or {e: e.capitalize() for e in STANDARD_THEOREMS}
 
 
 def symbols() -> dict:
@@ -293,7 +302,7 @@ def symbols() -> dict:
                              "file": bib.relative_to(ROOT).as_posix(),
                              "line": text.count("\n", 0, m.start()) + 1})
     return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
-            "environments": envs}
+            "environments": list(envs), "env_titles": envs}
 
 
 # ---------------------------------------------------------------- build

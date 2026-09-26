@@ -375,6 +375,19 @@ class ClaudeAccountGuard(unittest.TestCase):
             self.assertTrue(msg, name)
             self.assertIn("me@uni.example", msg, name)
 
+    def test_probes_are_checked_like_turns(self):
+        """The usage probe and the command list start claude only for the allowed account."""
+        from unittest import mock
+        claude = ClaudeCode("claude", {"bin": "claude"})
+        m = manager(claude=claude)
+        refusal = "Claude Code is logged in as other@example.com, not me@uni.example."
+        with mock.patch.object(claude, "preflight", return_value=refusal), \
+                mock.patch("subprocess.run") as run, mock.patch("subprocess.Popen") as popen:
+            self.assertEqual(m.probe_rate("claude")["error"], refusal)
+            self.assertEqual(m.commands("claude", refresh=True)["error"], refusal)
+            run.assert_not_called()
+            popen.assert_not_called()
+
     def test_project_settings_that_switch_to_an_api_key_are_found(self):
         import json, tempfile
         root = Path(tempfile.mkdtemp())

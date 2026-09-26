@@ -4,10 +4,15 @@
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/vendor/pdf.worker.js";
 
+// Pages within RENDER_PX of the visible area are drawn ahead of scrolling. Pages farther
+// than KEEP_PX give up their canvas, so a long paper does not hold hundreds of MB of them.
+const RENDER_PX = 600, KEEP_PX = 2400;
+const PAGE_PAD = 12, PAGE_GAP = 12;          // #pdf-pages padding and gap (app.css)
+
 const PV = {
   pdf: null, mtime: null, scale: 0, eff: 1, views: [], scaleKey: "scale",
   onInverse: null,              // ({page, x, y}) in PDF points from the top-left
-  observer: null, seq: 0,
+  observer: null, keeper: null, seq: 0, gen: 0,
 
   init(opts) {
     Object.assign(this, opts);
@@ -35,54 +40,93 @@ const PV = {
       data = new Uint8Array(await res.arrayBuffer());
     } catch { return; }
     const doc = await pdfjsLib.getDocument({ data }).promise.catch(() => null);
-    if (!doc || seq !== this.seq) return;
+    if (!doc) return;
+    if (seq !== this.seq) { doc.destroy(); return; }       // a newer build's PDF is on its way
     const old = this.pdf;
     this.pdf = doc; this.mtime = mtime;
     await this.layout(true);
     if (old) old.destroy();
   },
 
+  // Lay out the pages of the current document at the current zoom. The pages that will be
+  // on screen are drawn before the new layout replaces the old one, so a rebuild or a zoom
+  // never shows blank pages.
   async layout(keepScroll) {
     if (!this.pdf) return;
     const sc = $("#pdf-scroll");
     if (!sc.clientWidth) return;                 // hidden (e.g. popped out)
-    const ratio = keepScroll && sc.scrollHeight > 0 ? sc.scrollTop / sc.scrollHeight : 0;
-    const pages = [];
-    for (let i = 1; i <= this.pdf.numPages; i++) pages.push(await this.pdf.getPage(i));
+    const pdf = this.pdf, gen = ++this.gen;
+    const pages = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1)))
+      .catch(() => null);                        // the document was destroyed meanwhile
+    if (!pages || pdf !== this.pdf || gen !== this.gen) return;   // or replaced, or laid out again
     const fit = Math.max(0.3, Math.min(4, (sc.clientWidth - 28) / pages[0].getViewport({ scale: 1 }).width));
     const scale = this.scale || fit;
-    this.eff = scale;
-    $("#zoom-label").textContent = Math.round(scale * 100) + "%";
     const wrap = document.createElement("div");
     wrap.id = "pdf-pages";
-    this.views = pages.map((page, idx) => {
+    const views = pages.map((page, idx) => {
       const vp = page.getViewport({ scale });
       const div = document.createElement("div");
       div.className = "pdf-page"; div.style.width = vp.width + "px"; div.style.height = vp.height + "px";
       div.dataset.page = idx + 1;
       wrap.appendChild(div);
-      return { page, vp, div, rendered: false };
+      return { page, vp, div, rendered: false, task: null, canvas: null, token: null };
     });
+    const ratio = () => (keepScroll && sc.scrollHeight > 0 ? sc.scrollTop / sc.scrollHeight : 0);
+    // Where the pages will be, by the same arithmetic as the CSS, to draw the visible ones first.
+    let y = PAGE_PAD;
+    const tops = views.map((v) => { const top = y; y += v.vp.height + PAGE_GAP; return top; });
+    const total = y - PAGE_GAP + PAGE_PAD, from = ratio() * total, to = from + sc.clientHeight;
+    const drawn = Promise.all(views.filter((v, i) => tops[i] < to && tops[i] + v.vp.height > from).map((v) => this.render(v)));
+    // PDF.js draws in animation frames, which a hidden tab does not get: never wait long for them.
+    await Promise.race([drawn, new Promise((r) => setTimeout(r, document.hidden ? 0 : 1500))]);
+    if (pdf !== this.pdf || gen !== this.gen) { views.forEach((v) => this.unrender(v)); return; }
+    const keep = ratio();
+    const old = this.views;
+    this.views = views; this.eff = scale;
+    $("#zoom-label").textContent = Math.round(scale * 100) + "%";
     $("#pdf-pages").replaceWith(wrap);
     $("#pdf-empty").hidden = true;
-    sc.scrollTop = ratio * sc.scrollHeight;
-    if (this.observer) this.observer.disconnect();
-    this.observer = new IntersectionObserver((entries) => {
-      for (const e of entries) if (e.isIntersecting) this.render(this.views[+e.target.dataset.page - 1]);
-    }, { root: sc, rootMargin: "600px 0px" });
-    this.views.forEach((pv) => this.observer.observe(pv.div));
+    sc.scrollTop = keep * sc.scrollHeight;
+    old.forEach((v) => this.unrender(v));        // off screen now: free their canvases
+    this.observe(sc);
     this.updatePageLabel();
   },
 
-  async render(pv) {
-    if (!pv || pv.rendered) return;
+  observe(sc) {
+    if (this.observer) this.observer.disconnect();
+    if (this.keeper) this.keeper.disconnect();
+    const view = (e) => this.views[+e.target.dataset.page - 1];
+    this.observer = new IntersectionObserver((entries) => {
+      for (const e of entries) if (e.isIntersecting) this.render(view(e));
+    }, { root: sc, rootMargin: `${RENDER_PX}px 0px` });
+    this.keeper = new IntersectionObserver((entries) => {
+      for (const e of entries) if (!e.isIntersecting && view(e)) this.unrender(view(e));
+    }, { root: sc, rootMargin: `${KEEP_PX}px 0px` });
+    for (const v of this.views) { this.observer.observe(v.div); this.keeper.observe(v.div); }
+  },
+
+  render(pv) {
+    if (!pv) return Promise.resolve();
+    if (pv.rendered) return pv.done || Promise.resolve();
     pv.rendered = true;
+    const token = pv.token = {};
     const dpr = window.devicePixelRatio || 1;
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(pv.vp.width * dpr); canvas.height = Math.floor(pv.vp.height * dpr);
     canvas.style.width = pv.vp.width + "px"; canvas.style.height = pv.vp.height + "px";
-    await pv.page.render({ canvasContext: canvas.getContext("2d"), viewport: pv.vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null }).promise.catch(() => {});
-    pv.div.prepend(canvas);
+    pv.task = pv.page.render({ canvasContext: canvas.getContext("2d"), viewport: pv.vp, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : null });
+    pv.done = pv.task.promise.then(() => {
+      if (pv.token !== token) return;            // released or redrawn meanwhile
+      pv.div.prepend(canvas); pv.canvas = canvas;
+    }, () => {}).finally(() => { if (pv.token === token) pv.task = null; });
+    return pv.done;
+  },
+
+  unrender(pv) {
+    pv.token = null;
+    if (pv.task) { pv.task.cancel(); pv.task = null; }
+    if (pv.canvas) { pv.canvas.width = pv.canvas.height = 0; pv.canvas.remove(); pv.canvas = null; }   // frees the pixels at once
+    pv.rendered = false; pv.done = null;
   },
 
   updatePageLabel() {

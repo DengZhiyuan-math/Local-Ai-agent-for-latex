@@ -111,6 +111,7 @@ button.flip .ico { transform: rotate(180deg); }
 #tree li .git { float: right; font-family: var(--mono); font-size: 11px; color: var(--warn); }
 #outline li { font-size: 12px; }
 #outline li .kind { color: var(--muted); font-size: 11px; margin-right: 4px; }
+#outline li .muted { color: var(--muted); }
 #outline li.lvl-section { font-weight: 600; }
 #outline li.lvl-subsection { padding-left: 22px; }
 #outline li.lvl-subsubsection { padding-left: 32px; }

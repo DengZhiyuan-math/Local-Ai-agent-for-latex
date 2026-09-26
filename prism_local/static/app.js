@@ -127,7 +127,14 @@ function persistSession() { store.set("session", { tabs: S.tabs.map((t) => t.pat
 /* ------------------------------------------------------------------ save & external changes */
 // One save per tab at a time: a second save waits for the first, so two writes never
 // race on the server (the second would otherwise look like a change made on disk).
+// While the agent works in Edit mode, nothing is written: your edits would end up in its
+// turn's diff (and its Undo). They are saved when the turn ends; a file the agent changed
+// meanwhile gets the conflict banner instead.
 function saveTab(t, force = false) {
+  if (C.editTurn) {
+    if (!C.heldNote) { C.heldNote = true; toast("Your edits are saved when the agent's turn ends."); }
+    return Promise.resolve(false);
+  }
   const run = () => saveTabNow(t, force);
   t.saving = (t.saving || Promise.resolve()).then(run, run);
   return t.saving;
@@ -143,7 +150,7 @@ async function saveTabNow(t, force) {
   }
   if (r._status !== 200) { toast(`Save failed: ${r.error || r._status}`); return false; }
   t.mtime = r.mtime; t.gen = gen; t.conflict = null;
-  renderTabs(); showBanner(t);
+  renderTabs(); showBanner(t); scheduleSymbols();
   return true;
 }
 async function saveActive() {
@@ -187,9 +194,19 @@ async function saveAll() {
   return ok;
 }
 
-async function reloadFromDisk(t) {
+// `discard`: the author chose the disk version over unsaved edits (the conflict banner).
+async function reloadFromDisk(t, discard = false) {
   const r = await api("/api/file?path=" + encodeURIComponent(t.path));
   if (r._status !== 200) return;
+  if (!discard && isDirty(t)) {             // typed into while the file was fetched
+    if (t.conflict !== "disk") { t.conflict = "disk"; showBanner(t); }
+    return;
+  }
+  if (r.content === t.doc.getValue()) {     // same text (a save of ours, a touch): keep cursor and undo
+    t.mtime = r.mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
+    renderTabs(); showBanner(t);
+    return;
+  }
   const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
   t.doc.setValue(r.content);
   t.doc.setCursor(cur);
@@ -206,7 +223,7 @@ function showBanner(t) {
     <button id="bn-reload">Load disk version (discard mine)</button>
     <button id="bn-keep">Keep mine (overwrite disk)</button>
     <button id="bn-diff">Show git diff</button>`;
-  $("#bn-reload").onclick = () => reloadFromDisk(t);
+  $("#bn-reload").onclick = () => reloadFromDisk(t, true);
   $("#bn-keep").onclick = () => saveTab(t, true);
   $("#bn-diff").onclick = () => showDiff(t.path);
 }
@@ -239,24 +256,38 @@ function renderTree() {
 $("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li) openFile(li.dataset.path); });
 
 const KIND_ABBR = { theorem: "Thm", proposition: "Prop", lemma: "Lem", corollary: "Cor", conjecture: "Conj", claim: "Claim",
-  definition: "Def", assumption: "Ass", example: "Ex", problem: "Prob", remark: "Rem", notation: "Not", "theorem*": "Thm*" };
+  definition: "Def", assumption: "Asm", example: "Ex", problem: "Prob", remark: "Rem", notation: "Not", hypothesis: "Hyp",
+  question: "Q", exercise: "Exer", observation: "Obs", fact: "Fact", note: "Note", algorithm: "Alg", condition: "Cond" };
+// The badge of a theorem-like environment, from the name it prints: \newtheorem{lem}{Lemma} -> "Lem".
+function kindAbbr(kind) {
+  const title = ((S.symbols.env_titles || {})[kind] || kind).replace(/\*$/, "");
+  const key = title.toLowerCase();
+  return KIND_ABBR[key] || KIND_ABBR[kind] || (title.length <= 5 ? title : title.slice(0, 4)).replace(/^./, (c) => c.toUpperCase());
+}
 function renderOutline() {
   const labelAt = new Map(S.symbols.labels.map((l) => [l.file + ":" + l.line, l.label]));
+  const envs = new Set(S.symbols.environments || []);
   let html = "";
   for (const o of S.symbols.outline) {
-    const lvl = KIND_ABBR[o.kind] ? "env" : o.kind;
+    const isEnv = envs.has(o.kind) || KIND_ABBR[o.kind];
     const label = labelAt.get(o.file + ":" + o.line) || labelAt.get(o.file + ":" + (o.line + 1)) || "";
-    const text = KIND_ABBR[o.kind] ? `<span class="kind">${KIND_ABBR[o.kind]}</span>${esc(o.title || label)}` : esc(o.title);
-    html += `<li class="lvl-${lvl}" data-file="${esc(o.file)}" data-line="${o.line}" title="${esc(o.file)}:${o.line}${label ? "  " + esc(label) : ""}">${text}</li>`;
+    const text = isEnv
+      ? `<span class="kind">${esc(kindAbbr(o.kind))}</span>${o.title || label ? esc(o.title || label) : `<span class="muted">line ${o.line}</span>`}`
+      : esc(o.title);
+    html += `<li class="lvl-${isEnv ? "env" : o.kind}" data-file="${esc(o.file)}" data-line="${o.line}" title="${esc(o.file)}:${o.line}${label ? "  " + esc(label) : ""}">${text}</li>`;
   }
   $("#outline").innerHTML = html || `<li class="file-sep">No sections yet.</li>`;
 }
 $("#outline").addEventListener("click", (e) => { const li = e.target.closest("li[data-file]"); if (li) openFile(li.dataset.file, +li.dataset.line); });
 $("#btn-refresh-outline").onclick = () => loadSymbols();
 async function loadSymbols() {
-  const r = await api("/api/symbols");
-  if (r._status === 200) { S.symbols = r; renderOutline(); }
+  const r = await api("/api/symbols").catch(() => null);
+  if (r && r._status === 200) { S.symbols = r; renderOutline(); }
 }
+// Labels, outline and macros follow your own edits too, a moment after they are saved
+// (a new \label is offered by \cref{ right away).
+let symbolsTimer = null;
+function scheduleSymbols() { clearTimeout(symbolsTimer); symbolsTimer = setTimeout(loadSymbols, 1000); }
 
 async function poll() {
   const r = await api("/api/tree").catch(() => null);
@@ -293,7 +324,8 @@ function computeHints(ed, explicit) {
   let m, items = [], word = "";
   if ((m = before.match(REF_RE))) {
     word = m[1].split(",").pop().trimStart();
-    items = S.symbols.labels.map((l) => ({ text: l.label, kind: `${l.kind} · ${l.file.split("/").pop()}:${l.line}` }));
+    const titles = S.symbols.env_titles || {};
+    items = S.symbols.labels.map((l) => ({ text: l.label, kind: `${titles[l.kind] || l.kind} · ${l.file.split("/").pop()}:${l.line}` }));
   } else if ((m = before.match(CITE_RE))) {
     word = m[1].split(",").pop().trimStart();
     items = S.symbols.bibkeys.map((k) => ({ text: k.key, kind: k.type }));
@@ -345,7 +377,8 @@ const plural = (n, w, ws = w + "s") => `${n} ${n === 1 ? w : ws}`;
 
 async function compile(clean = false) {
   if (S.building) return;
-  if (!(await saveAll())) return;
+  if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
+  else if (!(await saveAll())) return;
   const mode = BUILD.mode;
   S.building = true;
   const st = $("#build-status");
@@ -649,11 +682,12 @@ function renderMd(text) {
 }
 
 function chatAppend(html, cls) {
+  const log = $("#chat-log"), stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
   const div = document.createElement("div");
   if (cls) div.className = cls;
   div.innerHTML = html;
-  $("#chat-log").appendChild(div);
-  $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
+  log.appendChild(div);
+  if (stick || cls === "msg user") log.scrollTop = log.scrollHeight;     // unless you scrolled up to read
   return div;
 }
 function saveChatLog() { store.set("chat.log", $("#chat-log").innerHTML.slice(-400000)); }
@@ -772,17 +806,24 @@ async function chatSend() {
   const extra = [provLabel(), C.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
   chatAppend(`${mentionHtml(text)}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
   C.job = r.job; C.cur = null;
+  C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
   const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
   let after = 0, done = false, buf = "", streamed = false;
-  const flush = () => { if (C.cur) { C.cur.innerHTML = renderMd(buf); $("#chat-log").scrollTop = $("#chat-log").scrollHeight; } };
+  // A streamed message is drawn once per batch of events, not once per fragment, and the
+  // log follows it only while you have not scrolled up to read something.
+  const log = $("#chat-log");
+  const flush = (stick) => { if (C.cur) { C.cur.innerHTML = renderMd(buf); if (stick) log.scrollTop = log.scrollHeight; } };
   while (!done) {
     let d;
     try { d = await api(`/api/agent/events?job=${r.job}&after=${after}`); }
     catch { await new Promise((res) => setTimeout(res, 1000)); continue; }
     if (d._status !== 200) break;
+    const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
+    let pending = false;
     for (const e of d.events) {
+      if (e.t !== "delta" && pending) { flush(stick); pending = false; }
       if (e.t === "init") {
         // The session belongs to the provider that ran the turn, even if the menu changed since.
         store.set(`chat.session.${provider}`, e.session_id);
@@ -791,9 +832,9 @@ async function chatSend() {
       else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
       else if (e.t === "delta") {
         if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; }
-        streamed = true; buf += e.text; flush();
+        streamed = true; buf += e.text; pending = true;
       } else if (e.t === "text") {
-        if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(); C.cur = null; }
+        if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(stick); C.cur = null; }
       } else if (e.t === "tool") {
         C.cur = null;
         tools.set(e.id, chatAppend(`<span class="st">▸</span>${esc(e.name)} ${esc(e.summary || "")}`, "tool"));
@@ -804,13 +845,15 @@ async function chatSend() {
       } else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
       else if (e.t === "done") { renderTurnCard(e); loadAccount(); }
     }
+    if (pending) flush(stick);
     after += d.events.length; done = d.done;
   }
-  C.job = null;
+  C.job = null; C.editTurn = false;
   $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
   $("#chat-status").className = "status"; $("#chat-status").textContent = "";
   saveChatLog();
-  await poll();
+  await poll();          // first take in the agent's changes (a file it changed under your edits gets the banner) …
+  flushSaves();          // … then save what you typed meanwhile
 }
 
 // Usage limits as reported by Claude Code's rate_limit_event (utilization 0–1 per window).
@@ -865,12 +908,13 @@ function renderQuota(rate) {
   q.title = "Claude usage limits reported by Claude Code. Usage from other sessions (e.g. the terminal) shows up after the next message sent from this panel.";
 }
 
-async function checkUsage() {
+// `auto`: the check on page load, which stays quiet when refused (the account line says why).
+async function checkUsage(auto = false) {
   const b = $("#quota-refresh");
   if (b) { b.disabled = true; b.textContent = "…"; }
   const r = await api("/api/agent/usage", { provider: C.provider }).catch(() => ({}));
   renderQuota(r.rate || store.get("chat.rate", null));
-  if (r.error) toast(r.error);
+  if (r.error && !auto) toast(r.error);
 }
 $("#quota").addEventListener("click", (e) => {
   if (e.target.id === "quota-refresh") return checkUsage();
@@ -1166,7 +1210,7 @@ cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelec
     const p = prov();
     if (!p.available) return chatAppend(`<div class="err">${esc(p.reason || "No AI provider is set up.")}</div>`, "card");
     const known = p.rate || store.get("chat.rate", null);
-    if (p.usage_limits && (!known || !known.at || Date.now() / 1000 - known.at > 600)) checkUsage();
+    if (p.usage_limits && (!known || !known.at || Date.now() / 1000 - known.at > 600)) checkUsage(true);
   });
 }
 

@@ -174,6 +174,10 @@ class AgentManager:
         backend = self.backend(provider)
         if backend is None or not backend.usage_limits:
             return {"error": "This provider reports no usage limits."}
+        # The probe is a (tiny) model call, so it passes the same check as a turn.
+        bad = backend.preflight(self.root_fn())
+        if bad:
+            return {"error": bad, "rate": getattr(backend, "rate", None)}
         return backend.probe_rate()
 
     def stop(self, jid: int) -> dict:

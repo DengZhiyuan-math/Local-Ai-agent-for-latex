@@ -265,11 +265,17 @@ class ClaudeCode(CliBackend):
             exe = self.bin()
             if not exe:
                 return {"error": "Claude Code CLI not found"}
+            bad = self.preflight(root)          # the account check of a turn, before any start
+            if bad:
+                return {"error": bad}
             cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
                    "--output-format", "stream-json", "--verbose"]
-            proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
+            try:
+                proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
+                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                        text=True, encoding="utf-8", errors="replace", **NO_WINDOW)
+            except OSError as e:
+                return {"error": f"Could not start Claude Code: {e}"}
             timer = threading.Timer(60, kill_tree, args=(proc,))
             timer.start()
             try:
@@ -312,6 +318,8 @@ class ClaudeCode(CliBackend):
                                      cwd=tempfile.gettempdir(), **NO_WINDOW).stdout
             except subprocess.TimeoutExpired:
                 return {"error": "usage check timed out", "rate": self.rate}
+            except OSError as e:
+                return {"error": f"Could not start Claude Code: {e}", "rate": self.rate}
             for line in out.splitlines():
                 try:
                     d = json.loads(line)
