@@ -234,7 +234,8 @@ class Platform(unittest.TestCase):
     def test_a_program_that_cannot_start_is_explained(self):
         root = project({"main.tex": "\\documentclass{article}\\begin{document}x\\end{document}"})
         b = build.Build(root, "main.tex", "build")
-        with mock.patch.object(b.runner, "run", side_effect=PermissionError(13, "Access is denied")):
+        with mock.patch.object(b, "_which", side_effect=lambda name: f"/tex/{name}"), \
+                mock.patch.object(b.runner, "run", side_effect=PermissionError(13, "Access is denied")):
             r = b.run()
         self.assertEqual(r["exit"], 127)
         self.assertIn("could not be started: [Errno 13] Access is denied", r["output"])

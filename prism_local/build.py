@@ -438,7 +438,8 @@ def project_file(root: Path, name: str, base: Path | None = None) -> str | None:
     if not name:
         return None
     for cand in (name, name + ".tex"):
-        p = Path(cand) if os.path.isabs(cand) else (base or root) / cand
+        # normpath: "build/../refs.bib" means refs.bib, as on Windows, even without build/
+        p = Path(os.path.normpath(cand if os.path.isabs(cand) else (base or root) / cand))
         if p.is_file():
             try:
                 return p.resolve().relative_to(root).as_posix()
