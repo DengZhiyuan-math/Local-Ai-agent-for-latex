@@ -357,6 +357,7 @@ async function loadConfig() {
   if (r._status !== 200) return;
   BUILD.modes = r.modes || [];
   BUILD.cmds = r.build || {};
+  BUILD.main = String(r.main || "main.tex").replace(/\\/g, "/").replace(/^(\.\/)+/, "");
   const want = store.get("buildmode", "draft");
   BUILD.mode = BUILD.modes.includes(want) ? want : BUILD.modes[0] || "";
   renderCompileMenu();
@@ -420,7 +421,7 @@ $("#btn-compile").onclick = () => S.building ? api("/api/build/stop", {}) : comp
 $("#btn-clean-build").onclick = () => { compileMenu(false); compile(true); };
 
 /* Compile menu: build mode and auto-compile, on the ▾ half of the Compile button. */
-const BUILD = { modes: [], cmds: {}, mode: store.get("buildmode", "draft") };
+const BUILD = { modes: [], cmds: {}, main: "main.tex", mode: store.get("buildmode", "draft") };
 const MODE_INFO = {
   draft: ["Draft", "continue on errors"], strict: ["Strict", "stop at first error"], check: ["Check", ""],
 };
@@ -1228,7 +1229,8 @@ cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelec
     for (const p of sess.tabs.filter(exists)) if (p !== sess.active) await openFile(p);
     if (sess.active && exists(sess.active)) await openFile(sess.active);
   }
-  if (!S.active && exists("main.tex")) await openFile("main.tex");
+  // No saved session: open the file the server builds (prism.json's "main", or the guess).
+  if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
   renderProblems();
   setInterval(poll, 2000);
 })();

@@ -35,6 +35,16 @@ class Config(unittest.TestCase):
         self.assertIn("cannot be used", server.CFG.error)
         self.assertEqual((server.CFG.main, server.CFG.modes), ("main.tex", ["draft", "strict"]))
 
+    def test_the_main_file_when_it_is_not_main_tex(self):
+        # The editor opens CFG.main (via /api/config) on a first visit.
+        project({"proof.tex": "\\documentclass{article}", "notes.tex": "no class here"})
+        self.assertEqual(server.CFG.main, "proof.tex", "guessed from \\documentclass")
+        project({"a.tex": "\\documentclass{article}", "paper.tex": "\\documentclass{article}",
+                 "prism.json": '{"main": "paper.tex"}'})
+        self.assertEqual(server.CFG.main, "paper.tex", "prism.json wins over the guess")
+        project({"main.tex": "\\documentclass{article}", "a.tex": "\\documentclass{article}"})
+        self.assertEqual(server.CFG.main, "main.tex")
+
     def test_changes_apply_without_a_restart(self):
         root = project({"main.tex": "", "prism.json": '{"engine": "pdflatex"}'})
         self.assertEqual(server.CFG.engine, "pdflatex")
