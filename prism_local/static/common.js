@@ -47,6 +47,9 @@ const ICONS = {
   popout: '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M15 9V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v7a2 2 0 0 0 2 2h3"/>',
   refresh: '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3L19.5 9"/><path d="M19.5 4.5V9H15"/>',
   arrow: '<path d="M5 12h14M13.5 6.5 19 12l-5.5 5.5"/>',
+  list: '<path d="M9 6.5h11M9 12h11M9 17.5h11"/><circle cx="4.8" cy="6.5" r="1.1" fill="currentColor" stroke="none"/><circle cx="4.8" cy="12" r="1.1" fill="currentColor" stroke="none"/><circle cx="4.8" cy="17.5" r="1.1" fill="currentColor" stroke="none"/>',
+  search: '<circle cx="10.5" cy="10.5" r="6"/><path d="m15 15 5 5"/>',
+  download: '<path d="M12 4v11M7 10.5l5 5 5-5"/><path d="M5 19.5h14"/>',
   spark: '<path d="M12 4l1.7 5.3L19 11l-5.3 1.7L12 18l-1.7-5.3L5 11l5.3-1.7z" fill="currentColor" stroke-width="1"/>',
   star: '<path d="m12 4.5 2.3 4.7 5.2.8-3.8 3.6.9 5.1L12 16.3l-4.6 2.4.9-5.1-3.8-3.6 5.2-.8z"/>',
 };
@@ -65,8 +68,9 @@ if (!IS_MAC) for (const el of document.querySelectorAll("[title*='⌘'], [placeh
 }
 
 // Editor tab <-> pop-out PDF tab. Messages:
-//   viewer -> editor: {type:"alive"} (heartbeat), {type:"bye"}, {type:"inverse", page, x, y}
-//   editor -> viewer: {type:"forward", r} (SyncTeX box), {type:"pdf", mtime}
+//   viewer -> editor: {type:"alive"} (heartbeat), {type:"bye"}, {type:"inverse", id, page, x, y}
+//   editor -> viewer: {type:"forward", r} (SyncTeX box), {type:"pdf", mtime},
+//                     {type:"jumped", id, name, ok, file, line | msg} (answers "inverse")
 const pdfChannel = "BroadcastChannel" in window ? new BroadcastChannel("prism-pdf") : null;
 
 /* Page presence. Every page (editor, pop-out PDF) sends a heartbeat so a server started

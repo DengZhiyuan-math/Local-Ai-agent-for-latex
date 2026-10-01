@@ -158,7 +158,7 @@ async function drawThumb(card) {
   thumbs.set(key, null);
   try {
     const data = await fetch(`/api/pdf?id=${encodeURIComponent(p.id)}&t=${p.pdf_mtime}`).then((r) => r.ok ? r.arrayBuffer() : Promise.reject());
-    const doc = await pdfjsLib.getDocument({ data }).promise;
+    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true }).promise;   // see pdfview.js
     const page = await doc.getPage(1);
     // clientWidth is 0 while the tab is not laid out; fall back to the grid's minimum.
     const cssW = Math.max(120, Math.min((card.querySelector(".thumb").clientWidth || 236) - 36, 210));

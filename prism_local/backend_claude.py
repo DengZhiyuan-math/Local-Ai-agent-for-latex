@@ -7,8 +7,8 @@ Each chat turn runs the local Claude Code CLI headlessly in the repository:
 
 so the agent loads the project's CLAUDE.md, skills and .claude/settings.json
 permissions exactly as it would in the terminal. In "edit" mode file edits are accepted
-automatically; Bash is limited to the project's allowlist (non-interactive
-runs cannot approve anything else). "ask" mode uses plan mode (read-only).
+automatically. Non-interactive runs cannot approve a shell command, so the shell tools
+are left out unless the settings allow some commands, and then only those run. "ask" mode uses plan mode (read-only).
 """
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -123,6 +124,53 @@ def account_problem(info: dict, allowed: str) -> str | None:
     return None
 
 
+# Tools that run shell commands. A headless turn cannot ask you to approve one, so Claude
+# Code refuses every command that no rule allows. Without such a rule the agent does not
+# get these tools at all: it then reads, searches and edits with its own tools instead of
+# cat, sed or rm, and leaves compiling to the editor.
+SHELL_TOOLS = ("Bash", "PowerShell", "Monitor")
+COMPILE_TOOL = "mcp__prism__compile"       # mcp_compile.py, as Claude Code names it
+
+
+def shell_rules(root: Path | None) -> list[str]:
+    """The permission rules for shell tools in the user's and the project's settings."""
+    cfg = Path(os.environ["CLAUDE_CONFIG_DIR"]) if os.environ.get("CLAUDE_CONFIG_DIR")         else Path.home() / ".claude"
+    files = [cfg / "settings.json"]
+    if root:
+        files += [Path(root) / ".claude" / "settings.json",
+                  Path(root) / ".claude" / "settings.local.json"]
+    rules = []
+    for f in files:
+        data = registry.read_json(f) or {}
+        perms = data.get("permissions") if isinstance(data, dict) else None
+        allow = perms.get("allow") if isinstance(perms, dict) else None
+        for r in allow if isinstance(allow, list) else []:
+            if isinstance(r, str) and r.split("(", 1)[0].strip() in SHELL_TOOLS:
+                rules.append(r)
+    return rules
+
+
+def _loads_compile_tool(block: dict) -> bool:
+    """Claude Code loading the compile tool before its first use: not a step to show."""
+    q = str((block.get("input") or {}).get("query") or "")
+    return block.get("name") == "ToolSearch" and COMPILE_TOOL in q         and all(COMPILE_TOOL == t.strip() for t in q.removeprefix("select:").split(","))
+
+
+def _tool_place(name: str, inp: dict, root: Path) -> dict:
+    """Which file a file tool works on, and for a Read of part of it which lines, so the
+    editor can show the agent there: {"path": rel, "lines": [first, last]}."""
+    if name not in ("Read", "Edit", "Write", "MultiEdit") or not inp.get("file_path"):
+        return {}
+    place: dict = {"path": _summarize_tool(name, inp, root)}
+    if name == "Read" and (inp.get("offset") or inp.get("limit")):
+        try:
+            first = max(1, int(inp.get("offset") or 1))
+            place["lines"] = [first, first + max(1, int(inp.get("limit") or 2000)) - 1]
+        except (TypeError, ValueError):
+            pass
+    return place
+
+
 def _summarize_tool(name: str, inp: dict, root: Path) -> str:
     def rel(p):
         try:
@@ -143,6 +191,84 @@ def _summarize_tool(name: str, inp: dict, root: Path) -> str:
         if isinstance(v, str):
             return v[:120]
     return ""
+
+
+# The field of a file-writing tool whose text is shown while the model is still writing it.
+LIVE_FIELD = {"Write": "content", "Edit": "new_string"}
+ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "b": "\b", "f": "\f"}
+FILE_PATH_RE = re.compile(r'"file_path"\s*:\s*("(?:[^"\\]|\\.)*")')
+
+
+class LiveInput:
+    """Decodes one string field of a tool's input while its JSON is still streaming in.
+
+    `feed` takes the next fragment of the JSON and returns the newly decoded text of the
+    field (or ""). It parses each character once, so a long file costs no more than its
+    length. An escape cut off at the end of a fragment waits for the next fragment.
+    """
+
+    def __init__(self, field: str):
+        self.key = re.compile(r'"%s"\s*:\s*"' % re.escape(field))
+        self.buf, self.pos, self.done = "", -1, False   # pos: next char of the value
+        self.path: str | None = None
+
+    def feed(self, chunk: str) -> str:
+        self.buf += chunk
+        if self.path is None:
+            m = FILE_PATH_RE.search(self.buf)
+            if m:
+                try:
+                    self.path = json.loads(m.group(1))
+                except ValueError:
+                    self.path = ""
+        if self.done:
+            return ""
+        if self.pos < 0:
+            m = self.key.search(self.buf)
+            if not m:
+                return ""
+            self.pos = m.end()
+        out, i, buf, n = [], self.pos, self.buf, len(self.buf)
+        while i < n:
+            c = buf[i]
+            if c == '"':
+                self.done = True
+                break
+            if c != "\\":
+                out.append(c)
+                i += 1
+                continue
+            if i + 1 >= n:
+                break
+            e = buf[i + 1]
+            if e != "u":
+                out.append(ESCAPES.get(e, e))
+                i += 2
+                continue
+            if i + 6 > n:
+                break
+            try:
+                cp = int(buf[i + 2:i + 6], 16)
+            except ValueError:
+                cp = 0xFFFD
+            if 0xD800 <= cp < 0xDC00:                  # first half of a surrogate pair
+                if i + 12 > n:
+                    break
+                try:
+                    lo = int(buf[i + 8:i + 12], 16) if buf[i + 6:i + 8] == "\\u" else 0
+                except ValueError:
+                    lo = 0
+                if 0xDC00 <= lo < 0xE000:
+                    out.append(chr(0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)))
+                    i += 12
+                    continue
+                cp = 0xFFFD
+            elif 0xDC00 <= cp < 0xE000:
+                cp = 0xFFFD
+            out.append(chr(cp))
+            i += 6
+        self.pos = i
+        return "".join(out)
 
 
 class ClaudeCode(CliBackend):
@@ -195,8 +321,17 @@ class ClaudeCode(CliBackend):
         cmd = [self.bin(), "-p", "--output-format", "stream-json", "--verbose",
                "--include-partial-messages", "--permission-mode", perm,
                "--append-system-prompt", SYSTEM_APPEND]
-        if job.scope:
-            cmd += ["--allowedTools", *self.scope_rules(job.scope)]
+        allowed = self.scope_rules(job.scope) if job.scope else []
+        if job.server_url:
+            # The compile tool (mcp_compile.py): the editor's own build, no shell needed.
+            cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": {
+                "command": sys.executable,
+                "args": [str(Path(__file__).with_name("mcp_compile.py")), "--url", job.server_url]}}})]
+            allowed.append(COMPILE_TOOL)
+        if allowed:
+            cmd += ["--allowedTools", *allowed]
+        if not shell_rules(job.root):
+            cmd += ["--disallowedTools", *SHELL_TOOLS]
         if job.session_id:
             cmd += ["--resume", job.session_id]
         if job.model:
@@ -209,23 +344,70 @@ class ClaudeCode(CliBackend):
         t = d.get("type")
         if t == "system" and d.get("subtype") == "init":
             st["session_id"] = d.get("session_id")
+            # "none": the claude.ai login, whose turns count against the plan's usage
+            # limits; anything else is an API key, billed per token.
+            st["api_key_source"] = d.get("apiKeySource")
             self._remember_catalog(d)
             job.emit({"t": "init", "session_id": st["session_id"], "model": d.get("model")})
         elif t == "stream_event" and d.get("parent_tool_use_id") is None:
             ev = d.get("event") or {}
-            if ev.get("type") == "content_block_delta" and \
-                    (ev.get("delta") or {}).get("type") == "text_delta":
-                job.emit({"t": "delta", "text": ev["delta"]["text"]})
-            elif ev.get("type") == "message_start":
+            et, delta = ev.get("type"), ev.get("delta") or {}
+            if et == "content_block_delta" and delta.get("type") == "text_delta":
+                job.emit({"t": "delta", "text": delta["text"]})
+            elif et == "content_block_start" and                     (ev.get("content_block") or {}).get("type") in ("thinking", "redacted_thinking"):
+                # Thinking starts. Its text follows only where the model sends it: newer
+                # models think without showing it, and then the panel shows that it thinks.
+                job.emit({"t": "thinking_start"})
+            elif et == "content_block_delta" and delta.get("type") == "thinking_delta":
+                if delta.get("thinking"):
+                    job.emit({"t": "thinking", "text": delta["thinking"]})
+            elif et == "content_block_start" and                     (ev.get("content_block") or {}).get("type") == "tool_use":
+                # A tool call starts. Its input streams in as JSON fragments; for a file
+                # write or edit, the text is shown as it is written (tool_live events):
+                # "text" is the new text, "old" the text an Edit replaces.
+                block = ev["content_block"]
+                name = block.get("name")
+                if name == "ToolSearch":
+                    return                      # shown once its input says what it loads
+                fields = {"text": LiveInput(LIVE_FIELD[name])} if name in LIVE_FIELD else {}
+                if name == "Edit":
+                    fields["old"] = LiveInput("old_string")
+                st.setdefault("live", {})[ev.get("index")] = (block.get("id"), fields)
+                job.emit({"t": "tool_start", "id": block.get("id"),
+                          "name": "Compile" if name == COMPILE_TOOL else name})
+            elif et == "content_block_delta" and delta.get("type") == "input_json_delta":
+                tid, fields = st.get("live", {}).get(ev.get("index"), (None, {}))
+                if fields:
+                    chunk = delta.get("partial_json") or ""
+                    out = {"t": "tool_live", "id": tid}
+                    for key, li in fields.items():
+                        had_path, was_done = li.path is not None, li.done
+                        text = li.feed(chunk)
+                        if key == "text" and li.path is not None and not had_path:
+                            out["path"] = _summarize_tool("Write", {"file_path": li.path}, job.root)
+                        if text:
+                            out[key] = text
+                        if key == "old" and li.done and not was_done:
+                            out["old_done"] = True
+                    if len(out) > 2:
+                        job.emit(out)
+            elif et == "message_start":
+                st["live"] = {}
                 job.emit({"t": "message_start"})
         elif t == "assistant" and d.get("parent_tool_use_id") is None:
             for block in (d.get("message") or {}).get("content", []):
                 if block.get("type") == "text" and block.get("text"):
                     job.emit({"t": "text", "text": block["text"]})
                 elif block.get("type") == "tool_use":
-                    job.emit({"t": "tool", "id": block.get("id"), "name": block.get("name"),
+                    if _loads_compile_tool(block):
+                        continue
+                    job.emit({"t": "tool", "id": block.get("id"),
+                              "name": "Compile" if block.get("name") == COMPILE_TOOL
+                              else block.get("name"),
                               "summary": _summarize_tool(block.get("name", ""),
-                                                         block.get("input") or {}, job.root)})
+                                                         block.get("input") or {}, job.root),
+                              **_tool_place(block.get("name", ""), block.get("input") or {},
+                                            job.root)})
         elif t == "user" and d.get("parent_tool_use_id") is None:
             for block in (d.get("message") or {}).get("content", []):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -240,10 +422,25 @@ class ClaudeCode(CliBackend):
             self.rate = {**d["rate_limit_info"], "at": time.time()}
             job.emit({"t": "rate", "rate": self.rate})
         elif t == "result":
+            # total_cost_usd is what the turn would cost at API list prices. With the
+            # claude.ai login nothing is billed, so report the tokens instead of a price.
+            u = d.get("usage") or {}
+            subscription = st.get("api_key_source") in (None, "none")
             st.update(session_id=d.get("session_id") or st.get("session_id"),
-                      cost=d.get("total_cost_usd"), duration=d.get("duration_ms"),
+                      cost=None if subscription else d.get("total_cost_usd"),
+                      billing="subscription" if subscription else "api",
+                      usage={"in": sum(u.get(k) or 0 for k in (
+                                 "input_tokens", "cache_creation_input_tokens",
+                                 "cache_read_input_tokens")),
+                             "out": u.get("output_tokens") or 0} if u else None,
+                      duration=d.get("duration_ms"),
                       is_error=d.get("is_error"), subtype=d.get("subtype"),
-                      denials=[p.get("tool_name") for p in d.get("permission_denials") or []])
+                      denials=[p.get("tool_name") for p in d.get("permission_denials") or []],
+                      # What each refused call was, e.g. the command: the panel names it.
+                      denied=[{"tool": p.get("tool_name"),
+                               "what": _summarize_tool(p.get("tool_name") or "",
+                                                       p.get("tool_input") or {}, job.root)}
+                              for p in d.get("permission_denials") or []])
 
     def _remember_catalog(self, init: dict) -> None:
         skills = [s for s in init.get("skills") or [] if isinstance(s, str)]

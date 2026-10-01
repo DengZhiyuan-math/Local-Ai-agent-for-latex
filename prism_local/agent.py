@@ -40,6 +40,7 @@ class AgentManager:
         self.ids = itertools.count(1)
         self.lock = threading.Lock()
         self.active: Job | None = None
+        self.server_url: str | None = None    # the editor server, for the compile tool
 
     def backend(self, provider: str | None) -> Backend | None:
         return self.backends.get(provider or self.default)
@@ -123,6 +124,7 @@ class AgentManager:
         job.provider, job.prompt, job.session_id = backend.id, prompt, session_id
         job.mode, job.model, job.effort = mode if mode in ("edit", "ask") else "ask", model, effort
         job.root, job.files = self.root_fn(), self.files_fn
+        job.server_url = self.server_url
         job.writable = lambda rel: self._writable(job, rel)
         job.before = self._snapshot()
         threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
@@ -169,7 +171,7 @@ class AgentManager:
                   "reverted": reverted,
                   "session_id": res.get("session_id") or job.session_id,
                   "duration": res.get("duration") or int((time.time() - t0) * 1000)}
-            for k in ("cost", "usage", "is_error", "subtype", "denials", "stderr"):
+            for k in ("cost", "billing", "usage", "is_error", "subtype", "denials", "denied", "stderr"):
                 if res.get(k) is not None:
                     ev[k] = res[k]
             job.emit(ev)
@@ -202,6 +204,12 @@ class AgentManager:
                 backend.stop(job)
             return {"ok": True}
         return {"ok": False}
+
+    def built(self, result: dict) -> None:
+        """A build the agent ran with its compile tool: the panel shows it as the editor's."""
+        job = self.active
+        if job and not job.done:
+            job.emit({"t": "build", "result": result})
 
     def busy(self) -> bool:
         job = self.active

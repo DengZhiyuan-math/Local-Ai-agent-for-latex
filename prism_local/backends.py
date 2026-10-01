@@ -23,13 +23,20 @@ Events a backend emits through ``job.emit`` (the panel understands exactly these
     {"t": "message_start"}                      a new assistant message begins
     {"t": "delta", "text": str}                 streamed text of that message
     {"t": "text", "text": str}                  a whole message (when not streamed)
+    {"t": "thinking_start"}                     the model starts thinking
+    {"t": "thinking", "text": str}              streamed thinking (where the model shows it)
+    {"t": "tool_start", "id": str, "name": str} a tool call begins (its input still streams)
+    {"t": "tool_live", "id": str, "path"?: str, "text"?: str, "old"?: str, "old_done"?: true}
+                                                the file a Write/Edit is writing, as it streams
     {"t": "tool", "id": str, "name": str, "summary": str}
     {"t": "tool_result", "id": str, "error": bool, "preview": str}
+    {"t": "build", "result": dict}              a build the agent ran (agent.py, not backends)
     {"t": "rate", "rate": dict}                 Claude usage limits
     {"t": "error", "message": str}
 
 `run` returns a dict with any of: session_id, exit (0 = success), is_error, subtype,
-cost (USD), duration (ms), usage ({"in": tokens, "out": tokens}), denials (tool
+cost (USD, only when billed per token), billing ("subscription" or "api"), duration
+(ms), usage ({"in": tokens, "out": tokens}), denials (tool
 names refused), stderr.
 """
 from __future__ import annotations
@@ -56,6 +63,17 @@ and the compiled PDF.
   files you may change. It replaces the scope of every earlier message.
 - The author reviews every turn's file changes as a diff with an undo button,
   so make focused, minimal edits and say which files you changed.
+- Write display math with named LaTeX environments: \\begin{equation} ...
+  \\end{equation} (or equation*, align, align*, gather, multline), never the
+  shortcuts \\[ ... \\] or $$ ... $$. Use \\begin{...} environments rather than
+  shortcuts elsewhere too.
+- Read, search and change files with your file tools (Read, Grep, Glob, Edit,
+  Write), not shell commands such as cat, sed, python or rm.
+- To compile, use the compile tool when you have it: it runs the editor's own
+  build (the author's Compile button) and returns the errors with file:line.
+  Compile after substantial edits and fix the errors your changes caused.
+  Never run pdflatex or latexmk yourself. Without the tool, do not compile:
+  the author compiles in the editor.
 - Never commit, push, or run git commands that modify the repository.
 - Keep replies concise. If the project has a CLAUDE.md or AGENTS.md, follow it exactly.
 - Do not claim an argument is correct, or a step proved, unless you checked it.
@@ -87,6 +105,7 @@ class Job:
         self.model: str | None = None
         self.effort: str | None = None
         self.scope: list[str] | None = None     # files this turn may change (None: any)
+        self.server_url: str | None = None      # the editor server (the compile tool)
         self.root = Path(".")
         self.files: Callable[[], list[str]] = lambda: []    # editable files
         self.writable: Callable[[str], bool] = lambda rel: False

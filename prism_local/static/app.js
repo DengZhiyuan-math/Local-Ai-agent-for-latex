@@ -38,7 +38,13 @@ $("#btn-home").onclick = async () => {
 const cm = CodeMirror($("#editor"), {
   lineNumbers: true, lineWrapping: true, matchBrackets: true, autoCloseBrackets: "()[]{}$$",
   styleActiveLine: true, indentUnit: 2, tabSize: 2, indentWithTabs: false,
+  // Fold sections, environments and \[ … \] from the gutter (texfold.js).
+  foldGutter: true, gutters: ["CodeMirror-linenumbers", "CodeMirror-foldgutter"],
+  foldOptions: { widget: "…", minFoldSize: 1 },
   extraKeys: {
+    "Ctrl-Q": (ed) => ed.foldCode(ed.getCursor()),
+    "Ctrl-K Ctrl-0": "foldAll", "Cmd-K Cmd-0": "foldAll",
+    "Ctrl-K Ctrl-J": "unfoldAll", "Cmd-K Cmd-J": "unfoldAll",
     "Cmd-S": () => saveActive(), "Ctrl-S": () => saveActive(),
     "Cmd-Enter": () => compile(), "Ctrl-Enter": () => compile(),
     "Cmd-J": () => forwardSync(), "Ctrl-J": () => forwardSync(),
@@ -78,6 +84,7 @@ async function openFile(path, line) {
   }
   S.active = path;
   cm.swapDoc(t.doc);
+  AH.apply(path);
   cm.getWrapperElement().style.display = "";
   $("#empty-editor").hidden = true;
   applyDiagnostics();
@@ -115,6 +122,7 @@ function renderTabs() {
     <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""}" data-path="${esc(t.path)}" title="${esc(t.path)}">
       <span class="name">${esc(t.path.split("/").pop())}</span><span class="close" data-close="${esc(t.path)}">×</span>
     </div>`).join("");
+  AH.refresh();
 }
 $("#tabs").addEventListener("click", (e) => {
   const c = e.target.closest("[data-close]"); if (c) { e.stopPropagation(); return closeTab(c.dataset.close); }
@@ -209,6 +217,7 @@ async function reloadFromDisk(t, discard = false) {
   }
   const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
   t.doc.setValue(r.content);
+  AH.apply(t.path);                          // setValue drops line classes
   t.doc.setCursor(cur);
   if (scroll) cm.scrollTo(scroll.left, scroll.top);
   t.mtime = r.mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
@@ -252,6 +261,7 @@ function renderTree() {
     }
   }
   $("#tree").innerHTML = html;
+  AH.refresh();
 }
 $("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li) openFile(li.dataset.path); });
 
@@ -307,7 +317,25 @@ async function poll() {
   }
   if (anyChange || changed) loadSymbols();
   if (r.pdf_mtime && r.pdf_mtime !== S.pdfMtime && !S.building) showPdf(r.pdf_mtime);
+  $("#btn-restart").hidden = !r.updated;
+  S.server = r.server;
 }
+
+// prism-local was updated while this server ran: restart it, then load the new page.
+$("#btn-restart").onclick = async () => {
+  if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
+  if (!(await saveAll())) return toast("Resolve the save conflict first.");
+  const b = $("#btn-restart"); b.disabled = true; b.textContent = "restarting…";
+  const r = await api("/api/restart", {}).catch(() => ({ error: "server not reachable" }));
+  if (r.error) { b.disabled = false; b.textContent = "Update: restart"; return toast(r.error); }
+  for (let i = 0; i < 60; i++) {           // the new server listens within a few seconds
+    await new Promise((res) => setTimeout(res, 500));
+    const t = await fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
+    if (t && t.server !== S.server) return location.reload();
+  }
+  b.disabled = false; b.textContent = "Update: restart";
+  toast("The server did not come back. Reopen the project from the Home page.");
+};
 
 /* ------------------------------------------------------------------ completion */
 function lineBefore(ed) { const c = ed.getCursor(); return ed.getLine(c.line).slice(0, c.ch); }
@@ -376,6 +404,33 @@ function setCompileButton(running) {
 }
 const plural = (n, w, ws = w + "s") => `${n} ${n === 1 ? w : ws}`;
 
+// The result of a build, yours or the agent's (its compile tool): status, problems, PDF.
+async function showBuild(r) {
+  const st = $("#build-status");
+  if (!r.cancelled) S.diagnostics = r.diagnostics || [];      // a stopped build keeps the last list
+  $("#output").textContent = r.output || "";
+  const errs = S.diagnostics.filter((d) => d.severity === "error").length;
+  const warns = S.diagnostics.length - errs;
+  let text, cls = "err";
+  if (r.cancelled) [text, cls] = ["build stopped", "warn"];
+  else if (r.timed_out) text = "stopped: the build took too long";
+  else if (r.exit === 0 || r.pdf_updated) {
+    text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
+    cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
+  } else text = `FAILED (exit ${r.exit})`;
+  st.className = "status " + cls;
+  st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
+  // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
+  const how = [r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
+    r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
+    ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
+  st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
+  renderProblems();
+  applyDiagnostics();
+  if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");
+  if (r.pdf_mtime) await showPdf(r.pdf_mtime);
+}
+
 async function compile(clean = false) {
   if (S.building) return;
   if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
@@ -389,28 +444,7 @@ async function compile(clean = false) {
     const r = await api("/api/build", { mode, clean });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
-    if (!r.cancelled) S.diagnostics = r.diagnostics || [];      // a stopped build keeps the last list
-    $("#output").textContent = r.output || "";
-    const errs = S.diagnostics.filter((d) => d.severity === "error").length;
-    const warns = S.diagnostics.length - errs;
-    let text, cls = "err";
-    if (r.cancelled) [text, cls] = ["build stopped", "warn"];
-    else if (r.timed_out) text = "stopped: the build took too long";
-    else if (r.exit === 0 || r.pdf_updated) {
-      text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
-      cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
-    } else text = `FAILED (exit ${r.exit})`;
-    st.className = "status " + cls;
-    st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
-    // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
-    const how = [r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
-      r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
-      ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
-    st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
-    renderProblems();
-    applyDiagnostics();
-    if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");
-    if (r.pdf_mtime) await showPdf(r.pdf_mtime);
+    await showBuild(r);
   } catch (e) {
     st.className = "status err"; st.textContent = "build request failed: " + e;
   } finally {
@@ -506,6 +540,16 @@ async function showDiff(path) {
 /* ------------------------------------------------------------------ PDF */
 PV.init({ scaleKey: "scale" });
 PV.onInverse = (p) => inverseJump(p.page, p.x, p.y);
+// A plain click does nothing: say once how to jump to the source.
+let pdfHinted = false, pdfHintTimer = null;
+$("#pdf-scroll").addEventListener("click", (e) => {
+  if (pdfHinted || e.detail !== 1 || e.ctrlKey || e.metaKey || !e.target.closest(".pdf-page")
+      || e.target.closest(".pdf-link") || String(window.getSelection() || "")) return;    // a link, or selecting text
+  pdfHintTimer = setTimeout(() => {          // not when this click was the first of a double-click
+    pdfHinted = true; toast(`Double-click (or ${IS_MAC ? "⌘" : "Ctrl"}-click) the PDF to jump to the source.`);
+  }, 400);
+});
+$("#pdf-scroll").addEventListener("dblclick", () => clearTimeout(pdfHintTimer));
 
 // Pop-out viewer: while a viewer tab is alive, the inline PDF pane is hidden.
 const POP = { alive: false, last: 0 };
@@ -547,8 +591,16 @@ if (pdfChannel) pdfChannel.onmessage = (ev) => {
   const m = ev.data || {};
   if (m.type === "alive") { POP.last = Date.now(); setPopped(true); watchViewer(); }
   else if (m.type === "bye") { if (!LOCKS) setPopped(false); }     // the lock watcher notices
-  else if (m.type === "inverse") inverseJump(m.page, m.x, m.y);
+  else if (m.type === "inverse") {
+    // Answer the viewer, which says where the jump went and brings this tab to the front.
+    inverseJump(m.page, m.x, m.y).catch((e) => ({ msg: String(e) }))
+      .then((res) => pdfChannel.postMessage({ type: "jumped", id: m.id, name: window.name, ...res }));
+    window.focus();
+  }
 };
+// The viewer finds this tab by its name to bring it to the front (viewer.js). A tab opened
+// from the Home page keeps the name Home gave it ("prism-<id>"), by which Home reuses it.
+if (!window.name) window.name = "prism-editor-" + location.port;
 if (LOCKS) {
   // A viewer that was already open when this editor (re)loaded.
   LOCKS.query().then((s) => { if (s.held.some((l) => l.name === VIEWER_LOCK)) { setPopped(true); watchViewer(); } });
@@ -574,11 +626,14 @@ async function forwardSync() {
 }
 $("#btn-forward").onclick = () => forwardSync();
 
+// Returns what happened, for the pop-out viewer to show: {ok, file, line} or {msg}.
 async function inverseJump(page, x, y) {
   const r = await api(`/api/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`);
-  if (r._status !== 200 || !r.file) return toast("No source location found here.");
-  if (!S.files.some((f) => f.path === r.file)) return toast(`Source is ${r.file}:${r.line} (not editable here).`);
-  openFile(r.file, r.line);
+  const fail = (msg) => { toast(msg); return { msg }; };
+  if (r._status !== 200 || !r.file) return fail("No source location found here.");
+  if (!S.files.some((f) => f.path === r.file)) return fail(`Source is ${r.file}:${r.line} (not editable here).`);
+  await openFile(r.file, r.line);
+  return { ok: true, file: r.file, line: r.line };
 }
 
 /* ------------------------------------------------------------------ misc UI */
@@ -780,6 +835,153 @@ function insertMention(token, snip, replaceFrom) {
   updateScope(); inp.focus();
 }
 
+/* Where the agent works, marked in the editor: the lines it reads (blue), the passage it is
+   rewriting (amber, pulsing), and the lines it changed this turn (green, until your next
+   message or Undo). The file it is on gets a pulsing dot in the tabs and the file list.
+   Marks are line classes on the tab's document, kept here by line number so they come back
+   when a tab is opened or reloaded from disk. */
+const AH = {
+  marks: new Map(),     // path -> [{kind, from, to}] (0-based lines)
+  handles: new Map(),   // path -> [[doc, line, cls]] applied now
+  here: null,           // the file the agent is on
+
+  set(path, kind, from, to) {
+    const list = (this.marks.get(path) || []).filter((m) => kind === "changed" || m.kind !== kind);
+    list.push({ kind, from: Math.max(0, from), to: Math.max(from, to) });
+    this.marks.set(path, list);
+    this.apply(path);
+  },
+
+  clear(kind = null) {
+    for (const [path, list] of this.marks) {
+      this.marks.set(path, kind ? list.filter((m) => m.kind !== kind) : []);
+      this.apply(path);
+    }
+  },
+
+  // Put the marks of `path` on its tab's document (after a swap, a reload, a change).
+  apply(path) {
+    for (const [doc, line, cls] of this.handles.get(path) || []) {
+      doc.removeLineClass(line, "background", cls); doc.removeLineClass(line, "gutter", cls + "-g");
+    }
+    const t = S.tabs.find((x) => x.path === path), out = [];
+    if (t) {
+      const last = t.doc.lineCount() - 1;
+      for (const m of this.marks.get(path) || []) {
+        const cls = "cm-agent-" + m.kind;
+        for (let l = m.from; l <= Math.min(m.to, last, m.from + 3000); l++) {
+          const h = t.doc.addLineClass(l, "background", cls);
+          t.doc.addLineClass(h, "gutter", cls + "-g");
+          out.push([t.doc, h, cls]);
+        }
+      }
+    }
+    this.handles.set(path, out);
+  },
+
+  // The agent is on `path` now (null: on no file).
+  on(path) {
+    if (this.here === path) return;
+    this.here = path;
+    document.querySelectorAll(".agent-here").forEach((el) => el.classList.remove("agent-here"));
+    if (path) document.querySelectorAll(`#tabs .tab[data-path="${CSS.escape(path)}"], #tree li[data-path="${CSS.escape(path)}"]`)
+      .forEach((el) => el.classList.add("agent-here"));
+  },
+
+  // Keep the dot through re-renders of the tabs and the file list.
+  refresh() { const p = this.here; this.here = null; this.on(p); },
+};
+
+/* The file the agent is writing, live, over the editor. A read-only view: your tabs, their
+   saving and their undo history are not touched. For an Edit, the text it replaces is struck
+   through and the new text appears after it; for a Write, the file appears from the top.
+   When the step ends the view closes and the editor shows the changed lines. */
+const AV = {
+  cm: null, id: null, path: null, name: null, hidden: false,
+  base: null, old: "", oldDone: false, text: "", shown: 0, at: null, marks: [],
+
+  view() {
+    if (!this.cm) {
+      this.cm = CodeMirror($("#agent-view-cm"), { readOnly: true, lineNumbers: true, lineWrapping: true, mode: "stex" });
+      $("#agent-view-hide").onclick = () => { this.hidden = true; $("#agent-view").hidden = true; };
+    }
+    return this.cm;
+  },
+
+  async begin(id, name, path) {
+    Object.assign(this, { id, name, path, base: null, old: "", oldDone: false, text: "", shown: 0, at: null, marks: [] });
+    const v = this.view();
+    v.setOption("mode", modeFor(path));
+    $("#agent-view-title").textContent = `${name === "Write" ? "Writing" : "Editing"} ${path}`;
+    $("#agent-view").hidden = this.hidden;           // hidden: it still marks the editor (AH)
+    v.setValue(""); v.refresh();
+    if (name === "Write") { this.base = ""; return; }
+    // An edit changes the file as it is on disk.
+    const r = await api("/api/file?path=" + encodeURIComponent(path)).catch(() => ({}));
+    if (this.id !== id) return;
+    v.setValue(r.content || ""); this.base = v.getValue();
+    this.render();
+  },
+
+  feed(e) {
+    if (e.id !== this.id) return;
+    if (e.old) this.old += e.old;
+    if (e.old_done) this.oldDone = true;
+    if (e.text) this.text += e.text;
+  },
+
+  // Called once per batch of events.
+  render() {
+    const v = this.cm;
+    if (!v || this.id === null || this.base === null) return;
+    if (this.at === null) {
+      if (this.name === "Write") this.at = 0;
+      else {
+        if (!this.oldDone && !this.text) return;        // the text it replaces is not complete yet
+        const i = this.base.indexOf(this.old.replace(/\r\n/g, "\n"));
+        if (i < 0 || !this.old) this.at = this.base.length;   // not found: show the new text at the end
+        else {
+          this.at = i + this.old.length;
+          this.marks.push(v.markText(v.posFromIndex(i), v.posFromIndex(this.at), { className: "cm-agent-del" }));
+          AH.set(this.path, "edit", v.posFromIndex(i).line, v.posFromIndex(this.at).line);   // in the editor too
+        }
+      }
+    }
+    if (this.text.length > this.shown) {
+      const from = v.posFromIndex(this.at + this.shown);
+      v.replaceRange(this.text.slice(this.shown), from);
+      this.shown = this.text.length;
+      this.marks.push(v.markText(from, v.posFromIndex(this.at + this.shown), { className: "cm-agent-add" }));
+    }
+    if (!$("#agent-view").hidden) v.scrollIntoView(v.posFromIndex(this.at + this.shown), v.getScrollInfo().clientHeight / 3);
+  },
+
+  // The step `id` ended (null: the turn ended). Show the result in the editor.
+  async end(id, ok) {
+    if (this.id === null || (id !== null && id !== this.id)) return;
+    const { path, name, text, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
+    const start = Math.max(0, (at || 0) - this.old.length);   // where the edit was, in the old file
+    this.id = null;
+    await new Promise((res) => setTimeout(res, 400));
+    AH.clear("edit");
+    if (!ok) { if (this.id === null) $("#agent-view").hidden = true; return; }
+    await poll();                                       // take in the new file (a new one is listed now)
+    const t = S.tabs.find((x) => x.path === path);
+    if (t && name === "Edit") {                         // mark the lines it changed
+      const doc = t.doc.getValue(), nt = text.replace(/\r\n/g, "\n");
+      let i = nt ? doc.indexOf(nt, Math.max(0, start - 2000)) : -1;
+      if (nt && i < 0) i = doc.indexOf(nt);
+      const from = i >= 0 ? t.doc.posFromIndex(i).line : Math.min(line - 1, t.doc.lineCount() - 1);
+      const to = i >= 0 ? t.doc.posFromIndex(i + nt.length).line : from;
+      AH.set(path, "changed", from, to);
+    }
+    if (this.id !== null) return;                       // the next step already took the view
+    $("#agent-view").hidden = true;
+    // Show the result where it is, unless you hid the agent's view.
+    if (!this.hidden && S.files.some((f) => f.path === path)) openFile(path, line);
+  },
+};
+
 async function chatSend() {
   if (C.job) return;
   const text = $("#chat-input").value.trim();
@@ -806,7 +1008,7 @@ async function chatSend() {
   $("#chat-input").value = ""; updateScope();
   const extra = [provLabel(), C.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
   chatAppend(`${mentionHtml(text)}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
-  C.job = r.job; C.cur = null;
+  C.job = r.job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
   const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
@@ -816,6 +1018,52 @@ async function chatSend() {
   // log follows it only while you have not scrolled up to read something.
   const log = $("#chat-log");
   const flush = (stick) => { if (C.cur) { C.cur.innerHTML = renderMd(buf); if (stick) log.scrollTop = log.scrollHeight; } };
+  // What the agent is doing now, in the status line: thinking, writing a file, running a tool.
+  const status = (s) => { $("#chat-status").textContent = s; };
+  // Thinking and the text of a file being written stream into their own boxes, which close
+  // when that step ends (click to open them again). Drawn once per batch, like messages.
+  let think = null;              // {box, text} of the thinking being streamed
+  const live = new Map();        // tool id -> {box, pre, text, path, name}
+  const dirty = new Set();
+  const draw = (stick) => {
+    for (const x of dirty) {
+      x.pre.textContent = x.text.length > 200000 ? "…" + x.text.slice(-200000) : x.text;
+      x.pre.scrollTop = x.pre.scrollHeight;
+    }
+    dirty.clear();
+    AV.render();
+    if (stick) log.scrollTop = log.scrollHeight;
+  };
+  // Newer models (Opus) think without sending the text: the box then counts the seconds.
+  const endThinking = () => {
+    if (!think) return;
+    clearInterval(think.timer);
+    const secs = Math.round((Date.now() - think.t0) / 1000);
+    think.box.querySelector("summary").textContent = think.text
+      ? `Thought for ${secs}s` : `Thought for ${secs}s (this model does not show its thinking)`;
+    if (!think.text) think.pre.remove();
+    think.box.open = false; think = null;
+  };
+  const startThinking = () => {
+    C.cur = null;
+    if (think) return;
+    think = liveBox("thinking", "Thinking…"); think.t0 = Date.now();
+    const tick = () => {
+      const secs = Math.round((Date.now() - think.t0) / 1000);
+      think.box.querySelector("summary").textContent = `Thinking… ${secs}s`;
+      status(`thinking… ${secs}s`);
+    };
+    const t = think; think.timer = setInterval(() => { if (think === t) tick(); }, 1000);
+    tick();
+  };
+  const liveBox = (cls, summary) => {
+    const box = document.createElement("details");
+    box.className = cls; box.open = true;
+    box.innerHTML = `<summary>${esc(summary)}</summary><pre></pre>`;
+    log.appendChild(box);
+    return { box, pre: box.querySelector("pre"), text: "" };
+  };
+  const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
   try {
     while (!done) {
       let d;
@@ -826,31 +1074,69 @@ async function chatSend() {
       let pending = false;
       for (const e of d.events) {
         if (e.t !== "delta" && pending) { flush(stick); pending = false; }
-        if (e.t === "init") {
+        if (e.t !== "thinking" && e.t !== "thinking_start") endThinking();
+        if (e.t === "thinking_start") startThinking();
+        else if (e.t === "thinking") { startThinking(); think.text += e.text; dirty.add(think); }
+        else if (e.t === "tool_start") {
+          C.cur = null;
+          AH.clear("read");          // a read stays marked until the agent's next step
+          tools.set(e.id, chatAppend(toolLabel(e.name, ""), "tool"));
+          status(`${e.name}…`);
+        }
+        else if (e.t === "tool_live") {
+          let x = live.get(e.id);
+          if (!x) {
+            const name = tools.get(e.id) ? tools.get(e.id).textContent.slice(1).trim() : "Write";
+            x = liveBox("live-file", name); x.name = name; live.set(e.id, x);
+          }
+          if (e.path) {
+            x.path = e.path; x.box.querySelector("summary").textContent = `${x.name} ${e.path}`;
+            const el = tools.get(e.id); if (el) el.innerHTML = toolLabel(x.name, e.path);
+            AV.begin(e.id, x.name, e.path); AH.on(e.path);
+          }
+          if (e.text) { x.text += e.text; dirty.add(x); }
+          AV.feed(e);
+          status(`writing ${x.path || "a file"}… (${x.text.split("\n").length} lines)`);
+        }
+        else if (e.t === "init") {
           // The session belongs to the provider that ran the turn, even if the menu changed since.
           store.set(`chat.session.${provider}`, e.session_id);
           if (C.provider === provider) C.session = e.session_id;
         }
         else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
         else if (e.t === "delta") {
-          if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; }
+          if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; status("writing a reply…"); }
           streamed = true; buf += e.text; pending = true;
         } else if (e.t === "text") {
           if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(stick); C.cur = null; }
         } else if (e.t === "tool") {
           C.cur = null;
-          tools.set(e.id, chatAppend(`<span class="st">▸</span>${esc(e.name)} ${esc(e.summary || "")}`, "tool"));
-          tools.get(e.id).title = `${e.name} ${e.summary || ""}`;
+          // Claude Code announced this call already (tool_start): fill in its summary.
+          const el = tools.get(e.id) || chatAppend("", "tool");
+          el.innerHTML = toolLabel(e.name, e.summary);
+          el.title = `${e.name} ${e.summary || ""}`;
+          tools.set(e.id, el);
+          AH.clear("read");          // (backends without tool_start)
+          if (e.path) AH.on(e.path);
+          if (e.path && e.lines) AH.set(e.path, "read", e.lines[0] - 1, e.lines[1] - 1);
+          status(`${e.name} ${e.summary || ""}`.trim().slice(0, 80) + "…");
         } else if (e.t === "tool_result") {
           const el = tools.get(e.id);
           if (el) { el.querySelector(".st").textContent = e.error ? "✗" : "✓"; if (e.error) { el.classList.add("err"); el.title += "\n" + e.preview; } }
-        } else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
+          const x = live.get(e.id);
+          if (x) { draw(false); x.box.open = false; live.delete(e.id); }
+          AV.end(e.id, !e.error);
+          status("working…");
+        } else if (e.t === "build") showBuild(e.result);         // the agent compiled
+        else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
         else if (e.t === "done") { renderTurnCard(e); loadAccount(); }
       }
       if (pending) flush(stick);
+      draw(stick);
       after += d.events.length; done = d.done;
     }
   } finally {            // whatever happened above, the panel and saving work again
+    endThinking(); draw(false); live.forEach((x) => { x.box.open = false; }); AV.end(null, false); AH.on(null); AH.clear("read");
     C.job = null; C.editTurn = false;
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
@@ -867,7 +1153,7 @@ function renderQuota(rate) {
   lastRate = rate;
   const hidden = store.get("chat.quotaHidden", false);
   q.classList.toggle("collapsed", hidden);
-  const refresh = `<button class="tiny icon ghost" id="quota-refresh" title="Check usage now (a tiny Haiku call, ≈ $0.001)">${icon("refresh")}</button>`;
+  const refresh = `<button class="tiny icon ghost" id="quota-refresh" title="Check usage now (a tiny Haiku call, which counts toward your plan's usage limits)">${icon("refresh")}</button>`;
   const hide = `<button class="tiny icon ghost" id="quota-toggle" title="Hide usage limits">${icon("up")}</button>`;
   if (!rate || !rate.unifiedWindows) {
     q.innerHTML = hidden
@@ -956,16 +1242,30 @@ function renderTurnCard(e) {
     h += `<div class="warn">Blocked edits outside ${esc(e.scope.join(", "))}. Remove the @-mentions to let the agent change other files.</div>`;
   if (e.reverted && e.reverted.length)
     h += `<div class="warn">Undid changes outside the @-mentioned files: ${esc(e.reverted.join(", "))}.</div>`;
-  const other = denied.filter((d) => !(e.scope && writes.includes(d)));
-  if (other.length)
-    h += `<div class="warn">Not permitted here: ${esc(other.join(", "))}. Run that step from the terminal session if it is needed.</div>`;
+  // Other refusals, mostly shell commands (which a turn here may run only where the
+  // project's .claude/settings.json allows them). They do not undo the changes above.
+  const others = (e.denied || denied.map((tool) => ({ tool, what: "" })))
+    .filter((d) => !(e.scope && writes.includes(d.tool)));
+  if (others.length) {
+    const list = [...new Set(others.map((d) => d.what ? `${d.tool}: ${d.what}` : d.tool))];
+    h += `<div class="note">Skipped ${others.length === 1 ? "a step" : others.length + " steps"} the panel does not allow `
+      + `(the file changes above are not affected):<ul>${list.map((x) => `<li><code>${esc(x.slice(0, 160))}</code></li>`).join("")}</ul></div>`;
+  }
   if (e.out_of_scope && e.out_of_scope.length)
     h += `<div class="warn">Changed outside the @-mentioned files: ${esc(e.out_of_scope.join(", "))}. Use Undo this turn if that was not wanted.</div>`;
   if (e.exit !== 0 || e.is_error)
     h += `<div class="err">${esc((P.byId[e.provider] || {}).label || "The agent")}: ${esc(e.subtype || "exit " + e.exit)}.${e.stderr ? "\n" + esc(e.stderr) : ""}</div>`;
-  const tokens = e.usage && (e.usage.in || e.usage.out) ? `${e.usage.in || 0} in / ${e.usage.out || 0} out tokens` : "";
-  const meta = [e.duration ? (e.duration / 1000).toFixed(1) + "s" : "", e.cost ? "$" + e.cost.toFixed(3) : "", tokens].filter(Boolean).join(" · ");
-  if (meta) h += `<div class="meta">${meta}</div>`;
+  const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
+  const tokens = e.usage && (e.usage.in || e.usage.out) ? `${k(e.usage.in || 0)} in / ${k(e.usage.out || 0)} out tokens` : "";
+  // With the claude.ai login a turn costs no money: it counts against the plan's usage
+  // limits (the bars above), so no price is shown. A price is shown only for API billing.
+  const billing = e.billing === "subscription" ? "counts toward your plan's usage limits" : "";
+  // Claude Code reports a list price even for the claude.ai login: a price is shown only
+  // when the server says the turn was billed per token.
+  const kind = (P.byId[e.provider] || {}).kind;
+  const cost = e.cost && (e.billing === "api" || (kind && kind !== "claude")) ? "$" + e.cost.toFixed(3) : "";
+  const meta = [e.duration ? (e.duration / 1000).toFixed(1) + "s" : "", cost, tokens, billing].filter(Boolean).join(" · ");
+  if (meta) h += `<div class="meta">${esc(meta)}</div>`;
   chatAppend(h, "card");
 }
 
@@ -981,7 +1281,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
     u.textContent = `undone (${r.restored.length})` + (r.skipped.length ? `; kept ${r.skipped.length} edited since` : "");
-    u.disabled = true; saveChatLog(); await poll();
+    u.disabled = true; saveChatLog(); AH.clear("changed"); await poll();
   }
 });
 

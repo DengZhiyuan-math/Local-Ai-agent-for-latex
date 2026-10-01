@@ -2,7 +2,8 @@
 
 A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
 
-- **Editor**: CodeMirror 5 with tabs, LaTeX highlighting and search. It autocompletes
+- **Editor**: CodeMirror 5 with tabs, LaTeX highlighting, search, and folding of sections,
+  environments (`equation`, `proof`, …) and display math from the gutter. It autocompletes
   `\cref{…}`/`\eqref{…}` from your labels, `\cite{…}` from your `.bib` files, and `\…` from your
   own `\newcommand`s.
 - **Compile and see errors**: one click (⌘↵) builds the project. The engine (pdflatex,
@@ -10,6 +11,7 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
   and the engine reruns until references settle. Errors and warnings (undefined references and
   citations included) are listed with their source lines, and a click jumps to the line.
 - **PDF preview with SyncTeX**: the preview reloads after every build and keeps its scroll position.
+  Links, text selection and copying, search, and a bookmarks sidebar work as in a PDF reader.
   Double-click the PDF to jump to the source; ⌘J jumps from the source to the PDF. The PDF can
   **pop out into its own tab** and stays in sync there.
 - **✦ Agent panel**: an AI agent that edits your project. Pick who runs it: your local
@@ -247,7 +249,11 @@ python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop
 | ⌘S / Ctrl-S | Save now (edits are saved automatically anyway) |
 | ⌘↵ / Ctrl-Enter | Save all and compile |
 | ⌘J / Ctrl-J | Show the cursor line in the PDF |
-| double-click in PDF | Jump to the source line |
+| double-click or Ctrl/⌘-click in PDF | Jump to the source line |
+| click a link in PDF / Alt+← | Follow a reference, citation, contents entry or URL / go back |
+| ⌘F / Ctrl-F after clicking the PDF | Search the PDF (Enter: next, Shift+Enter: previous, Esc: close) |
+| Ctrl-Q | Fold or unfold the section, environment or `\[ … \]` at the cursor |
+| Ctrl-K Ctrl-0 / Ctrl-K Ctrl-J | Fold all / unfold all |
 | ⌘L / Ctrl-L | Ask Claude about the selection |
 | ⌘/ / Ctrl-/ | Toggle `%` comments |
 | ⌘B / Ctrl-B | Show/hide the file sidebar |
@@ -371,8 +377,14 @@ Consequences:
 - Claude reads your project's `CLAUDE.md`, skills and `.claude/settings.json`, exactly as it
   would in a terminal. Put writing conventions or rules for the paper in `CLAUDE.md`.
 - **Edit** mode (`acceptEdits`) may change files. Nothing can be approved interactively, so
-  shell commands are limited to the `permissions.allow` list in `.claude/settings.json`, and
-  anything else is refused. The card at the end of a turn names any refused tools.
+  the agent gets no shell (Bash, PowerShell): it reads and edits with its file tools.
+- **The agent compiles** with a `compile` tool (`prism_local/mcp_compile.py`) that runs the
+  editor's own build, the same as the Compile button: the PDF reloads, the Problems list
+  fills in, and the agent gets the errors with their file:line to fix. The API models
+  (DeepSeek and the others) get the same tool.
+- To let the agent run some shell commands too, allow them in `permissions.allow` of
+  `.claude/settings.json` (for example `"Bash(make:*)"`); it then has the shell, limited to
+  those commands. The card at the end of a turn names any step that was refused.
 - **Ask** mode (`plan`) is read-only.
 - Nothing from the editor is sent unless you @-mention it.
 - The conversation continues across messages until you press **New chat**.
@@ -387,7 +399,7 @@ Consequences:
   like any other Claude Code usage.
 - **Usage limits**: the bars show the 5-hour and 7-day utilization that Claude Code reports.
   - They update after each message.
-  - **↻** refreshes them with a tiny Haiku call (about $0.001).
+  - **↻** refreshes them with a tiny Haiku call (counted toward your plan's limits, not billed).
   - Usage from other sessions shows up at the next update.
 - The panel finds the CLI on `PATH`. Set `CLAUDE_BIN=/path/to/claude` to override. Start
   prism-local from the same environment you use for `claude`, including any `CLAUDE_CONFIG_DIR`.
@@ -506,6 +518,7 @@ prism_local/presence.py    which pages are open, for --exit-when-idle
 prism_local/agent.py       agent turns for every provider: scope, per-turn diffs and undo
 prism_local/backends.py    the backend interface, presets and ~/.prism-local/agents.json
 prism_local/backend_*.py   Claude Code, Codex CLI and OpenAI-compatible API backends
+prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0)
 examples/minimal/          a small amsart project to try it on

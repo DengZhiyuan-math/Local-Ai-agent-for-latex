@@ -143,9 +143,40 @@ button.flip .ico { transform: rotate(180deg); }
 .tab.dirty .name::after { content: " ●"; color: var(--accent); }
 #banner { padding: 6px 10px; background: var(--hl); display: flex; gap: 10px; align-items: center; flex: none; }
 #editor { flex: 1; min-height: 0; }
+/* The file the agent is writing, live (AV in app.js). */
+#agent-view { position: absolute; inset: var(--bar-h) 0 0 0; z-index: 5; display: flex; flex-direction: column; background: var(--cm-bg); }
+#agent-view[hidden] { display: none; }
+#agent-view-head { display: flex; align-items: center; gap: 8px; flex: none; padding: 4px 10px; font-size: 12px; background: var(--panel2); border-bottom: 2px solid var(--accent); }
+#agent-view-head #agent-view-title { font-family: var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#agent-view-head button { margin-left: auto; }
+#agent-view-cm { flex: 1; min-height: 0; }
+#agent-view-cm .CodeMirror { height: 100%; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); flex: none; animation: live-pulse 1.2s ease-in-out infinite; }
+@keyframes live-pulse { 50% { opacity: .3; } }
+.cm-agent-del { text-decoration: line-through; color: var(--err); opacity: .7; }
+/* Where the agent works, in the editor (AH in app.js): lines it reads, the passage it is
+   rewriting, the lines it changed this turn. Each also gets a bar in the gutter. */
+.cm-agent-read { background: color-mix(in srgb, var(--accent) 16%, transparent); }
+.cm-agent-read-g { box-shadow: inset 3px 0 0 var(--accent); }
+.cm-agent-edit { background: color-mix(in srgb, var(--warn) 22%, transparent); animation: agent-pulse 1.4s ease-in-out infinite; }
+.cm-agent-edit-g { box-shadow: inset 3px 0 0 var(--warn); }
+.cm-agent-changed { background: color-mix(in srgb, var(--ok) 20%, transparent); }
+.cm-agent-changed-g { box-shadow: inset 3px 0 0 var(--ok); }
+@keyframes agent-pulse { 50% { background: color-mix(in srgb, var(--warn) 8%, transparent); } }
+/* The file the agent is on: a pulsing dot in its tab and in the file list. */
+.tab.agent-here .name::before, #tree li.agent-here::before { content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 5px;
+  border-radius: 50%; background: var(--accent); vertical-align: 1px; animation: live-pulse 1.2s ease-in-out infinite; }
+.cm-agent-add { background: color-mix(in srgb, var(--ok) 18%, transparent); }
 #empty-editor { position: absolute; inset: var(--bar-h) 0 0 0; display: flex; align-items: center; justify-content: center; color: var(--muted); pointer-events: none; }
 .CodeMirror { height: 100%; font: 13.5px/1.55 var(--mono); background: var(--cm-bg); color: var(--text); }
 .CodeMirror-gutters { background: var(--panel); border-right: 1px solid var(--border); }
+/* Folding (texfold.js): the arrows show on hover, a folded one always. */
+.CodeMirror-foldgutter { width: 1em; }
+.CodeMirror-foldgutter-open, .CodeMirror-foldgutter-folded { color: var(--muted); text-align: center; }
+.CodeMirror-foldgutter-open { opacity: 0; transition: opacity .15s; }
+.CodeMirror:hover .CodeMirror-foldgutter-open { opacity: 1; }
+.CodeMirror-foldgutter-folded { color: var(--accent); }
+.CodeMirror-foldmarker { color: var(--accent); text-shadow: none; font-family: var(--mono); line-height: 1; padding: 0 4px; margin: 0 2px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); }
 .CodeMirror-linenumber { color: var(--muted); }
 .CodeMirror-cursor { border-left-color: var(--text); }
 .CodeMirror-selected, .CodeMirror-focused .CodeMirror-selected { background: var(--sel) !important; }
@@ -170,7 +201,7 @@ button.flip .ico { transform: rotate(180deg); }
 li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text); }
 .hint-kind { color: var(--muted); margin-left: 10px; font-size: 11px; }
 
-#pdf-pane { width: 46%; flex: none; display: flex; flex-direction: column; background: var(--pdf-bg); min-width: 200px; }
+#pdf-pane { width: 46%; flex: none; display: flex; flex-direction: column; background: var(--pdf-bg); min-width: 200px; position: relative; }
 #pdf-toolbar { display: flex; gap: 6px; align-items: center; padding: 0 8px; background: var(--panel); border-bottom: 1px solid var(--border); flex: none; height: var(--bar-h); }
 #pdf-toolbar #pdf-popout { margin-left: 2px; }
 #zoom-label, #page-label { color: var(--muted); font-variant-numeric: tabular-nums; min-width: 42px; text-align: center; }
@@ -179,6 +210,38 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 #pdf-pages { padding: 12px 0; display: flex; flex-direction: column; align-items: center; gap: 12px; }
 .pdf-page { position: relative; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); }
 .pdf-page canvas { display: block; }
+/* PDF links (pdfview.js): invisible boxes, outlined on hover. */
+/* Over each page, bottom to top: search matches, the text (to select and copy), links,
+   the SyncTeX flash. The text layer follows PDF.js's own viewer (pdf_viewer.css). */
+.pdf-hit { position: absolute; z-index: 1; pointer-events: none; border-radius: 2px; background: rgba(255, 196, 0, .35); }
+.pdf-hit.cur { background: rgba(255, 128, 0, .55); outline: 2px solid rgba(230, 100, 0, .9); }
+.textLayer { position: absolute; inset: 0; z-index: 2; overflow: hidden; line-height: 1; text-align: initial;
+  -webkit-text-size-adjust: none; text-size-adjust: none; forced-color-adjust: none; transform-origin: 0 0; }
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; }
+.textLayer span.markedContent { top: 0; height: 0; }
+.textLayer ::selection { background: rgba(0, 100, 255, .28); }
+.textLayer br::selection { background: transparent; }
+.pdf-link { position: absolute; z-index: 3; cursor: pointer; border-radius: 2px; }
+.sync-hl { z-index: 4; }
+/* Search bar and bookmarks (pdfview.js). */
+#pdf-find { position: absolute; top: calc(var(--bar-h) + 6px); right: 18px; z-index: 6; display: flex; align-items: center; gap: 4px;
+  padding: 4px 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+#pdf-find[hidden] { display: none; }
+#pdf-find input { width: 200px; font: 13px var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
+#pdf-find .count { min-width: 64px; text-align: center; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#pdf-outline { position: absolute; top: var(--bar-h); left: 0; bottom: 0; width: min(300px, 70%); z-index: 5; overflow: auto;
+  background: var(--panel); border-right: 1px solid var(--border); box-shadow: 4px 0 14px rgba(0,0,0,.18); font-size: 12.5px; padding: 6px 0; }
+#pdf-outline[hidden] { display: none; }
+#pdf-outline ul { list-style: none; margin: 0; padding: 0; }
+#pdf-outline li.shut > ul { display: none; }
+#pdf-outline li.shut > .ol-row .tw { transform: rotate(-90deg); }
+#pdf-outline .ol-row { display: flex; align-items: baseline; gap: 2px; padding: 3px 8px 3px 0; }
+#pdf-outline .ol-row:hover { background: var(--panel2); }
+#pdf-outline .tw { width: 14px; flex: none; text-align: center; color: var(--muted); cursor: pointer; display: inline-block; transition: transform .1s; }
+#pdf-outline .ol-item { color: var(--text); cursor: pointer; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#pdf-outline .ol-none { color: var(--muted); padding: 8px 12px; margin: 0; line-height: 1.5; }
+#pdf-outline-btn.on { border-color: var(--accent); color: var(--accent); }
+.pdf-link:hover { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: 1px solid color-mix(in srgb, var(--accent) 45%, transparent); }
 .sync-hl { position: absolute; background: var(--hl); border-radius: 2px; pointer-events: none; animation: fade 2.2s ease-out forwards; }
 @keyframes fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 #pdf-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
@@ -222,6 +285,11 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 .tool { font: 11.5px/1.4 var(--mono); color: var(--muted); padding: 1px 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tool .st { display: inline-block; width: 14px; }
 .tool.err { color: var(--err); }
+/* Thinking and a file being written, streamed live (app.js chatSend). */
+details.thinking, details.live-file { font-size: 12px; color: var(--muted); }
+details.thinking > summary, details.live-file > summary { cursor: pointer; font: 11.5px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+details.thinking > pre { font: 12px/1.45 var(--sans); white-space: pre-wrap; word-wrap: break-word; font-style: italic; margin: 4px 0 0; padding: 4px 0 4px 10px; border-left: 2px solid var(--border); max-height: 240px; overflow: auto; }
+details.live-file > pre { font: 11.5px/1.4 var(--mono); color: var(--text); white-space: pre; margin: 4px 0 0; padding: 6px 8px; background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; max-height: 260px; overflow: auto; }
 .card { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--cm-bg); font-size: 12px; }
 .card .row { display: flex; gap: 6px; align-items: center; margin: 3px 0; }
 .card .row a { color: var(--accent); cursor: pointer; font-family: var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -229,6 +297,9 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 .card pre { font: 11.5px/1.4 var(--mono); max-height: 260px; overflow: auto; background: var(--panel); padding: 6px; border-radius: 4px; margin: 4px 0; }
 .card pre .add { color: var(--ok); } .card pre .del { color: var(--err); } .card pre .hunk { color: var(--accent); }
 .card .meta { color: var(--muted); margin-top: 4px; }
+.card .note { color: var(--muted); margin-top: 4px; }
+.card .note ul { margin: 2px 0 0; padding-left: 18px; }
+.card .note code { font: 11px var(--mono); overflow-wrap: anywhere; }
 .card .warn { color: var(--warn); }
 .card .err { color: var(--err); white-space: pre-wrap; }
 #chat-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; position: relative; }
@@ -257,7 +328,7 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 #chat-input { width: 100%; resize: vertical; font: 13px/1.4 var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 #chat-input:focus { outline: none; border-color: var(--accent); }
 .chat-actions { display: flex; align-items: center; gap: 8px; }
-.chat-actions .status { margin-right: auto; font-size: 11px; }
+.chat-actions .status { margin-right: auto; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 
 /* ---------- bottom panel */
 #panel { flex: none; background: var(--panel); border-top: 1px solid var(--border); display: flex; flex-direction: column; height: 200px; }

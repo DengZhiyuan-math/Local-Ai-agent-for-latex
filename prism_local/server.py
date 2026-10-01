@@ -358,6 +358,38 @@ def resolve_tex_name(name: str) -> str | None:
 
 RUNNING: dict = {"build": None}      # the build in progress, for /api/build/stop
 
+# A server keeps running the code it started with. When prism-local is updated, the
+# editor offers to restart it (/api/restart): the new server starts with the same
+# command line, on the same port, and the page reloads.
+CODE_DIR = Path(__file__).resolve().parent
+
+
+def code_stamp() -> float:
+    try:
+        return max(p.stat().st_mtime for p in (*CODE_DIR.glob("*.py"), *(CODE_DIR / "static").glob("*.*")))
+    except (OSError, ValueError):
+        return 0.0
+
+
+STARTED_CODE = code_stamp()
+STARTED_AT = time.time()                 # tells the page when a new server answers
+RESTART: dict = {"server": None, "again": False}
+
+
+def relaunch() -> None:
+    """Start this server again with the same command line (after it stopped listening)."""
+    argv = list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+    if "--no-browser" not in argv:
+        argv.append("--no-browser")           # the page is already open
+    try:
+        out = sys.stdout if sys.stdout and sys.stdout.fileno() >= 0 else subprocess.DEVNULL
+    except (OSError, ValueError, AttributeError):
+        out = subprocess.DEVNULL
+    kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+          if os.name == "nt" else {"start_new_session": True})
+    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                     close_fds=True, **kw)
+
 
 def run_build(mode: str, clean: bool = False) -> dict:
     """One build (see build.py). Only one runs at a time."""
@@ -483,8 +515,47 @@ class SyncTex:
                 "w": 60.0, "h": 12.0, "line": target}
 
     def inverse(self, page: int, x: float, y: float) -> dict | None:
+        """The source line typeset at (x, y) on `page`. Text that LaTeX wrote into a
+        generated file and read back (the table of contents from .toc, the bibliography from
+        .bbl) is not where you edit it: a click there goes to the .bib entry of a reference,
+        or else to the nearest line of a source file."""
+        hit = self._inverse(page, x, y)
+        if hit and hit["file"].startswith(CFG.outdir + "/"):
+            hit = (self._bib_entry(hit) if hit["file"].endswith(".bbl") else None) \
+                or self._inverse(page, x, y, lambda f: not f.startswith(CFG.outdir + "/"))
+        return hit
+
+    @staticmethod
+    def _bib_entry(hit: dict) -> dict | None:
+        """The .bib entry of the \\bibitem whose text is at hit's line of a .bbl file."""
+        try:
+            lines = (ROOT / hit["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            return None
+        key = None
+        for text in reversed(lines[:hit["line"]]):
+            m = re.search(r"\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}|\\entry\{([^}]+)\}", text)
+            if m:
+                key = m.group(1) or m.group(2)
+                break
+        if not key:
+            return None
+        entry = re.compile(r"@\w+\s*[{(]\s*" + re.escape(key.strip()) + r"\s*,")
+        for rel in list_files():
+            if not rel.endswith(".bib"):
+                continue
+            try:
+                text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            m = entry.search(text)
+            if m:
+                return {"file": rel, "line": text.count("\n", 0, m.start()) + 1}
+        return None
+
+    def _inverse(self, page: int, x: float, y: float, keep=lambda f: True) -> dict | None:
         box = self._line_box(page, x, y)
-        on_page = [r for r in self.recs if r[0] == page and r[3] > 0]
+        on_page = [r for r in self.recs if r[0] == page and r[3] > 0 and keep(r[2])]
         if box:
             base = box[5]
             row = [r for r in on_page if r[1] in self.FINE
@@ -542,7 +613,8 @@ class Handler(httpbase.Handler):
             files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f)}
                      for f in list_files()]
             return self._json({"root": ROOT.name, "files": files, "order": document_order(),
-                               "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
+                               "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
+                               "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT})
         if path == "/api/config":
             return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
                                "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
@@ -625,7 +697,15 @@ class Handler(httpbase.Handler):
             return self._json(AGENT.undo(int(body["turn"])))
         if path == "/api/build":
             r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
+            if body.get("by") == "agent" and not r.get("busy"):
+                AGENT.built(r)          # the editor shows the agent's build like its own
             return self._json(r, 409 if r.get("busy") else 200)
+        if path == "/api/restart":
+            if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
+                return self._err(409, "wait until the build or the agent's turn has finished")
+            RESTART["again"] = True
+            threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+            return self._json({"ok": True})
         if path == "/api/build/stop":
             return self._json({"ok": stop_build()})
         return self._err(404, "not found")
@@ -667,6 +747,7 @@ def main():
         sys.exit(f"prism-local: {e}")
     port = srv.server_address[1]
     url = f"http://127.0.0.1:{port}/"
+    AGENT.server_url = url              # the agent's compile tool builds through this server
     stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
     print(f"prism-local: {url}\n  project: {ROOT}\n  main:    {CFG.main}\n"
           f"  builds:  {', '.join(CFG.modes)}\n  {stop}", flush=True)
@@ -684,6 +765,7 @@ def main():
         threading.Thread(target=httpbase.idle_watchdog, daemon=True,
                          args=(srv, PRESENCE, busy, "build or agent turn")).start()
     httpbase.stop_on_signals(srv)
+    RESTART["server"] = srv
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -694,7 +776,11 @@ def main():
             httpbase.remove_ready_file(a.ready_file)
         stop_build()
         AGENT.shutdown()
-        httpbase.log("stopped")
+        if RESTART["again"]:
+            httpbase.log("restarting with the updated code")
+            relaunch()
+        else:
+            httpbase.log("stopped")
 
 
 if __name__ == "__main__":

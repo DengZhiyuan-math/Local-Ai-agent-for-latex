@@ -1,20 +1,42 @@
 /* Pop-out PDF viewer: reloads on every build, SyncTeX both ways via pdfChannel. */
 "use strict";
 
-PV.init({ scaleKey: "scale.popout" });
+PV.init({ scaleKey: "scale.popout", standalone: true });   // ⌘F searches the PDF here
 
-let editorSeen = 0;
 function note(msg, warn) {
   const n = $("#viewer-note");
   n.textContent = msg; n.className = warn ? "warn" : "";
 }
-const DEFAULT_NOTE = "Double-click to jump to the source in the editor tab";
+const DEFAULT_NOTE = "Double-click (or Ctrl-click) to jump to the source in the editor tab";
 
+// A double-click asks the editor tab to open the source. The editor answers ("jumped"),
+// and this tab then brings it to the front; with no answer, there is no editor tab.
+let jumpSeq = 0, jumpWait = null;
 PV.onInverse = (p) => {
   if (!pdfChannel) return note("This browser cannot talk to the editor tab (no BroadcastChannel).", true);
-  pdfChannel.postMessage({ type: "inverse", ...p });
-  if (Date.now() - editorSeen > 6000) note("No editor tab found — open the editor tab to jump to sources.", true);
+  const id = ++jumpSeq;
+  pdfChannel.postMessage({ type: "inverse", id, ...p });
+  note("Finding the source…");
+  clearTimeout(jumpWait);
+  jumpWait = setTimeout(() => {
+    if (id === jumpSeq) note("No editor tab found — open the editor tab to jump to sources.", true);
+  }, 3000);
 };
+function jumped(m) {
+  if (m.id !== jumpSeq) return;              // an answer to an older click, or another editor tab's
+  clearTimeout(jumpWait); jumpSeq++;
+  if (!m.ok) return note(m.msg || "No source location found here.", true);
+  const msg = `Opened ${m.file}:${m.line} in the editor tab`;
+  note(msg);
+  // Bring the editor tab to the front. Opening a window by the name of an existing one
+  // switches to it (still inside the double-click's user activation); "" keeps its page.
+  // Only a tab opened from the editor can find it by name: elsewhere the name would open
+  // a new blank tab instead.
+  if (window.opener && !window.opener.closed) {
+    if (m.name) window.open("", m.name); else window.opener.focus();
+  }
+  setTimeout(() => { if ($("#viewer-note").textContent === msg) note(DEFAULT_NOTE); }, 5000);
+}
 
 async function checkPdf() {
   const r = await api("/api/pdfstat").catch(() => null);
@@ -24,8 +46,8 @@ async function checkPdf() {
 if (pdfChannel) {
   pdfChannel.onmessage = async (ev) => {
     const m = ev.data || {};
-    editorSeen = Date.now();
-    if (m.type === "pdf" && m.mtime !== PV.mtime) await PV.load(m.mtime);
+    if (m.type === "jumped") jumped(m);
+    else if (m.type === "pdf" && m.mtime !== PV.mtime) await PV.load(m.mtime);
     else if (m.type === "forward") {
       await checkPdf();
       PV.highlight(m.r);

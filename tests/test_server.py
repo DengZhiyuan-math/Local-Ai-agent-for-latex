@@ -194,6 +194,26 @@ class SyncTeX(unittest.TestCase):
         self.assertLessEqual(abs(back["line"] - line), 1)
 
 
+class SyncTeXGeneratedFiles(unittest.TestCase):
+    """A click on text LaTeX read back from the build folder goes where it is edited."""
+
+    def setUp(self):
+        project({"main.tex": "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n",
+                 "refs.bib": "% refs\n@article {knuth84,\n  title={TeX}\n}\n",
+                 "build/main.bbl": "\\begin{thebibliography}{1}\n\n\\bibitem{knuth84}\nD. Knuth.\n"})
+        self.sync = server.SyncTex()
+        # (page, kind, file, line, x, y, w, h, d): a .bbl line, a .toc line, a main.tex line.
+        self.sync.recs = [(1, "x", "build/main.bbl", 4, 100.0, 100.0, 0, 0, 0),
+                          (2, "x", "build/main.toc", 2, 100.0, 100.0, 0, 0, 0),
+                          (2, "x", "main.tex", 3, 100.0, 300.0, 0, 0, 0)]
+
+    def test_bibliography_goes_to_the_bib_entry(self):
+        self.assertEqual(self.sync.inverse(1, 100, 100), {"file": "refs.bib", "line": 2})
+
+    def test_contents_go_to_the_nearest_source_line(self):
+        self.assertEqual(self.sync.inverse(2, 100, 100), {"file": "main.tex", "line": 3})
+
+
 class PlainText(unittest.TestCase):
     def test_titles_read_as_text(self):
         from texutil import plain_text

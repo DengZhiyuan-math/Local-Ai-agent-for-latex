@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+import mcp_compile
 from backends import SYSTEM_APPEND, Backend, Job
 from fsutil import with_line_ends_of, write_bytes
 
@@ -32,10 +33,11 @@ PROJECT_RULES = ("CLAUDE.md", "AGENTS.md")
 
 TOOL_PROMPT = """\
 You work on the author's LaTeX project through these tools: list_files,
-read_file and search, and in edit mode write_file and edit_file. Paths are
-relative to the project root. Read a file before you change it; prefer
-edit_file with a short unique old_string over rewriting a whole file. You
-cannot run commands or compile; the author compiles in the editor.
+read_file and search, and in edit mode write_file, edit_file and compile.
+Paths are relative to the project root. Read a file before you change it;
+prefer edit_file with a short unique old_string over rewriting a whole file.
+compile runs the editor's own build and returns the errors with file:line.
+You cannot run commands.
 """
 
 
@@ -65,8 +67,10 @@ WRITE_TOOLS = [
         {"path": _PATH, "old_string": {"type": "string"}, "new_string": {"type": "string"},
          "replace_all": {"type": "boolean"}}, ["path", "old_string", "new_string"]),
 ]
+COMPILE_TOOL = _fn("compile", mcp_compile.TOOL["description"],
+                   mcp_compile.TOOL["inputSchema"]["properties"], [])
 TOOL_LABELS = {"list_files": "Glob", "read_file": "Read", "search": "Grep",
-               "write_file": "Write", "edit_file": "Edit"}
+               "write_file": "Write", "edit_file": "Edit", "compile": "Compile"}
 
 
 class ToolError(Exception):
@@ -123,6 +127,8 @@ class OpenAICompat(Backend):
         job.emit({"t": "init", "session_id": sid, "model": model})
         msgs.append({"role": "user", "content": job.prompt})
         tools = READ_TOOLS + (WRITE_TOOLS if job.mode == "edit" else [])
+        if job.mode == "edit" and job.server_url:
+            tools = tools + [COMPILE_TOOL]
         usage = {"in": 0, "out": 0}
         denials: list[str] = []
         res = {"session_id": sid, "exit": 0, "usage": usage, "denials": denials}
@@ -220,6 +226,7 @@ class OpenAICompat(Backend):
                             job.emit({"t": "delta", "text": delta["content"]})
                         if delta.get("reasoning_content"):
                             reasoning.append(delta["reasoning_content"])
+                            job.emit({"t": "thinking", "text": delta["reasoning_content"]})
                         for tc in delta.get("tool_calls") or []:
                             slot = calls.setdefault(tc.get("index", len(calls)),
                                                     {"id": "", "name": "", "arguments": ""})
@@ -281,6 +288,14 @@ class OpenAICompat(Backend):
         return r, p
 
     def tool(self, job: Job, name: str, args: dict, denials: list[str]) -> str:
+        if name == "compile":
+            if job.mode != "edit" or not job.server_url:
+                raise ToolError("compiling is not available in this turn")
+            try:
+                r = mcp_compile.build(job.server_url, bool(args.get("clean")))
+            except (OSError, ValueError) as e:
+                raise ToolError(f"could not compile: {e}") from None
+            return mcp_compile.report(r)[0]
         if name == "list_files":
             return "\n".join(job.files()) or "(no editable files)"
         if name == "read_file":

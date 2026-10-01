@@ -7,6 +7,7 @@
 <link rel="stylesheet" href="/static/vendor/codemirror.css">
 <link rel="stylesheet" href="/static/vendor/dialog.css">
 <link rel="stylesheet" href="/static/vendor/show-hint.css">
+<link rel="stylesheet" href="/static/vendor/foldgutter.css">
 <link rel="stylesheet" href="/static/app.css">
 </head>
 <body>
@@ -18,6 +19,7 @@
     <span id="build-status" class="status"></span>
   </div>
   <div class="actions right">
+    <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This editor still runs the old version: restart it to use the new one (your files are saved first)">Update: restart</button>
     <div id="agent-box" class="split-btn">
       <button id="btn-chat" data-icon="spark" title="Show/hide the agent panel (⌘L sends the selection)">Agent</button>
       <select id="chat-provider" title="Which AI runs the agent. Add API providers in ~/.prism-local/agents.json (see README)."></select>
@@ -42,11 +44,16 @@
   <section id="editor-pane">
     <div id="editor-head">
       <div id="tabs"></div>
-      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click the PDF to jump back to the source. ⌘F search · Ctrl-Space complete">PDF</button>
+      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. ⌘F search · Ctrl-Space complete">PDF</button>
     </div>
     <div id="banner" hidden></div>
     <div id="editor"></div>
     <div id="empty-editor">Select a file on the left.</div>
+    <div id="agent-view" hidden>
+      <div id="agent-view-head"><span class="live-dot"></span><b>Agent</b><span id="agent-view-title"></span>
+        <button id="agent-view-hide" class="tiny ghost" title="Stop showing the agent's writing for this message">Hide</button></div>
+      <div id="agent-view-cm"></div>
+    </div>
   </section>
   <div class="gutter" data-resize="pdf"></div>
 
@@ -124,6 +131,9 @@
 <script src="/static/vendor/closebrackets.js"></script>
 <script src="/static/vendor/active-line.js"></script>
 <script src="/static/vendor/show-hint.js"></script>
+<script src="/static/vendor/foldcode.js"></script>
+<script src="/static/vendor/foldgutter.js"></script>
+<script src="/static/texfold.js"></script>
 <script src="/static/vendor/pdf.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/pdfview.js"></script>

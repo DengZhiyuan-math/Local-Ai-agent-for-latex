@@ -19,6 +19,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpd
 from tmpdirs import tmpdir  # noqa: E402
 import agent  # noqa: E402
 import backends  # noqa: E402
+import backend_claude  # noqa: E402
+import mcp_compile  # noqa: E402
 from backend_claude import ClaudeCode  # noqa: E402
 from backend_codex import Codex  # noqa: E402
 from backend_openai import OpenAICompat  # noqa: E402
@@ -112,6 +114,176 @@ class ClaudeScope(unittest.TestCase):
         cmd, prompt = self.cmd()
         self.assertEqual(cmd[cmd.index("--permission-mode") + 1], "plan")
         self.assertNotIn("--allowedTools", cmd)
+
+
+class ClaudeLiveEvents(unittest.TestCase):
+    """Thinking and the text of a file being written reach the panel while they stream."""
+
+    def stream(self, *events):
+        return [{"type": "stream_event", "parent_tool_use_id": None, "event": e} for e in events]
+
+    def test_write_streams_its_content(self):
+        root = Path(tempfile.gettempdir()).resolve()
+        text = "\\documentclass{amsart}\n\\title{\"Primes\" é 😀}\n\ttab \\u0041\n"
+        raw = json.dumps({"file_path": str(root / "sec" / "a.tex"), "content": text})
+        # Fragments cut anywhere, through escapes and surrogate pairs.
+        frags = [raw[i:i + 3] for i in range(0, len(raw), 3)]
+        lines = self.stream(
+            {"type": "message_start"},
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "thinking"}},
+            {"type": "content_block_delta", "index": 0,
+             "delta": {"type": "thinking_delta", "thinking": "Plan the file."}},
+            {"type": "content_block_start", "index": 1,
+             "content_block": {"type": "tool_use", "id": "tu1", "name": "Write", "input": {}}},
+            *({"type": "content_block_delta", "index": 1,
+               "delta": {"type": "input_json_delta", "partial_json": f}} for f in frags))
+        j, st = job_for(root=root), {}
+        cc = ClaudeCode("claude", {"bin": "claude"})
+        for d in lines:
+            cc.handle(d, j, st)
+        ev = j.events
+        self.assertEqual(ev[1:3], [{"t": "thinking_start"}, {"t": "thinking", "text": "Plan the file."}])
+        self.assertEqual(ev[3], {"t": "tool_start", "id": "tu1", "name": "Write"})
+        live = [e for e in ev if e["t"] == "tool_live"]
+        self.assertEqual([e["path"] for e in live if "path" in e], ["sec/a.tex"])
+        self.assertEqual("".join(e.get("text", "") for e in live), text)
+
+    def test_edit_streams_old_and_new_text(self):
+        root = Path(tempfile.gettempdir()).resolve()
+        raw = json.dumps({"file_path": str(root / "main.tex"), "old_string": "a \[x\]",
+                          "new_string": "a \begin{equation}x\end{equation}"})
+        lines = self.stream(
+            {"type": "content_block_start", "index": 0,
+             "content_block": {"type": "tool_use", "id": "e1", "name": "Edit", "input": {}}},
+            *({"type": "content_block_delta", "index": 0,
+               "delta": {"type": "input_json_delta", "partial_json": raw[i:i + 4]}}
+              for i in range(0, len(raw), 4)))
+        j, st = job_for(root=root), {}
+        cc = ClaudeCode("claude", {"bin": "claude"})
+        for d in lines:
+            cc.handle(d, j, st)
+        live = [e for e in j.events if e["t"] == "tool_live"]
+        self.assertEqual("".join(e.get("old", "") for e in live), "a \[x\]")
+        self.assertEqual("".join(e.get("text", "") for e in live), "a \begin{equation}x\end{equation}")
+        done = next(i for i, e in enumerate(live) if e.get("old_done"))
+        self.assertFalse(any("text" in e for e in live[:done]), "the old text is complete first")
+
+    def test_tools_say_where_they_work(self):
+        root = Path(tempfile.gettempdir()).resolve()
+        j, st = job_for(root=root), {}
+        cc = ClaudeCode("claude", {"bin": "claude"})
+        cc.handle({"type": "assistant", "parent_tool_use_id": None, "message": {"content": [
+            {"type": "tool_use", "id": "r1", "name": "Read",
+             "input": {"file_path": str(root / "sec" / "a.tex"), "offset": 20, "limit": 11}},
+            {"type": "tool_use", "id": "r2", "name": "Read", "input": {"file_path": str(root / "b.tex")}},
+            {"type": "tool_use", "id": "g1", "name": "Grep", "input": {"pattern": "x"}}]}}, j, st)
+        r1, r2, g1 = j.events
+        self.assertEqual((r1["path"], r1["lines"]), ("sec/a.tex", [20, 30]))
+        self.assertEqual(r2["path"], "b.tex")
+        self.assertNotIn("lines", r2, "a whole file is not a range to mark")
+        self.assertNotIn("path", g1)
+
+    def test_other_tools_stream_nothing(self):
+        j, st = job_for(), {}
+        cc = ClaudeCode("claude", {"bin": "claude"})
+        for d in self.stream(
+                {"type": "content_block_start", "index": 0,
+                 "content_block": {"type": "tool_use", "id": "b", "name": "Bash", "input": {}}},
+                {"type": "content_block_delta", "index": 0,
+                 "delta": {"type": "input_json_delta", "partial_json": '{"command": "ls"}'}}):
+            cc.handle(d, j, st)
+        self.assertEqual([e["t"] for e in j.events], ["tool_start"])
+
+
+class ClaudeShell(unittest.TestCase):
+    """A turn here cannot approve a shell command: without allow rules there is no shell."""
+
+    def setUp(self):
+        self.cfg = tmpdir()                     # an empty user config, not the real one
+        old = os.environ.get("CLAUDE_CONFIG_DIR")
+        os.environ["CLAUDE_CONFIG_DIR"] = str(self.cfg)
+        self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR") if old is None
+                        else os.environ.__setitem__("CLAUDE_CONFIG_DIR", old))
+        self.root = tmpdir()
+        self.claude = ClaudeCode("claude", {"bin": "claude"})
+
+    def disallowed(self):
+        cmd, _ = self.claude.command(job_for(mode="edit", root=self.root))
+        if "--disallowedTools" not in cmd:
+            return []
+        i = cmd.index("--disallowedTools") + 1
+        return cmd[i:i + len(backend_claude.SHELL_TOOLS)]
+
+    def test_no_rules_no_shell(self):
+        self.assertEqual(self.disallowed(), ["Bash", "PowerShell", "Monitor"])
+
+    def test_allowed_commands_keep_the_shell(self):
+        (self.root / ".claude").mkdir()
+        (self.root / ".claude" / "settings.json").write_text(
+            json.dumps({"permissions": {"allow": ["Bash(latexmk:*)"]}}), encoding="utf-8")
+        self.assertEqual(self.disallowed(), [])
+
+    def test_refused_steps_are_named(self):
+        j, st = job_for(root=self.root), {}
+        self.claude.handle({"type": "result", "permission_denials": [
+            {"tool_name": "Bash", "tool_input": {"command": "latexmk -pdf main.tex"}}]}, j, st)
+        self.assertEqual(st["denied"], [{"tool": "Bash", "what": "latexmk -pdf main.tex"}])
+
+
+class CompileTool(unittest.TestCase):
+    """The agent compiles with the editor's build (mcp_compile.py), not a shell."""
+
+    def test_claude_gets_the_tool(self):
+        cc = ClaudeCode("claude", {"bin": "claude"})
+        cmd, _ = cc.command(job_for(mode="edit", root=tmpdir(), server_url="http://127.0.0.1:9/"))
+        cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
+        args = cfg["mcpServers"]["prism"]["args"]
+        self.assertTrue(args[0].endswith("mcp_compile.py"))
+        self.assertEqual(args[1:], ["--url", "http://127.0.0.1:9/"])
+        self.assertIn(backend_claude.COMPILE_TOOL, cmd[cmd.index("--allowedTools") + 1:])
+
+    def test_protocol(self):
+        a = mcp_compile.answer({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+                                "params": {"protocolVersion": "2025-06-18"}}, "u")
+        self.assertEqual(a["result"]["protocolVersion"], "2025-06-18")
+        self.assertIsNone(mcp_compile.answer({"jsonrpc": "2.0", "method": "notifications/initialized"}, "u"))
+        tools = mcp_compile.answer({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, "u")
+        self.assertEqual([t["name"] for t in tools["result"]["tools"]], ["compile"])
+
+    def test_report_lists_errors_with_lines(self):
+        text, failed = mcp_compile.report({"exit": 1, "engine": "pdflatex", "seconds": 2.1, "diagnostics": [
+            {"severity": "error", "file": "main.tex", "line": 12, "message": "Undefined control sequence"},
+            {"severity": "warning", "file": "main.tex", "line": 3, "message": "Reference `x' undefined"}]})
+        self.assertTrue(failed)
+        self.assertIn("1 error(s), 1 warning(s)", text)
+        self.assertIn("- error: main.tex:12: Undefined control sequence", text)
+        text, failed = mcp_compile.report({"exit": 0, "diagnostics": []})
+        self.assertFalse(failed)
+        self.assertTrue(text.startswith("Build OK."))
+
+
+class ClaudeBilling(unittest.TestCase):
+    """total_cost_usd is a list price: it is a real cost only with an API key."""
+
+    def result(self, key_source):
+        cc, j, st = ClaudeCode("claude", {"bin": "claude"}), job_for(), {}
+        cc.handle({"type": "system", "subtype": "init", "session_id": "s",
+                   "apiKeySource": key_source}, j, st)
+        cc.handle({"type": "result", "subtype": "success", "total_cost_usd": 5.353,
+                   "usage": {"input_tokens": 4, "cache_creation_input_tokens": 100,
+                             "cache_read_input_tokens": 900, "output_tokens": 50}}, j, st)
+        return st
+
+    def test_subscription_shows_no_price(self):
+        st = self.result("none")
+        self.assertIsNone(st["cost"])
+        self.assertEqual(st["billing"], "subscription")
+        self.assertEqual(st["usage"], {"in": 1004, "out": 50})
+
+    def test_api_key_shows_the_price(self):
+        st = self.result("ANTHROPIC_API_KEY")
+        self.assertEqual(st["cost"], 5.353)
+        self.assertEqual(st["billing"], "api")
 
 
 class CodexBackend(unittest.TestCase):
