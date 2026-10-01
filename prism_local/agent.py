@@ -41,6 +41,10 @@ class AgentManager:
         self.lock = threading.Lock()
         self.active: Job | None = None
         self.server_url: str | None = None    # the editor server, for the compile tool
+        # Called before a turn's snapshot, and with the files a turn (or its Undo) changed:
+        # the server commits them to the project's repository (gitsync.py).
+        self.on_start: Callable[[], None] = lambda: None
+        self.on_changed: Callable[[list[str], str], None] = lambda paths, why: None
 
     def backend(self, provider: str | None) -> Backend | None:
         return self.backends.get(provider or self.default)
@@ -126,6 +130,10 @@ class AgentManager:
         job.root, job.files = self.root_fn(), self.files_fn
         job.server_url = self.server_url
         job.writable = lambda rel: self._writable(job, rel)
+        try:
+            self.on_start()                      # your edits so far, committed apart
+        except Exception:  # noqa: BLE001 — a failed commit must not stop the turn
+            pass
         job.before = self._snapshot()
         threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
         return {"job": job.id, "provider": backend.id}
@@ -171,9 +179,14 @@ class AgentManager:
                   "reverted": reverted,
                   "session_id": res.get("session_id") or job.session_id,
                   "duration": res.get("duration") or int((time.time() - t0) * 1000)}
-            for k in ("cost", "billing", "usage", "is_error", "subtype", "denials", "denied", "stderr"):
+            for k in ("cost", "billing", "usage", "context", "is_error", "subtype", "denials", "denied", "stderr"):
                 if res.get(k) is not None:
                     ev[k] = res[k]
+            if changed:
+                try:
+                    self.on_changed([c["path"] for c in changed], job.prompt)
+                except Exception:  # noqa: BLE001
+                    pass
             job.emit(ev)
             with job.cond:
                 job.done = True
@@ -251,4 +264,9 @@ class AgentManager:
         rels = [rel for rel in sorted(set(job.before) | set(job.after))
                 if job.before.get(rel) != job.after.get(rel)]
         restored = self._restore(job, rels)
+        if restored:
+            try:
+                self.on_changed(restored, "Undo of an agent turn")
+            except Exception:  # noqa: BLE001
+                pass
         return {"restored": restored, "skipped": [r for r in rels if r not in restored]}

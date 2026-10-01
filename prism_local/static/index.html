@@ -19,6 +19,20 @@
     <span id="build-status" class="status"></span>
   </div>
   <div class="actions right">
+    <button id="btn-pdf-here" class="ghost" data-icon="popout" hidden title="The PDF is open in its own tab. Click to close that tab and show the PDF here again.">PDF in its own tab · Show here</button>
+    <div id="sync-box" hidden>
+      <button id="btn-sync" class="ghost" aria-haspopup="menu" aria-expanded="false" data-icon="cloud"><span id="sync-label">GitHub</span></button>
+      <div id="sync-menu" class="dropdown" role="menu" hidden>
+        <div class="dd-head">GitHub</div>
+        <div class="dd-note" id="sync-detail"></div>
+        <button type="button" class="dd-item" data-sync="commit">Save to GitHub now <small>commit &amp; push</small></button>
+        <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub <small>pull</small></button>
+        <button type="button" class="dd-item" data-sync="history">History of this file…</button>
+        <a class="dd-item" id="sync-github" target="_blank" rel="noopener" hidden>Open the repository on GitHub</a>
+        <hr>
+        <label class="dd-item" title="Commit a moment after you stop editing and after each agent turn, push every commit, and pull what changed on GitHub"><input type="checkbox" id="sync-auto"> Record and sync automatically</label>
+      </div>
+    </div>
     <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This editor still runs the old version: restart it to use the new one (your files are saved first)">Update: restart</button>
     <div id="agent-box" class="split-btn">
       <button id="btn-chat" data-icon="spark" title="Show/hide the agent panel (⌘L sends the selection)">Agent</button>
@@ -95,11 +109,22 @@
     <div id="agent-account" hidden></div>
     <div id="quota"></div>
     <div id="chat-log"></div>
+    <div id="chat-drop" hidden><div>Drop files to add them to your message</div></div>
     <div id="chat-foot">
       <div id="chat-scope"></div>
       <div id="slash-menu" role="listbox" hidden></div>
+      <div id="chat-files"></div>
       <textarea id="chat-input" rows="3" placeholder="Ask the agent… @ a file or the selection to limit its edits, / for commands (↵ send, ⇧↵ newline)"></textarea>
       <div class="chat-actions">
+        <button id="chat-add" class="icon ghost" data-icon="plus" title="Add files to this message (or drag them onto the panel, or paste an image)" aria-label="Add files"></button>
+        <input type="file" id="chat-file" multiple hidden>
+        <div id="ctx" hidden>
+          <button id="ctx-ring" class="ghost" aria-label="Context window" aria-haspopup="dialog" aria-expanded="false">
+            <svg viewBox="0 0 20 20" aria-hidden="true"><circle class="track" cx="10" cy="10" r="7.5"/><circle class="fill" cx="10" cy="10" r="7.5"/></svg>
+            <span id="ctx-label"></span>
+          </button>
+          <div id="ctx-pop" role="dialog" hidden></div>
+        </div>
         <span id="chat-status" class="status"></span>
         <button id="chat-send" class="primary">Send</button>
       </div>
@@ -112,12 +137,14 @@
     <button data-panel="problems" class="active">Problems <span id="problem-count" class="badge"></span></button>
     <button data-panel="output">Output</button>
     <button data-panel="diff">Diff</button>
+    <button data-panel="history">History</button>
     <button id="panel-toggle" class="icon ghost" data-icon="up" title="Show/hide panel" aria-label="Show/hide panel"></button>
   </div>
   <div id="panel-body">
     <ul id="problems" class="panel-view"></ul>
     <pre id="output" class="panel-view" hidden></pre>
     <pre id="diff" class="panel-view" hidden></pre>
+    <div id="history" class="panel-view" hidden><ul id="hist-list"></ul><div id="hist-view"></div></div>
   </div>
 </footer>
 

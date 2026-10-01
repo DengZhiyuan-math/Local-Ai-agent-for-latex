@@ -19,12 +19,20 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
   [Codex](https://github.com/openai/codex) CLI, or an API model with a key: DeepSeek, OpenAI,
   OpenRouter, Qwen, Kimi, or a local Ollama/vLLM. Every turn ends with a per-file diff and
   **Undo this turn**. With Claude Code the panel also shows your remaining 5-hour and 7-day
-  usage limits.
+  usage limits, and a ring by Send shows how full the conversation's context window is.
 - **Home page**: all your projects in one place, with PDF thumbnails, titles, git state and
   which ones are open. Create a project from a template, add an existing folder, pin, rename
   or open any project in one click. The ⌂ button in the editor brings you back.
 - **Autosave**: edits are saved a moment after you stop typing, as in Overleaf. There is no
   Save button. Auto-compile (in the Compile menu) builds shortly after that.
+- **History and sync with GitHub**: in a project with its own repository, your changes are
+  committed two minutes after you stop editing (at the latest ten minutes after the first),
+  each agent turn gets a commit of its own with your request as the message, and every commit
+  is pushed. Changes on GitHub (another computer) are pulled in. The GitHub button in the top
+  bar says where things stand and has *Save to GitHub now*, *Get changes from GitHub* and a
+  switch; the **History** tab lists every version of the open file, shows what each changed,
+  and restores one. Build output is never committed, and histories that diverged are reported,
+  never merged for you.
 - **Works with other tools**: files changed on disk (by Claude Code in a terminal, `git
   checkout`, another editor) reload automatically. A save never silently overwrites a newer
   version on disk, and keeps the file's line endings (CRLF or LF).
@@ -387,6 +395,14 @@ Consequences:
   those commands. The card at the end of a turn names any step that was refused.
 - **Ask** mode (`plan`) is read-only.
 - Nothing from the editor is sent unless you @-mention it.
+- **Add files** to a message with **+**, by dragging them onto the panel, or by pasting an
+  image. They are saved in the project's `prism-uploads/` folder (up to 25 MB each) and the
+  message tells the agent where they are; Claude Code also reads PDFs and images.
+- **Added files go to GitHub.** Each one is committed on its own in the project's repository
+  (your other changes are left as they are) and pushed; its chip says *✓ GitHub*, *local*
+  (no repository of its own, no remote, or `prism-uploads/` in `.gitignore`) or *not pushed*
+  with git's message. A project inside another repository (like `examples/minimal`) is never
+  committed to that one.
 - The conversation continues across messages until you press **New chat**.
 - After each turn, a card lists the changed files with diffs and offers **Undo this turn**.
   - Undo restores a file byte for byte, and only if nobody edited it since that turn.
@@ -519,6 +535,7 @@ prism_local/agent.py       agent turns for every provider: scope, per-turn diffs
 prism_local/backends.py    the backend interface, presets and ~/.prism-local/agents.json
 prism_local/backend_*.py   Claude Code, Codex CLI and OpenAI-compatible API backends
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
+prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0)
 examples/minimal/          a small amsart project to try it on

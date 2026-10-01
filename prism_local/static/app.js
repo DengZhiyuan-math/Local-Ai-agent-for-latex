@@ -91,6 +91,7 @@ async function openFile(path, line) {
   renderTabs(); renderTree(); showBanner(t);
   persistSession();
   if (line) jumpToLine(line);
+  if (!$("#history").hidden && !$("#panel").classList.contains("collapsed")) showHistory(path);   // follows the file
   cm.focus();
   cm.refresh();
 }
@@ -319,7 +320,98 @@ async function poll() {
   if (r.pdf_mtime && r.pdf_mtime !== S.pdfMtime && !S.building) showPdf(r.pdf_mtime);
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
+  if (r.sync) renderSync(r.sync);
 }
+
+/* ------------------------------------------------------------------ GitHub sync */
+// The project's changes are committed to its repository and pushed (gitsync.py): after you
+// stop editing, after each agent turn, and from this menu. The button says how far that is.
+function ago(t) {
+  const s = Math.max(0, Date.now() / 1000 - t);
+  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago`
+    : new Date(t * 1000).toLocaleDateString();
+}
+function renderSync(st) {
+  S.sync = st;
+  $("#sync-box").hidden = !st.own;
+  if (!st.own) return;
+  const b = $("#btn-sync"), label = $("#sync-label");
+  let text, cls = "", detail;
+  const when = st.last_push || (st.last_commit && st.last_commit.at);
+  if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
+  else if (st.error) { text = "Not synced"; cls = "warn"; detail = st.error; }
+  else if (st.state !== "idle") { text = { committing: "Saving…", pushing: "Pushing…", pulling: "Pulling…" }[st.state] || "Syncing…"; cls = "busy"; detail = "Working with git…"; }
+  else if (st.pending) {
+    const n = Math.ceil((st.next_autosave || 0) / 60);
+    text = "Unsaved changes"; cls = "pending";
+    detail = `Your latest edits are saved on disk, not yet in GitHub. They are committed ${n <= 0 ? "now" : `in about ${n} min`} (or once you stop editing for 2 min).`;
+  }
+  else if (st.ahead && st.remote) { text = `${st.ahead} to push`; cls = "pending"; detail = `${st.ahead} commit${st.ahead > 1 ? "s" : ""} not on GitHub yet.`; }
+  else if (!st.remote) { text = "Saved locally"; cls = "off"; detail = "Committed in the project's repository. It has no GitHub remote, so nothing is pushed."; }
+  else { text = "Saved to GitHub"; cls = "ok"; detail = `Everything is on GitHub (${esc(st.upstream || "origin")})${when ? ", " + ago(when) : ""}.`; }
+  label.textContent = text;
+  b.className = "ghost sync-" + cls;
+  b.title = detail.replace(/<[^>]+>/g, "");
+  const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
+  $("#sync-detail").innerHTML = esc(detail) + last;
+  $("#sync-auto").checked = !!st.enabled;
+  if (st.notice) toast(st.notice + "; the editor shows the new versions.");
+}
+function syncMenu(open) { $("#sync-menu").hidden = !open; $("#btn-sync").setAttribute("aria-expanded", String(open)); }
+$("#btn-sync").onclick = async (e) => {
+  e.stopPropagation(); syncMenu($("#sync-menu").hidden);
+  if (!$("#sync-menu").hidden && !S.githubUrl) {
+    const r = await api("/api/git/github").catch(() => ({}));
+    S.githubUrl = r.github || "";
+    if (S.githubUrl) { $("#sync-github").href = S.githubUrl; $("#sync-github").hidden = false; }
+  }
+};
+$("#sync-menu").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const b = e.target.closest("[data-sync]"); if (!b) return;
+  syncMenu(false);
+  if (b.dataset.sync === "history") return showHistory();
+  if (b.dataset.sync === "commit" && !(await saveAll())) return;
+  renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
+  const r = await api("/api/git/sync", { action: b.dataset.sync }).catch(() => null);
+  if (r) renderSync(r);
+  await poll();
+});
+$("#sync-auto").onchange = async (e) => { const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" }); renderSync(r); };
+document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) syncMenu(false); });
+
+// History: the commits that changed the open file; one of them shows what it changed and
+// can be put back (as an edit of yours, which is saved and committed like any other).
+async function showHistory(path = S.active) {
+  openPanel("history");
+  const list = $("#hist-list"), view = $("#hist-view");
+  view.innerHTML = "";
+  if (!path) { list.innerHTML = `<li class="none">Open a file to see its history.</li>`; return; }
+  list.innerHTML = `<li class="none">Loading the history of ${esc(path)}…</li>`;
+  const r = await api("/api/git/log?path=" + encodeURIComponent(path)).catch(() => ({}));
+  const commits = r.commits || [];
+  if (!commits.length) { list.innerHTML = `<li class="none">${esc(r.error || `No commits of ${path} yet.`)}</li>`; return; }
+  list.innerHTML = `<li class="hist-file">${esc(path)} · ${commits.length} version${commits.length > 1 ? "s" : ""}</li>` + commits.map((c, i) =>
+    `<li data-rev="${c.hash}" data-path="${esc(path)}"><span class="hist-when" title="${esc(new Date(c.at * 1000).toLocaleString())}">${esc(ago(c.at))}</span>`
+    + `<span class="hist-msg">${esc(c.message)}</span><span class="hist-hash">${c.hash.slice(0, 7)}${i === 0 ? " · latest" : ""}</span></li>`).join("");
+}
+$("#hist-list").addEventListener("click", async (e) => {
+  const li = e.target.closest("li[data-rev]"); if (!li) return;
+  document.querySelectorAll("#hist-list li.sel").forEach((x) => x.classList.remove("sel")); li.classList.add("sel");
+  const r = await api(`/api/git/show?rev=${li.dataset.rev}&path=${encodeURIComponent(li.dataset.path)}`);
+  const diff = (r.diff || "").split("\n").filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join("\n");
+  $("#hist-view").innerHTML = `<div class="hist-bar"><b>${esc(li.querySelector(".hist-msg").textContent)}</b>`
+    + (r.content != null ? `<button class="tiny" id="hist-restore">Restore this version</button>` : "") + `</div>`
+    + `<pre>${diff ? diffHtml(diff) : "(this commit did not change the text)"}</pre>`;
+  const btn = $("#hist-restore");
+  if (btn) btn.onclick = async () => {
+    await openFile(li.dataset.path);
+    const t = activeTab(); if (!t || t.path !== li.dataset.path) return;
+    t.doc.setValue(r.content);                // an edit of yours: ⌘Z takes it back, autosave records it
+    toast(`Restored ${t.path} as of ${li.querySelector(".hist-when").textContent}. Undo with ⌘Z.`);
+  };
+});
+$("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('[data-panel="history"]'); if (b) showHistory(); });
 
 // prism-local was updated while this server ran: restart it, then load the new page.
 $("#btn-restart").onclick = async () => {
@@ -331,7 +423,10 @@ $("#btn-restart").onclick = async () => {
   for (let i = 0; i < 60; i++) {           // the new server listens within a few seconds
     await new Promise((res) => setTimeout(res, 500));
     const t = await fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
-    if (t && t.server !== S.server) return location.reload();
+    if (t && t.server !== S.server) {
+      if (pdfChannel) pdfChannel.postMessage({ type: "reload" });     // the pop-out PDF too
+      return location.reload();
+    }
   }
   b.disabled = false; b.textContent = "Update: restart";
   toast("The server did not come back. Reopen the project from the Home page.");
@@ -551,9 +646,13 @@ $("#pdf-scroll").addEventListener("click", (e) => {
 });
 $("#pdf-scroll").addEventListener("dblclick", () => clearTimeout(pdfHintTimer));
 
-// Pop-out viewer: while a viewer tab is alive, the inline PDF pane is hidden.
-const POP = { alive: false, last: 0 };
+// Pop-out viewer: while a viewer tab is alive, the inline PDF pane is hidden, and the top
+// bar says where the PDF went. "Show here" closes that tab, or, where the browser does not
+// let it close, shows the PDF here anyway until you pop it out again.
+const POP = { alive: false, last: 0, here: false };
 function setPopped(on) {
+  if (on && POP.here) on = false;
+  $("#btn-pdf-here").hidden = !on;
   if (POP.alive === on) return;
   POP.alive = on;
   $("#pdf-pane").hidden = on; document.querySelector('.gutter[data-resize="pdf"]').hidden = on;
@@ -563,7 +662,13 @@ function setPopped(on) {
   if (!on && S.pdfMtime && S.pdfMtime !== PV.mtime) PV.load(S.pdfMtime);
 }
 let popWin = null;
+$("#btn-pdf-here").onclick = () => {
+  if (pdfChannel) pdfChannel.postMessage({ type: "close" });
+  POP.here = true; setPopped(false);
+  if (S.pdfMtime) PV.load(S.pdfMtime);
+};
 function popOut() {
+  POP.here = false;
   popWin = window.open("/viewer", "prism-pdf");
   if (popWin) popWin.focus();
 }
@@ -709,7 +814,41 @@ async function loadAccount() {
 }
 function loadProvider() {
   C.session = provGet("session"); C.model = provGet("model"); C.effort = provGet("effort");
+  const c = provGet("context");                    // how full this conversation's context is
+  renderContext(c && c.session === C.session ? c : null);
 }
+
+/* How full the conversation's context window is, as a ring by the Send button (like the
+   Claude desktop app); the details open on hover or click. From Claude Code's usage of
+   each message: what the model read plus what it wrote. */
+function renderContext(c) {
+  const box = $("#ctx");
+  if (!c || !c.used) { box.hidden = true; return; }
+  box.hidden = false;
+  const k = (n) => (n >= 1e6 ? +(n / 1e6).toFixed(n % 1e6 ? 1 : 0) + "M" : n >= 1e3 ? Math.round(n / 1e3) + "k" : String(n));
+  const used = c.window ? Math.min(1, c.used / c.window) : null;
+  const pct = used === null ? null : Math.round(used * 100);
+  const ring = $("#ctx-ring .fill"), len = 2 * Math.PI * 7.5;
+  ring.style.strokeDasharray = `${len}`;
+  ring.style.strokeDashoffset = `${len * (1 - (used ?? 0))}`;
+  const level = used === null ? "" : used >= 0.9 ? "err" : used >= 0.75 ? "warn" : "";
+  $("#ctx-ring").className = "ghost " + level;
+  // The percentage shows by the ring once half the window is used; before, on hover.
+  $("#ctx-label").textContent = pct !== null && pct >= 50 ? `${pct}%` : "";
+  $("#ctx-ring").title = "";
+  $("#ctx-pop").innerHTML = `<div class="ctx-head"><b>Context window</b>${pct !== null ? `<span class="${level}">${pct}% used</span>` : ""}</div>`
+    + `<div class="ctx-bar"><i class="${level}" style="width:${Math.max(1, pct ?? 0)}%"></i></div>`
+    + `<div class="ctx-num">${k(c.used)}${c.window ? ` / ${k(c.window)}` : ""} tokens${c.window ? ` · ${k(Math.max(0, c.window - c.used))} left` : ""}</div>`
+    + `<div class="ctx-note">${used !== null && used >= 0.75
+      ? "Nearly full. Claude Code summarizes the conversation automatically when it runs out; type <code>/compact</code> to do it now, or start a <b>New</b> chat."
+      : "Everything in this conversation so far: your messages, the files the agent read, its replies. <b>New</b> starts an empty one."}</div>`;
+}
+$("#ctx-ring").onclick = (e) => {
+  e.stopPropagation();
+  const pop = $("#ctx-pop"); pop.hidden = !pop.hidden;
+  $("#ctx-ring").setAttribute("aria-expanded", String(!pop.hidden));
+};
+document.addEventListener("click", (e) => { if (!e.target.closest("#ctx")) { $("#ctx-pop").hidden = true; $("#ctx-ring").setAttribute("aria-expanded", "false"); } });
 loadProvider();
 
 function chatHidden(h) {
@@ -982,6 +1121,113 @@ const AV = {
   },
 };
 
+/* Files added to a message: the + button, files dragged onto the panel, an image pasted
+   into the box. Each is saved in the project's prism-uploads/ folder (/api/upload),
+   committed in the project's repository and pushed to GitHub, and shown as a chip whose
+   badge says how that went. The message tells the agent where the files are, and it
+   reads them with its file tools (Claude Code reads PDFs and images too). */
+const ATT = {
+  files: [],             // {id, name, size, path|null (uploading), error}
+  seq: 0,
+  MAX: 25 * 1024 * 1024,
+
+  render() {
+    $("#chat-files").innerHTML = this.files.map((f) => `<span class="att ${f.error ? "err" : f.path ? "" : "busy"}" ${f.path ? `data-path="${esc(f.path)}"` : ""} title="${esc(f.error || f.path || "uploading…")}">`
+      + `<span class="att-name">${esc(f.name)}</span><span class="att-size">${f.error ? "failed" : f.path ? this.size(f.size) : "…"}</span>`
+      + `<span class="att-sync"></span><button class="att-x" data-att="${f.id}" aria-label="Remove ${esc(f.name)}">×</button></span>`).join("");
+    this.showSync();
+  },
+
+  // The commit-and-push of each upload: a badge on its chips (here and in sent messages).
+  sync: new Map(),       // path -> {state, message}
+  timer: null,
+  showSync() {
+    const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed" };
+    document.querySelectorAll(".att[data-path]").forEach((el) => {
+      const s = this.sync.get(el.dataset.path); if (!s) return;
+      el.dataset.sync = s.state;
+      const b = el.querySelector(".att-sync"); if (b) b.textContent = label[s.state] || "";
+      el.title = `${el.dataset.path}\n${s.message || ""}`;
+    });
+  },
+  watch(path, s) {
+    this.sync.set(path, s); this.showSync();
+    if (!this.timer) this.timer = setInterval(() => this.pollSync(), 1500);
+  },
+  async pollSync() {
+    const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
+    if (!open.length) { clearInterval(this.timer); this.timer = null; return; }
+    const r = await api("/api/upload/sync?paths=" + encodeURIComponent(open.join("\n"))).catch(() => null);
+    if (!r) return;
+    for (const p of open) {
+      if (!r[p]) continue;
+      this.sync.set(p, r[p]);
+      if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
+    }
+    this.showSync();
+  },
+
+  size(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B"; },
+
+  async add(fileList) {
+    for (const file of fileList) {
+      const f = { id: ++this.seq, name: file.name || "pasted.png", size: file.size, path: null, error: null };
+      if (file.size > this.MAX) { toast(`${f.name} is larger than 25 MB.`); continue; }
+      this.files.push(f); this.render();
+      try {
+        const data = await new Promise((res, rej) => {
+          const rd = new FileReader();
+          rd.onload = () => res(String(rd.result).split(",", 2)[1] || "");
+          rd.onerror = () => rej(rd.error);
+          rd.readAsDataURL(file);
+        });
+        const r = await api("/api/upload", { name: f.name, data });
+        if (r.error || !r.path) throw new Error(r.error || "upload failed");
+        f.path = r.path; f.size = r.size;
+        if (r.sync) this.watch(r.path, r.sync);
+      } catch (e) { f.error = String(e.message || e); }
+      this.render();
+    }
+    $("#chat-input").focus();
+  },
+
+  // For the prompt: where the files are. Null when there are none.
+  block() {
+    const ok = this.files.filter((f) => f.path);
+    if (!ok.length) return null;
+    return "[Attached files] The author added these files to this message. They are saved in the project; "
+      + "read them with your file tools:\n" + ok.map((f) => `- ${f.path} (${this.size(f.size)})`).join("\n");
+  },
+};
+$("#chat-add").onclick = () => $("#chat-file").click();
+$("#chat-file").onchange = (e) => { ATT.add([...e.target.files]); e.target.value = ""; };
+$("#chat-files").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-att]"); if (!b) return;
+  ATT.files = ATT.files.filter((f) => f.id !== +b.dataset.att); ATT.render();
+});
+// A pasted image (a screenshot) becomes a file too; pasted text stays text.
+$("#chat-input").addEventListener("paste", (e) => {
+  const files = [...(e.clipboardData && e.clipboardData.files) || []];
+  if (!files.length) return;
+  e.preventDefault();
+  const stamp = new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "");
+  ATT.add(files.map((f) => (/^image\.\w+$/.test(f.name) || !f.name ? new File([f], `pasted-${stamp}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: f.type }) : f)));
+});
+// Drag files onto the agent panel.
+{
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer && e.dataTransfer.types) || []].includes("Files");
+  const chat = $("#chat");
+  chat.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; $("#chat-drop").hidden = false; });
+  chat.addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+  chat.addEventListener("dragleave", (e) => { if (!hasFiles(e)) return; if (--depth <= 0) { depth = 0; $("#chat-drop").hidden = true; } });
+  chat.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); depth = 0; $("#chat-drop").hidden = true;
+    ATT.add([...e.dataTransfer.files]);
+  });
+}
+
 async function chatSend() {
   if (C.job) return;
   const text = $("#chat-input").value.trim();
@@ -994,20 +1240,25 @@ async function chatSend() {
     return runLocal(slash[1], (slash[2] || "").trim());
   }
   if (!(await saveAll())) return toast("Resolve the save conflict before asking the agent.");
+  if (ATT.files.some((f) => !f.path && !f.error)) return toast("Wait until the files are uploaded.");
   const mode = $("#chat-mode").value;
   const mentions = parseMentions(text);
   const refs = await referenceBlock(mentions);
   let prompt;
   if (slash) { await loadCatalog(); prompt = slashPrompt(text, refs); }
   else prompt = refs ? refs + "\n\n" + text : text;
+  const attached = ATT.block(), sentFiles = ATT.files.filter((f) => f.path);
+  if (attached) prompt = slash ? `${prompt}\n\n${attached}` : `${attached}\n\n${prompt}`;   // a /command stays first
   // Only the mentioned files may change; without mentions, the whole project.
   const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
   const provider = C.provider;
   const r = await api("/api/agent", { prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
   $("#chat-input").value = ""; updateScope();
+  ATT.files = []; ATT.render();
+  setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
   const extra = [provLabel(), C.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
-  chatAppend(`${mentionHtml(text)}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
+  chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
   C.job = r.job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
   const tools = new Map();
@@ -1129,7 +1380,16 @@ async function chatSend() {
           status("working…");
         } else if (e.t === "build") showBuild(e.result);         // the agent compiled
         else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
-        else if (e.t === "done") { renderTurnCard(e); loadAccount(); }
+        else if (e.t === "context") {                          // grows with each message
+          if (C.provider === provider) renderContext({ ...e, window: e.window || (provGet("context") || {}).window });
+        }
+        else if (e.t === "done") {
+          renderTurnCard(e); loadAccount();
+          if (e.context && C.provider === provider) {
+            const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
+            provSet("context", c); renderContext(c);
+          }
+        }
       }
       if (pending) flush(stick);
       draw(stick);
@@ -1494,6 +1754,9 @@ $("#chat-new").onclick = () => {
   if (C.job) return;
   C.session = null; provSet("session", null);
   if (C.provider === "claude") store.set("chat.session", null);    // the key from before providers
+  const c = provGet("context");                                    // a new chat starts empty (keep the window size)
+  if (c) provSet("context", { window: c.window });
+  renderContext(null);
   $("#chat-log").innerHTML = ""; chatIntro(); saveChatLog();
 };
 function askAboutSelection() {

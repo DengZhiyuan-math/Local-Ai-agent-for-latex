@@ -214,6 +214,85 @@ class SyncTeXGeneratedFiles(unittest.TestCase):
         self.assertEqual(self.sync.inverse(2, 100, 100), {"file": "main.tex", "line": 3})
 
 
+class Uploads(unittest.TestCase):
+    """Files added to an agent message are saved under prism-uploads/."""
+
+    def test_names_are_made_safe(self):
+        cases = {"notes.pdf": "notes.pdf", "../../etc/passwd": "passwd",
+                 "a<b>:c?.tex": "a_b__c_.tex", "CON.txt": "CON_.txt", "  .hidden": "hidden",
+                 "C:\\Users\\x\\scan 1.png": "scan 1.png", "": "file"}
+        for given, want in cases.items():
+            self.assertEqual(server.upload_name(given), want, given)
+        self.assertLessEqual(len(server.upload_name("x" * 300 + ".pdf")), 104)
+
+    def test_same_file_once_other_file_numbered(self):
+        root = project({"main.tex": "x"})
+        self.assertEqual(server.save_upload("n.pdf", b"one"), "prism-uploads/n.pdf")
+        self.assertEqual(server.save_upload("n.pdf", b"one"), "prism-uploads/n.pdf")
+        self.assertEqual(server.save_upload("n.pdf", b"two"), "prism-uploads/n-2.pdf")
+        self.assertEqual((root / "prism-uploads" / "n-2.pdf").read_bytes(), b"two")
+        with self.assertRaises(ValueError):
+            server.save_upload("big.bin", b"0" * (server.MAX_UPLOAD + 1))
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class UploadsToGitHub(unittest.TestCase):
+    """An upload is committed alone in the project's own repository and pushed."""
+
+    def git(self, cwd, *args):
+        r = subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        return r.stdout.strip()
+
+    def repo(self, root):
+        self.git(root, "init", "-q", "-b", "main")
+        self.git(root, "config", "user.email", "t@example.com")
+        self.git(root, "config", "user.name", "T")
+        self.git(root, "config", "commit.gpgsign", "false")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-q", "-m", "init")
+
+    def test_commit_only_the_upload_and_push(self):
+        root = project({"main.tex": "one\n"})
+        self.repo(root)
+        bare = tmpdir()
+        self.git(bare, "init", "-q", "--bare")
+        self.git(root, "remote", "add", "origin", str(bare))
+        (root / "main.tex").write_text("two\n", encoding="utf-8")      # your edit, not committed
+        rel = server.save_upload("notes.pdf", b"%PDF-1.4")
+        server.sync_upload(rel)
+        self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "synced", server.UPLOAD_SYNC[rel])
+        self.assertEqual(self.git(root, "show", "--name-only", "--format=", "HEAD"), "prism-uploads/notes.pdf")
+        self.assertIn("main.tex", self.git(root, "status", "--porcelain"))
+        self.assertEqual(self.git(bare, "rev-parse", "main"), self.git(root, "rev-parse", "HEAD"))
+
+    def test_no_remote_commits_locally(self):
+        root = project({"main.tex": "x\n"})
+        self.repo(root)
+        rel = server.save_upload("a.txt", b"a")
+        server.sync_upload(rel)
+        self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
+        self.assertIn("no remote", server.UPLOAD_SYNC[rel]["message"])
+        self.assertEqual(self.git(root, "show", "--name-only", "--format=", "HEAD"), "prism-uploads/a.txt")
+
+    def test_never_in_a_surrounding_repository(self):
+        outer = tmpdir()
+        (outer / "paper").mkdir()
+        (outer / "paper" / "main.tex").write_text("x\n", encoding="utf-8")
+        self.repo(outer)
+        server.set_root(outer / "paper")
+        rel = server.save_upload("a.txt", b"a")
+        server.sync_upload(rel)
+        self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
+        self.assertEqual(self.git(outer, "rev-list", "--count", "HEAD"), "1", "nothing committed outside")
+
+    def test_not_a_repository(self):
+        project({"main.tex": "x\n"})
+        rel = server.save_upload("a.txt", b"a")
+        server.sync_upload(rel)
+        self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
+
+
 class PlainText(unittest.TestCase):
     def test_titles_read_as_text(self):
         from texutil import plain_text

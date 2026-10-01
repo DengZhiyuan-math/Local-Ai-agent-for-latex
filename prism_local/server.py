@@ -29,6 +29,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import NO_WINDOW, AgentManager  # noqa: E402
+from gitsync import GitSync  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
@@ -358,6 +359,79 @@ def resolve_tex_name(name: str) -> str | None:
 
 RUNNING: dict = {"build": None}      # the build in progress, for /api/build/stop
 
+# Files added to an agent message (the + button, drag and drop, a pasted image) are
+# saved in the project, so the agent reads them with its file tools.
+UPLOAD_DIR = "prism-uploads"
+MAX_UPLOAD = 25 * 1024 * 1024
+
+
+def upload_name(name: str) -> str:
+    """A safe file name from the browser's: no folders, no characters Windows refuses."""
+    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", str(name).replace("\\", "/").split("/")[-1]).strip(" .")
+    stem, dot, ext = name.rpartition(".")
+    if not dot:
+        stem, ext = name, ""
+    stem = stem[:100] or "file"
+    if stem.upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))}:
+        stem += "_"
+    return stem + (f".{ext[:12]}" if ext else "")
+
+
+def save_upload(name: str, data: bytes) -> str:
+    """Save an upload under prism-uploads/; the same file again is not saved twice, another
+    one with the same name gets a number (notes-2.pdf)."""
+    if len(data) > MAX_UPLOAD:
+        raise ValueError(f"the file is larger than {MAX_UPLOAD // (1024 * 1024)} MB")
+    folder = ROOT / UPLOAD_DIR
+    folder.mkdir(exist_ok=True)
+    clean = upload_name(name)
+    stem, dot, ext = clean.rpartition(".")
+    if not dot:
+        stem, ext = clean, ""
+    for n in range(1, 1000):
+        cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
+        p = folder / cand
+        if p.exists():
+            try:
+                if p.read_bytes() == data:
+                    return f"{UPLOAD_DIR}/{cand}"
+            except OSError:
+                pass
+            continue
+        write_bytes(p, data)
+        return f"{UPLOAD_DIR}/{cand}"
+    raise ValueError("too many files with this name")
+
+
+# Every upload is committed in the project's own repository, alone (other changes stay as
+# they are), and pushed, through the same machinery as the other commits (gitsync.py).
+UPLOAD_SYNC: dict[str, dict] = {}     # rel -> {"state": syncing|synced|local|failed, "message"}
+
+
+def sync_upload(rel: str) -> None:
+    """Commit the upload `rel` and push it (in a thread; the state is in UPLOAD_SYNC)."""
+    def done(state: str, message: str) -> None:
+        UPLOAD_SYNC[rel] = {"state": state, "message": message}
+    g = GITSYNC
+    try:
+        if not g.check_repo():
+            return done("local", "Saved in the project. It has no git repository of its own "
+                                 "(none, or it is inside another one), so nothing was committed.")
+        if not g.enabled:
+            return done("local", "Saved in the project. Sync with GitHub is off for this project.")
+        if g.git("check-ignore", "-q", "--", rel, timeout=20).returncode == 0:
+            return done("local", f"Saved in the project. {UPLOAD_DIR}/ is in .gitignore, so it is not committed.")
+        g.commit([rel], f"Add {rel} (a file used in the agent chat)")
+        g._remote_state()
+        if not g.has_remote:
+            return done("local", "Committed. The repository has no remote, so nothing was pushed.")
+        g.push()
+        if g.error:
+            return done("failed", "Committed, but not pushed: " + g.error)
+        done("synced", f"Committed and pushed to {g.upstream or 'origin'}.")
+    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+        done("failed", f"git: {str(e)[-300:]}")
+
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
 # command line, on the same port, and the page reloads.
@@ -574,6 +648,20 @@ class SyncTex:
 SYNC = SyncTex()
 SYNC_LOCK = threading.Lock()
 AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve)
+# The project's changes, recorded in its repository and synced with GitHub (gitsync.py).
+GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy())
+AGENT.on_start = GITSYNC.before_turn
+AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
+
+
+def github_url() -> str | None:
+    """The repository's page on GitHub, from the origin remote."""
+    try:
+        remote = git("remote", "get-url", "origin").stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?/?$", remote)
+    return "https://github.com/" + m.group(1) if m else None
 PRESENCE = Presence()
 
 
@@ -614,7 +702,16 @@ class Handler(httpbase.Handler):
                      for f in list_files()]
             return self._json({"root": ROOT.name, "files": files, "order": document_order(),
                                "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
-                               "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT})
+                               "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
+                               "sync": GITSYNC.status()})
+        if path == "/api/git/github":
+            return self._json({"github": github_url()})
+        if path == "/api/git/log":
+            if not GITSYNC.check_repo():
+                return self._json({"commits": [], "error": "This project has no git repository of its own."})
+            return self._json({"commits": GITSYNC.log(q["path"])})
+        if path == "/api/git/show":
+            return self._json(GITSYNC.show(q["rev"], q["path"]))
         if path == "/api/config":
             return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
                                "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
@@ -647,6 +744,8 @@ class Handler(httpbase.Handler):
             # --relative: paths as the project sees them, and nothing from outside it
             return self._json({"diff": git("diff", "--no-color", "--relative", "--",
                                            q.get("path") or ".", timeout=20).stdout})
+        if path == "/api/upload/sync":             # how the uploads' commits and pushes went
+            return self._json({p: UPLOAD_SYNC.get(p) for p in q.get("paths", "").split("\n") if p})
         if path == "/api/synctex/forward":
             with SYNC_LOCK:
                 if not SYNC.load():
@@ -674,7 +773,18 @@ class Handler(httpbase.Handler):
         if path == "/api/file":
             r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
                                 bool(body.get("force")))
+            if code == 200:
+                GITSYNC.touched()       # an autosave commit follows once you stop editing
             return self._json(r, code)
+        if path == "/api/git/sync":
+            action = str(body.get("action") or "")
+            if action in ("on", "off"):
+                GITSYNC.set_enabled(action == "on")
+            elif action in ("commit", "pull"):
+                GITSYNC.now(action)
+            else:
+                return self._err(400, "unknown action")
+            return self._json({**GITSYNC.status(), "github": github_url()})
         if path == "/api/agent":
             scope = body.get("scope") or None
             if scope is not None:
@@ -700,6 +810,16 @@ class Handler(httpbase.Handler):
             if body.get("by") == "agent" and not r.get("busy"):
                 AGENT.built(r)          # the editor shows the agent's build like its own
             return self._json(r, 409 if r.get("busy") else 200)
+        if path == "/api/upload":
+            import base64
+            try:
+                data = base64.b64decode(str(body.get("data") or ""), validate=True)
+            except ValueError:
+                return self._err(400, "the file data is not base64")
+            rel = save_upload(str(body.get("name") or "file"), data)
+            UPLOAD_SYNC[rel] = {"state": "syncing", "message": "Committing and pushing…"}
+            threading.Thread(target=sync_upload, args=(rel,), daemon=True).start()
+            return self._json({"path": rel, "size": len(data), "sync": UPLOAD_SYNC[rel]})
         if path == "/api/restart":
             if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
                 return self._err(409, "wait until the build or the agent's turn has finished")
@@ -766,6 +886,7 @@ def main():
                          args=(srv, PRESENCE, busy, "build or agent turn")).start()
     httpbase.stop_on_signals(srv)
     RESTART["server"] = srv
+    GITSYNC.start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
@@ -776,6 +897,7 @@ def main():
             httpbase.remove_ready_file(a.ready_file)
         stop_build()
         AGENT.shutdown()
+        GITSYNC.flush()                 # what is left is committed and pushed
         if RESTART["again"]:
             httpbase.log("restarting with the updated code")
             relaunch()

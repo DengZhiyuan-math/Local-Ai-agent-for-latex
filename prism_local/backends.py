@@ -31,6 +31,7 @@ Events a backend emits through ``job.emit`` (the panel understands exactly these
     {"t": "tool", "id": str, "name": str, "summary": str}
     {"t": "tool_result", "id": str, "error": bool, "preview": str}
     {"t": "build", "result": dict}              a build the agent ran (agent.py, not backends)
+    {"t": "context", "used": int, "window": int|None}   how full the context window is
     {"t": "rate", "rate": dict}                 Claude usage limits
     {"t": "error", "message": str}
 

@@ -262,6 +262,28 @@ class CompileTool(unittest.TestCase):
         self.assertTrue(text.startswith("Build OK."))
 
 
+class ClaudeContext(unittest.TestCase):
+    """How full the context window is: each message's usage, the window from modelUsage."""
+
+    def test_used_and_window(self):
+        cc, j, st = ClaudeCode("claude", {"bin": "claude"}), job_for(), {}
+        msg = lambda inp, read, out: {"type": "assistant", "parent_tool_use_id": None, "message": {  # noqa: E731
+            "content": [], "usage": {"input_tokens": inp, "cache_creation_input_tokens": 0,
+                                     "cache_read_input_tokens": read, "output_tokens": out}}}
+        cc.handle({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"}, j, st)
+        cc.handle(msg(10, 1000, 50), j, st)
+        self.assertEqual(j.events[-1], {"t": "context", "used": 1060, "window": None})
+        cc.handle({"type": "result", "usage": {}, "modelUsage": {
+            "claude-haiku-4-5": {"contextWindow": 200000, "inputTokens": 5},
+            "claude-sonnet-5-5": {"contextWindow": 1000000, "inputTokens": 10}}}, j, st)
+        self.assertEqual(st["context"], {"used": 1060, "window": 1000000})
+        # The next turn knows the window from its first message on.
+        j2, st2 = job_for(), {}
+        cc.handle({"type": "system", "subtype": "init", "model": "claude-sonnet-5-5"}, j2, st2)
+        cc.handle(msg(5, 2000, 10), j2, st2)
+        self.assertEqual(j2.events[-1], {"t": "context", "used": 2015, "window": 1000000})
+
+
 class ClaudeBilling(unittest.TestCase):
     """total_cost_usd is a list price: it is a real cost only with an API key."""
 
