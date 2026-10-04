@@ -418,7 +418,9 @@ Consequences:
   - **↻** refreshes them with a tiny Haiku call (counted toward your plan's limits, not billed).
   - Usage from other sessions shows up at the next update.
 - The panel finds the CLI on `PATH`. Set `CLAUDE_BIN=/path/to/claude` to override. Start
-  prism-local from the same environment you use for `claude`, including any `CLAUDE_CONFIG_DIR`.
+  prism-local from the same environment you use for `claude`, including any `CLAUDE_CONFIG_DIR`,
+  or pick the profile folder in Home → Settings → Claude account to use another login than the
+  terminal (log in once with `CLAUDE_CONFIG_DIR=<folder> claude`).
 
 ## Choosing the AI: Claude Code, Codex, DeepSeek and other APIs
 

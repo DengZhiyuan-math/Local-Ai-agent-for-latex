@@ -47,6 +47,28 @@ OVERRIDE_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_
 _account_cache: dict = {}
 
 
+# CLAUDE_CONFIG_DIR as the first prism-local process was started, passed on to the
+# servers it starts, so clearing the setting below goes back to it.
+_STARTED_CONFIG_DIR = os.environ.setdefault(
+    "PRISM_STARTED_CLAUDE_CONFIG_DIR", os.environ.get("CLAUDE_CONFIG_DIR", ""))
+
+
+def use_config_dir() -> None:
+    """Point Claude Code at the profile folder of "claude_config_dir" in Home → Settings
+    (empty: as started). Every `claude` this process starts inherits it, so the panel can
+    use another login than the terminal. Read again before each check: no restart needed."""
+    data = registry.read_json(registry.state_dir() / "settings.json") or {}
+    cfg = str(data.get("claude_config_dir") or "").strip()
+    cfg = str(Path(cfg).expanduser()) if cfg else _STARTED_CONFIG_DIR
+    if cfg:
+        os.environ["CLAUDE_CONFIG_DIR"] = cfg
+    else:
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+
+
+use_config_dir()
+
+
 def auth_overrides(root: Path | None) -> list[str]:
     """Settings that would take Claude Code away from the account login."""
     found = [f"the environment variable {v}" for v in OVERRIDE_ENV if os.environ.get(v)]
@@ -69,7 +91,8 @@ def auth_overrides(root: Path | None) -> list[str]:
 
 def claude_account(exe: str | None, root: Path | None = None, max_age: float = 30) -> dict:
     """Who Claude Code is logged in as, from `claude auth status` (local, about 0.2 s)."""
-    key = (exe, str(root))
+    use_config_dir()
+    key = (exe, str(root), os.environ.get("CLAUDE_CONFIG_DIR"))
     hit = _account_cache.get(key)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
@@ -323,6 +346,7 @@ class ClaudeCode(CliBackend):
         return [f"{tool}(./{rel})" for rel in scope for tool in ("Edit", "Write", "MultiEdit")]
 
     def command(self, job: Job) -> tuple[list[str], str]:
+        use_config_dir()                    # the profile this turn's `claude` inherits
         perm = MODES.get(job.mode, "plan")
         if job.scope:
             # acceptEdits would accept an edit to any file. In default mode a headless run
@@ -502,6 +526,7 @@ class ClaudeCode(CliBackend):
             bad = self.preflight(root)          # the account check of a turn, before any start
             if bad:
                 return {"error": bad}
+            use_config_dir()
             cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
                    "--output-format", "stream-json", "--verbose"]
             try:
@@ -542,6 +567,7 @@ class ClaudeCode(CliBackend):
         if not self.probe_lock.acquire(blocking=False):
             return {"rate": self.rate, "busy": True}
         try:
+            use_config_dir()
             cmd = [exe, "-p", "--model", "haiku", "--tools", "",
                    "--system-prompt", "Reply with the single word ok.",
                    "--no-session-persistence", "--strict-mcp-config",

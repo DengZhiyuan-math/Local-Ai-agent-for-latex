@@ -437,6 +437,7 @@ async function openSettings() {
     f.elements.github_repo.checked = !!st.github_repo;
     f.elements.github_owner.value = st.github_owner || "";
     f.elements.claude_account.value = st.claude_account || "";
+    f.elements.claude_config_dir.value = st.claude_config_dir || "";
     renderGhStatus();
   };
   fill(); dlg.showModal();
@@ -450,6 +451,7 @@ $("#form-settings").addEventListener("submit", async (e) => {
     default_parent: f.elements.default_parent.value.trim(), git_init: f.elements.git_init.checked,
     github_repo: f.elements.github_repo.checked, github_owner: f.elements.github_owner.value.trim(),
     claude_account: f.elements.claude_account.value.trim(),
+    claude_config_dir: f.elements.claude_config_dir.value.trim(),
   });
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not save the settings");
   H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.sig = null;

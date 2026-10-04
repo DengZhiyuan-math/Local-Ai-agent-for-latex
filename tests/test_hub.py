@@ -155,6 +155,23 @@ class SettingsAndGitHub(TempState):
         with self.assertRaises(ValueError):
             hub.save_settings({"claude_account": "not an email"})
 
+    def test_claude_profile_folder(self):
+        import backend_claude
+        prof = self.tmp / "profile"
+        prof.mkdir()
+        with self.assertRaises(ValueError):
+            hub.save_settings({"claude_config_dir": str(self.tmp / "missing")})
+        old = os.environ.get("CLAUDE_CONFIG_DIR")
+        self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR", None) if old is None
+                        else os.environ.__setitem__("CLAUDE_CONFIG_DIR", old))
+        self.assertEqual(hub.save_settings({"claude_config_dir": f' "{prof}" '})["claude_config_dir"],
+                         str(prof.resolve()))
+        backend_claude.use_config_dir()
+        self.assertEqual(os.environ["CLAUDE_CONFIG_DIR"], str(prof.resolve()))
+        hub.save_settings({"claude_config_dir": ""})          # back to the environment as started
+        backend_claude.use_config_dir()
+        self.assertEqual(os.environ.get("CLAUDE_CONFIG_DIR", ""), backend_claude._STARTED_CONFIG_DIR)
+
     def test_repo_names(self):
         self.assertEqual(hub.repo_name("dyn num paper"), "dyn-num-paper")
         self.assertEqual(hub.repo_name("我的论文"), "latex-project")

@@ -95,12 +95,17 @@
     <fieldset class="gh-set">
       <legend>Claude account</legend>
       <div id="claude-status" class="gh-status"></div>
+      <label class="field"><span>Claude Code profile folder <i>(CLAUDE_CONFIG_DIR; empty: as prism-local was started, usually ~/.claude)</i></span>
+        <span class="row"><input name="claude_config_dir" spellcheck="false" autocomplete="off" placeholder="~/.claude">
+          <button type="button" data-browse="claude_config_dir">Browse…</button></span></label>
       <label class="field"><span>Only allow this account <i>(empty: whichever Claude Code is logged in to)</i></span>
         <span class="row"><input name="claude_account" type="email" spellcheck="false" autocomplete="off" placeholder="you@example.org">
           <button type="button" id="claude-use-current">Use current</button></span></label>
       <p class="hint">Before each message, the agent panel checks that Claude Code is logged in to this
         account with its subscription. If it is another account, or an API key would be billed
-        (<code>ANTHROPIC_API_KEY</code>, <code>apiKeyHelper</code>, …), nothing is sent.</p>
+        (<code>ANTHROPIC_API_KEY</code>, <code>apiKeyHelper</code>, …), nothing is sent.
+        A profile folder lets the editor use another login than <code>claude</code> in your terminal:
+        log in once with <code>CLAUDE_CONFIG_DIR=&lt;folder&gt; claude</code>.</p>
     </fieldset>
     <fieldset class="gh-set">
       <legend>GitHub</legend>

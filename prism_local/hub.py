@@ -202,7 +202,8 @@ def _add(data: dict, p: Path) -> None:
 # ---------------------------------------------------------------- settings
 
 SETTINGS_DEFAULTS = {"default_parent": "", "git_init": True, "github_repo": False,
-                     "github_owner": "", "claude_account": ""}
+                     "github_owner": "", "claude_account": "",
+                     "claude_config_dir": ""}
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
@@ -232,6 +233,11 @@ def save_settings(body: dict) -> dict:
         if acct and not EMAIL_RE.fullmatch(acct):
             raise ValueError("the Claude account must be an email address")
         cur["claude_account"] = acct
+    if "claude_config_dir" in body:
+        d = str(body["claude_config_dir"] or "").strip().strip('"')
+        if d and not Path(os.path.expanduser(d)).is_dir():
+            raise ValueError(f"not a folder: {d}")
+        cur["claude_config_dir"] = str(Path(os.path.expanduser(d)).resolve()) if d else ""
     if "github_owner" in body:
         owner = str(body["github_owner"] or "").strip()
         if owner and not OWNER_RE.fullmatch(owner):
