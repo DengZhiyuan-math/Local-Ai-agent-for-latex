@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gitsync  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
@@ -147,8 +148,9 @@ def default_parent(data: dict) -> str:
 
 
 def git_info(root: Path) -> dict | None:
-    """Branch and changes of the project's own repository. A project folder inside some
-    other repository (such as prism-local's) has none of its own: report which one."""
+    """Branch and changes of the project's repository: its own, or one shared by a folder of
+    projects (then the changes are the project's own). A project folder inside some other
+    repository (such as prism-local's) has none to sync with: report which one."""
     def git(*args):      # read-only, and never holding .git/index.lock (see server.git)
         return subprocess.run(["git", "--no-optional-locks", *args], cwd=root, capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=8, **NO_WINDOW)
@@ -157,9 +159,12 @@ def git_info(root: Path) -> dict | None:
         if top.returncode != 0:
             return None
         toplevel = Path(top.stdout.strip())
+        shared = None
         if registry.norm(toplevel.resolve()) != registry.norm(root.resolve()):
-            return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
-        r = git("status", "--porcelain", "-b")
+            if not gitsync.shared_marker(toplevel):
+                return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
+            shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)}
+        r = git("status", "--porcelain", "-b", "--", ".")
         remote = git("remote", "get-url", "origin").stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
@@ -177,7 +182,7 @@ def git_info(root: Path) -> dict | None:
         web = "https://github.com/" + m.group(1)
     return {"branch": branch, "changes": len(lines) - 1,
             "ahead": int(ahead.group(1)) if ahead else 0,
-            "behind": int(behind.group(1)) if behind else 0, "github": web}
+            "behind": int(behind.group(1)) if behind else 0, "github": web, **(shared or {})}
 
 
 def entry_for(pid: str) -> dict:
@@ -284,6 +289,385 @@ def remove_folder(fid: str) -> dict:
                     del e["folder_id"]
         return {"ok": True}
     return registry.update_projects(fn)
+
+
+# ---------------------------------------------------------------- a folder's repositories
+#
+# A folder chooses how its projects (its own and its subfolders') are kept on GitHub:
+#     "separate"  every project has a repository of its own (the default);
+#     "shared"    one repository for all of them: the projects sit in one folder on disk
+#                 (subfolders become subdirectories), its top has gitsync.SHARED_MARKER,
+#                 and each editor records its own project there (gitsync.py).
+# The folder keeps {"sync": {"mode", "repo"}}. Switching never deletes anything: a project's
+# own history comes along into the shared repository, and back out of it (git subtree
+# split); a .git that is replaced is set aside, renamed.
+
+SPLIT_BACKUP = ".git-prism-separate"    # a project's own .git, after it joined a shared repository
+SHARED_BACKUP = ".git-prism-shared"     # a shared repository's .git, after its projects split up
+SHARED_IGNORE = ["build/", ".git-prism-*/", "*.prism-tmp", ".DS_Store",
+                 *(f"*{ext}" for ext in gitsync.AUX)]
+
+
+def disk_name(name: str) -> str:
+    """A folder name for disk from a Home folder's name ("Paper A: ergodicity")."""
+    return BAD_NAME.sub("-", name).strip(" .") or "folder"
+
+
+def inside(p: Path, top: Path) -> bool:
+    """Whether p is top or below it."""
+    return registry.norm(p) == registry.norm(top) or \
+        registry.norm(p).startswith(registry.norm(top).rstrip("\\/") + os.sep)
+
+
+def repo_top(p: Path) -> Path | None:
+    try:
+        r = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--show-toplevel"], cwd=p,
+                           capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           timeout=20, **NO_WINDOW)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
+
+
+def repo_kind(p: Path) -> tuple[str, Path | None]:
+    """own | shared | nested (inside some other repository) | none, and the repository's top."""
+    top = repo_top(p) if p.is_dir() else None
+    if top is None:
+        return "none", None
+    if registry.norm(top) == registry.norm(p.resolve()):
+        return "own", top
+    return ("shared" if gitsync.shared_marker(top) else "nested"), top
+
+
+def github_of(top: Path | None) -> str | None:
+    if top is None:
+        return None
+    try:
+        remote = run_git(top, "remote", "get-url", "origin", timeout=20).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return None
+    m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?/?$", remote)
+    return "https://github.com/" + m.group(1) if m else (remote or None)
+
+
+def folder_projects(data: dict, fid: str) -> list[tuple[dict, list[str]]]:
+    """The projects in folder fid and its subfolders, with the subfolders' path from fid."""
+    out = []
+
+    def walk(f: str, parts: list[str]) -> None:
+        out.extend((e, parts) for e in data["projects"] if e.get("folder_id") == f)
+        for c in sorted((c for c in data.get("folders", []) if c.get("parent") == f),
+                        key=lambda c: c["name"].lower()):
+            walk(c["id"], parts + [disk_name(c["name"])])
+    walk(fid, [])
+    return out
+
+
+def sync_owner(data: dict, fid: str) -> dict | None:
+    """The folder (fid or one above it) whose choice applies to fid: the nearest one that
+    chose a shared repository, else fid itself."""
+    f = _folder(data, fid)
+    up = f
+    while up is not None:
+        if (up.get("sync") or {}).get("mode") == "shared":
+            return up
+        up = _folder(data, up["parent"]) if up.get("parent") else None
+    return f
+
+
+def shared_repo_of(fid: str) -> Path | None:
+    """The shared repository a project created in folder fid belongs to, if any."""
+    if not fid:
+        return None
+    try:
+        owner = sync_owner(registry.load_projects(), fid)
+    except ValueError:
+        return None
+    sync = owner.get("sync") or {}
+    return Path(sync["repo"]) if sync.get("mode") == "shared" and sync.get("repo") else None
+
+
+def is_running(root: Path) -> bool:
+    return registry.running_instance(registry.instance_file(registry.project_key(root)),
+                                     "prism-local", root, timeout=0.8, cleanup=False) is not None
+
+
+def default_repo(data: dict, f: dict, entries: list[dict]) -> Path:
+    """Next to the projects when they share a parent folder, else in the default location."""
+    parents = {registry.norm(Path(e["path"]).parent): Path(e["path"]).parent for e in entries}
+    base = next(iter(parents.values())) if len(parents) == 1 else Path(default_parent(data))
+    return base / disk_name(f["name"])
+
+
+def sync_plan(fid: str, mode: str | None = None, repo: str | None = None) -> dict:
+    """What the folder's projects have now, and what choosing `mode` would do to each."""
+    data = registry.load_projects()
+    f = _folder(data, fid)
+    owner = sync_owner(data, fid)
+    if owner["id"] != fid:
+        return {"inherited": {"id": owner["id"], "name": owner["name"], "repo": owner["sync"]["repo"]}}
+    cur = f.get("sync") or {}
+    mode = mode or cur.get("mode") or "separate"
+    if mode not in ("shared", "separate"):
+        raise ValueError("unknown sync mode")
+    items = folder_projects(data, fid)
+    repo = (repo or "").strip().strip('"')
+    top = Path(os.path.expanduser(repo)).resolve() if repo else \
+        Path(cur["repo"]) if cur.get("repo") else default_repo(data, f, [e for e, _ in items])
+    if not top.is_absolute():
+        raise ValueError("choose a full path for the repository's folder")
+    top_kind, top_top = repo_kind(top) if top.is_dir() else ("none", None)
+    rows, taken = [], set()
+    for e, parts in items:
+        root = Path(e["path"])
+        row = {"id": registry.project_key(root), "name": e.get("name") or root.name,
+               "path": str(root), "exists": root.is_dir(), "running": False, "sub": "/".join(parts)}
+        if not row["exists"]:
+            row.update(kind="missing", action="skip")
+            rows.append(row)
+            continue
+        kind, ktop = repo_kind(root)
+        row.update(kind=kind, running=is_running(root), github=github_of(ktop) if kind in ("own", "shared") else None,
+                   repo=str(ktop) if ktop else None)
+        if mode == "shared":
+            if inside(root, top):
+                row.update(action="stays", target=str(root))
+            else:
+                dst = top.joinpath(*parts, root.name)
+                n = 2
+                while dst.exists() or registry.norm(dst) in taken:
+                    dst = top.joinpath(*parts, f"{root.name} ({n})")
+                    n += 1
+                taken.add(registry.norm(dst))
+                row.update(action="moves", target=str(dst))
+            if inside(top, root):
+                row["action"] = "blocked"
+                row["why"] = "the repository's folder would be inside this project"
+            row["history"] = kind == "own"
+        else:
+            row["action"] = {"own": "keeps", "shared": "splits", "none": "new", "nested": "blocked"}[kind]
+            if kind == "nested":
+                row["why"] = f"it is inside another repository ({ktop}); move it out first"
+        rows.append(row)
+    others = []
+    if mode == "shared" and top.is_dir():
+        targets = {registry.norm(Path(r.get("target", r["path"]))) for r in rows}
+        others = [c.name for c in top.iterdir() if not c.name.startswith(".")
+                  and c.name not in (gitsync.SHARED_MARKER, ".gitignore")
+                  and registry.norm(c) not in targets and not any(t.startswith(registry.norm(c) + os.sep) for t in targets)]
+    return {"folder": f["name"], "mode": cur.get("mode") or "separate", "plan_mode": mode,
+            "repo": str(top), "repo_exists": top.is_dir(), "repo_kind": top_kind,
+            "repo_github": github_of(top) if top_kind == "own" else None,
+            "repo_inside": str(top_top) if top_kind in ("shared", "nested") else None,
+            "others": others[:20], "projects": rows, "github": gh_status()}
+
+
+def _repoint(pid: str, new: Path) -> None:
+    """The project moved on disk: the list follows it (folder, tags and all)."""
+    def fn(data):
+        for e in data["projects"]:
+            if registry.project_key(Path(e["path"])) == pid:
+                e["path"] = str(new)
+    registry.update_projects(fn)
+
+
+def _ensure_ignore(top: Path) -> None:
+    gi = top / ".gitignore"
+    have = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
+    add = [x for x in SHARED_IGNORE if x not in have]
+    if add:
+        text = "\n".join(have + add) + "\n"
+        gi.write_bytes(text.lstrip("\n").encode("utf-8"))
+
+
+def _publish(root: Path, github: bool, owner: str, name: str, report: list[str]) -> str | None:
+    """Push to origin, or create a private GitHub repository for `root` first."""
+    url = github_of(root)
+    if url:
+        try:
+            run_git(root, "push", "-q", "-u", "origin", "HEAD", timeout=300)
+        except subprocess.CalledProcessError as e:
+            report.append(f"Not pushed to {url}: {(e.stderr or e.stdout or '').strip()[-300:]}")
+        return url
+    if not github:
+        return None
+    r = create_github_repo(root, owner, name)
+    if "error" in r:
+        report.append(f"GitHub repository for {root.name} not created: {r['error']}")
+        return None
+    report.append(f"Created {r['url']}")
+    return r["url"]
+
+
+def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
+    top = Path(plan["repo"])
+    if plan["repo_kind"] == "shared" and plan["repo_inside"] and \
+            registry.norm(plan["repo_inside"]) != registry.norm(top):
+        raise ValueError(f"{top} is inside the repository {plan['repo_inside']}; choose another folder")
+    top.mkdir(parents=True, exist_ok=True)
+    if repo_kind(top)[0] != "own":
+        git_init(top)
+        report.append(f"New repository in {top}")
+    _ensure_ignore(top)
+    marker = top / gitsync.SHARED_MARKER
+    if not gitsync.shared_marker(top):
+        marker.write_bytes((json.dumps({"shared": True, "folder": f["name"]}, ensure_ascii=False,
+                                       indent=2) + "\n").encode("utf-8"))
+    imports = []
+    for r in plan["projects"]:
+        if r["action"] not in ("moves", "stays"):
+            continue
+        root = Path(r["path"])
+        if r["action"] == "moves":
+            dst = Path(r["target"])
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(root), str(dst))
+            _repoint(r["id"], dst)
+            report.append(f"Moved {root.name} to {dst}")
+            root = dst
+        dot = root / ".git"
+        if dot.is_file():
+            raise ValueError(f"{root.name} is a git worktree or submodule; set it up by hand")
+        if dot.is_dir() and r["kind"] == "own":
+            ref = f"refs/prism/imported/{r['id']}"
+            got = subprocess.run(["git", "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}"], cwd=top,
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 timeout=300, **NO_WINDOW)
+            if got.returncode == 0:
+                imports.append(run_git(top, "rev-parse", ref).stdout.strip())
+            if (root / SPLIT_BACKUP).exists():
+                raise ValueError(f"{root / SPLIT_BACKUP} is in the way")
+            os.replace(dot, root / SPLIT_BACKUP)
+            report.append(f"{root.name}: its history is kept in the shared repository; "
+                          f"its own .git is now {SPLIT_BACKUP}")
+    run_git(top, "add", "-A", timeout=300)
+    staged = run_git(top, "diff", "--cached", "--name-only", "-z", timeout=60).stdout.split("\0")
+    big = [x for x in staged if x and (top / x).is_file() and (top / x).stat().st_size > gitsync.MAX_FILE]
+    if big:
+        run_git(top, "rm", "-q", "--cached", "--", *big)
+        report.append("Not committed, too large for GitHub: " + ", ".join(big))
+    tree = run_git(top, "write-tree").stdout.strip()
+    head = subprocess.run(["git", "rev-parse", "-q", "--verify", "HEAD^{commit}"], cwd=top, capture_output=True,
+                          text=True, **NO_WINDOW).stdout.strip()
+    old_tree = run_git(top, "rev-parse", "HEAD^{tree}").stdout.strip() if head else None
+    if imports or tree != old_tree:
+        parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
+        n = len(plan["projects"])
+        msg = f"{f['name']}: {n} project{'s' if n != 1 else ''} in one repository"
+        sha = run_git(top, "commit-tree", tree, *parents, "-m", msg).stdout.strip()
+        run_git(top, "update-ref", "HEAD", sha)
+    _publish(top, bool(body.get("github")), str(body.get("github_owner") or ""),
+             str(body.get("github_name") or "") or repo_name(top.name), report)
+    f["sync"] = {"mode": "shared", "repo": str(top)}
+
+
+def _init_own(root: Path) -> None:
+    """A repository of the project's own, which leaves a set-aside .git out of it."""
+    git_init(root)
+    exclude = root / ".git" / "info" / "exclude"
+    exclude.parent.mkdir(parents=True, exist_ok=True)
+    have = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
+    if ".git-prism-*/" not in have:
+        lines = [*have.splitlines(), ".git-prism-*/"]
+        exclude.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
+    rows = [r for r in plan["projects"] if r["action"] in ("keeps", "splits", "new")]
+    tops: dict[str, list[dict]] = {}
+    for r in rows:
+        if r["action"] == "splits":
+            tops.setdefault(r["repo"], []).append(r)
+    data = registry.load_projects()
+    for top_s, members in tops.items():
+        top, ids = Path(top_s), {r["id"] for r in members}
+        strangers = [e.get("name") or Path(e["path"]).name for e in data["projects"]
+                     if inside(Path(e["path"]), top) and registry.project_key(Path(e["path"])) not in ids]
+        if strangers:
+            raise ValueError(f"the repository {top} also holds {', '.join(strangers[:5])}, "
+                             "which are not in this folder; move them in first")
+        if (top / SHARED_BACKUP).exists():
+            raise ValueError(f"{top / SHARED_BACKUP} is in the way")
+        # Each project's history, cut out of the shared one.
+        for r in members:
+            prefix = Path(r["path"]).relative_to(top).as_posix()
+            try:
+                # quotepath: git subtree compares the prefix with paths git prints, and
+                # would print a non-ASCII path such as 练习/ex 1 escaped otherwise.
+                sha = run_git(top, "-c", "core.quotepath=false", "subtree", "split", "-q",
+                              f"--prefix={prefix}", timeout=600).stdout.strip()
+                run_git(top, "update-ref", f"refs/prism/split/{r['id']}", sha)
+                r["split"] = f"refs/prism/split/{r['id']}"
+            except subprocess.CalledProcessError as e:
+                if "no new revisions" in (e.stderr or ""):        # never committed: nothing to carry
+                    continue
+                report.append(f"{Path(r['path']).name}: history not carried over "
+                              f"({(e.stderr or '').strip()[-200:]}); it starts afresh")
+        os.replace(top / ".git", top / SHARED_BACKUP)
+        try:
+            (top / gitsync.SHARED_MARKER).unlink()
+        except OSError:
+            pass
+        report.append(f"The shared repository in {top} is set aside as {SHARED_BACKUP}")
+        for r in members:
+            root = Path(r["path"])
+            _init_own(root)
+            if r.get("split"):
+                run_git(root, "fetch", "-q", "--no-tags", str(top / SHARED_BACKUP), r["split"], timeout=300)
+                run_git(root, "reset", "-q", "FETCH_HEAD")
+            report.append(f"{root.name}: a repository of its own" + (", with its history" if r.get("split") else ""))
+    for r in rows:
+        if r["action"] == "new":
+            _init_own(Path(r["path"]))
+            report.append(f"{Path(r['path']).name}: new repository")
+    owner = str(body.get("github_owner") or "")
+    for r in rows:
+        root = Path(r["path"])
+        if body.get("github") or github_of(root):
+            _publish(root, bool(body.get("github")), owner, repo_name(root.name), report)
+    f["sync"] = {"mode": "separate"}
+
+
+def apply_sync(body: dict) -> dict:
+    """Give the folder's projects one shared repository, or one each (see sync_plan)."""
+    fid = str(body["id"])
+    plan = sync_plan(fid, str(body.get("mode") or ""), str(body.get("repo") or ""))
+    if "inherited" in plan:
+        raise ValueError(f"this folder is part of the repository of “{plan['inherited']['name']}”")
+    if plan["plan_mode"] == "shared":
+        for r in plan["projects"]:
+            if r["action"] == "blocked":
+                raise ValueError(f"{r['name']}: {r['why']}; choose another folder for the repository")
+    changing = [r for r in plan["projects"] if r["action"] in ("moves", "splits", "new")
+                or (r["action"] == "stays" and r["kind"] != "shared")]
+    open_ = [r["name"] for r in changing if r["running"]]
+    if open_:
+        raise ValueError("close the editors of these projects first: " + ", ".join(open_))
+    if body.get("github") and not gh_status().get("logged_in"):
+        raise ValueError(gh_status().get("error") or "GitHub CLI is not ready")
+    report: list[str] = []
+    data = registry.load_projects()
+    f = _folder(data, fid)
+    try:
+        (_apply_shared if plan["plan_mode"] == "shared" else _apply_separate)(f, plan, body, report)
+    except subprocess.CalledProcessError as e:
+        report.append(f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[-400:]}")
+        return {"ok": False, "report": report}
+    except (OSError, ValueError) as e:
+        report.append(str(e))
+        return {"ok": False, "report": report}
+    finally:
+        sync = f.get("sync")
+
+        def fn(data):
+            g = _folder(data, fid)
+            if sync:
+                g["sync"] = sync
+        registry.update_projects(fn)
+    for r in plan["projects"]:
+        if r["action"] == "blocked":
+            report.append(f"Skipped {r['name']}: {r['why']}")
+    return {"ok": True, "report": report}
 
 
 def clean_tags(tags) -> list[str]:
@@ -547,6 +931,9 @@ def create_project(body: dict) -> dict:
     if not name or BAD_NAME.search(name) or name in (".", "..") or name.endswith((".", " ")):
         raise ValueError("choose a folder name without \\ / : * ? \" < > |")
     parent = Path(os.path.expanduser(str(body.get("parent", "")).strip().strip('"')))
+    shared = shared_repo_of(str(body.get("folder_id") or ""))
+    if shared and parent.is_absolute() and inside(parent.resolve(), shared):
+        parent.mkdir(parents=True, exist_ok=True)        # a subfolder's folder in the repository
     if not parent.is_absolute() or not parent.is_dir():
         raise ValueError(f"location is not a folder: {parent}")
     tpl = TEMPLATES.get(body.get("template", "amsart"))
@@ -565,6 +952,9 @@ def create_project(body: dict) -> dict:
     (root / "prism.json").write_bytes((json.dumps({"main": "main.tex", "outdir": "build"},
                                                   indent=2) + "\n").encode("utf-8"))
     git_note, github = None, None
+    if shared and inside(root, shared):
+        # Part of the folder's repository: the editor records it there.
+        body = {**body, "git": False, "github": False}
     if body.get("git") or body.get("github"):
         try:
             git_init(root)
@@ -714,6 +1104,8 @@ class Handler(httpbase.Handler):
                 return self._json({"settings": load_settings(),
                                    "github": gh_status(refresh=q.get("refresh") == "1"),
                                    "claude": claude_status(q.get("refresh") == "1")})
+            if path == "/api/folders/sync":
+                return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
             if path == "/api/git":
                 return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
             if path == "/api/pdf":
@@ -746,6 +1138,8 @@ class Handler(httpbase.Handler):
                 return self._json(create_folder(body))
             if path == "/api/folders/update":
                 return self._json(change_folder(body))
+            if path == "/api/folders/sync":
+                return self._json(apply_sync(body))
             if path == "/api/folders/remove":
                 return self._json(remove_folder(str(body["id"])))
             if path == "/api/tags/update":

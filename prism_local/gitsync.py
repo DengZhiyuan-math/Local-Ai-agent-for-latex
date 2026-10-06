@@ -11,9 +11,14 @@ While the editor runs, a worker thread keeps the project's own git repository up
   (another computer, GitHub's web editor) is fast-forwarded, so the editor reloads the
   files; histories that have diverged are reported, never merged automatically.
 
-Build output (the build folder, .aux, .log, ...) is never committed. Nothing happens in a
-folder that sits inside another repository (it has no repository of its own), and sync
-can be switched off per clone (.git/prism-local.json, never committed).
+Build output (the build folder, .aux, .log, ...) is never committed. Sync can be switched
+off per clone (.git/prism-local.json, never committed).
+
+A project is synced when it is the top of its own repository, or when it sits in a
+repository shared by several projects: one whose top has a SHARED_MARKER file (the Home
+page writes it when a folder of projects gets one repository). There each editor commits
+only its own project's files, and pushes and pulls the shared branch. Nothing happens in
+a folder inside any other repository (prism-local's examples, say).
 """
 from __future__ import annotations
 
@@ -33,10 +38,20 @@ FETCH_EVERY = 300        # seconds between fetches from the remote
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
 MAX_FILE = 50 * 1024 * 1024    # GitHub refuses files over 100 MB; keep well below
+LOCK_WAIT = 10           # seconds to wait for another editor's git command in a shared repository
+SHARED_MARKER = "prism-repo.json"
 # Files LaTeX writes next to the sources when they are not in the build folder.
 AUX = (".aux", ".log", ".out", ".toc", ".lof", ".lot", ".bbl", ".blg", ".bcf", ".run.xml",
        ".fls", ".fdb_latexmk", ".synctex.gz", ".synctex", ".nav", ".snm", ".vrb", ".idx",
        ".ilg", ".ind", ".xdv", ".dvi", ".thm", ".loe")
+
+
+def shared_marker(top: Path) -> bool:
+    """Whether `top` is the top of a repository shared by several projects."""
+    try:
+        return bool(json.loads((top / SHARED_MARKER).read_text(encoding="utf-8")).get("shared"))
+    except (OSError, ValueError, AttributeError):
+        return False
 
 
 def _names(paths: list[str]) -> str:
@@ -49,8 +64,10 @@ class GitSync:
                  busy: Callable[[], bool] = lambda: False):
         self.root_fn, self.outdir_fn, self.busy_fn = root_fn, outdir_fn, busy
         self.lock = threading.RLock()         # one git command sequence at a time
-        self.own: bool | None = None          # the project is the top of its repository
+        self.own: bool | None = None          # the project has a repository to sync with
         self.git_dir: Path | None = None
+        self.top: Path | None = None          # that repository's top: the project, or above it
+        self.prefix = ""                      # the project's path in it: "" or "ex2/"
         self.last_edit = self.dirty_since = None
         self.last_commit: dict | None = None  # {"at", "message", "hash"}
         self.last_push = self.last_fetch = 0.0
@@ -65,7 +82,8 @@ class GitSync:
 
     # ------------------------------------------------------------ git
     def git(self, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-        return subprocess.run(["git", *args], cwd=self.root_fn(), capture_output=True, text=True,
+        """git at the repository's top: paths are relative to it (see rel())."""
+        return subprocess.run(["git", *args], cwd=self.top or self.root_fn(), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=timeout,
                               env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
 
@@ -76,20 +94,39 @@ class GitSync:
         return r.stdout
 
     def check_repo(self) -> bool:
-        """Whether the project is the top of its own repository (looked up once per folder)."""
+        """Whether the project is the top of its own repository, or in a shared one
+        (looked up once per folder)."""
         root = self.root_fn().resolve()
         if getattr(self, "_checked", None) != root:
-            self._checked, self.own, self.git_dir = root, None, None
+            self._checked, self.own, self.git_dir, self.top, self.prefix = root, None, None, None, ""
         if self.own is None:
             try:
                 r = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir", timeout=20)
                 lines = r.stdout.strip().splitlines()
-                self.own = r.returncode == 0 and len(lines) == 2 \
-                    and Path(lines[0]).resolve() == self.root_fn().resolve()
-                self.git_dir = Path(lines[1]) if self.own else None
-            except (OSError, subprocess.SubprocessError):
+                top = Path(lines[0]).resolve() if r.returncode == 0 and len(lines) == 2 else None
+                if top == root:
+                    self.own = True
+                elif top is not None and shared_marker(top):
+                    self.own, self.prefix = True, root.relative_to(top).as_posix() + "/"
+                else:
+                    self.own = False
+                if self.own:
+                    self.git_dir, self.top = Path(lines[1]), top
+            except (OSError, subprocess.SubprocessError, ValueError):
                 self.own = False
         return bool(self.own)
+
+    @property
+    def shared(self) -> bool:
+        return bool(self.check_repo() and self.prefix)
+
+    def rel(self, path: str) -> str:
+        """A project-relative path as git sees it (from the repository's top)."""
+        return self.prefix + path
+
+    def _pathspec(self) -> str:
+        """This project's files only. literal: a folder may be called "a*b"."""
+        return f":(top,literal){self.prefix.rstrip('/')}" if self.prefix else "."
 
     # ------------------------------------------------------------ the switch
     def _settings_file(self) -> Path | None:
@@ -113,8 +150,8 @@ class GitSync:
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
         """Paths (from the top) with changes worth recording: no build output, no huge files."""
-        out = self._ok("status", "--porcelain", "-z", "-uall", timeout=30)
-        outdir = self.outdir_fn().strip("/") + "/"
+        out = self._ok("status", "--porcelain", "-z", "-uall", "--", self._pathspec(), timeout=30)
+        outdir = self.prefix + self.outdir_fn().strip("/") + "/"
         entries, paths, i = out.split("\0"), [], 0
         while i < len(entries):
             e = entries[i]
@@ -131,7 +168,7 @@ class GitSync:
                 continue
             if xy == "??" and path.lower().endswith(AUX):
                 continue
-            p = self.root_fn() / path
+            p = (self.top or self.root_fn()) / path
             try:
                 if p.is_file() and p.stat().st_size > MAX_FILE:
                     continue
@@ -144,9 +181,15 @@ class GitSync:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""
         if not paths:
             return False
+        if self.shared:      # the repository has the project's name in every message
+            message = f"{self.root_fn().name}: {message}"
         with self.lock:
-            if self.git_dir and (self.git_dir / "index.lock").exists():
-                raise RuntimeError("git is busy (index.lock); will try again")
+            # In a shared repository another editor may be committing right now.
+            deadline = time.monotonic() + (LOCK_WAIT if self.shared else 0)
+            while self.git_dir and (self.git_dir / "index.lock").exists():
+                if time.monotonic() >= deadline:
+                    raise RuntimeError("git is busy (index.lock); will try again")
+                time.sleep(0.2)
             self.state = "committing"
             try:
                 self._ok("add", "-A", "--", *paths)
@@ -255,7 +298,7 @@ class GitSync:
         first = next((ln.strip() for ln in prompt.splitlines()
                       if ln.strip() and not ln.startswith("[")), "") or "(no message)"
         first = first if len(first) <= 72 else first[:71] + "…"
-        self._safe(lambda: self.commit(paths, f"Agent: {first}"))
+        self._safe(lambda: self.commit([self.rel(p) for p in paths], f"Agent: {first}"))
 
     def _safe(self, fn) -> None:
         try:
@@ -309,7 +352,8 @@ class GitSync:
     # ------------------------------------------------------------ for the editor
     def status(self) -> dict:
         own = self.check_repo()
-        st = {"own": own, "enabled": own and self.enabled, "state": self.state, "error": self.error,
+        st = {"own": own, "enabled": own and self.enabled,
+              "shared": self.top.name if own and self.prefix else None, "state": self.state, "error": self.error,
               "remote": self.has_remote, "upstream": self.upstream, "ahead": self.ahead,
               "behind": self.behind, "last_commit": self.last_commit, "last_push": self.last_push or None,
               "pending": self.dirty_since is not None, "notice": self.notice,
@@ -320,7 +364,8 @@ class GitSync:
 
     def log(self, path: str, n: int = 60) -> list[dict]:
         """The commits that changed `path` (newest first), following renames."""
-        out = self._ok("log", "--follow", f"-n{n}", "--format=%H%x1f%ct%x1f%an%x1f%s", "--", path, timeout=30)
+        out = self._ok("log", "--follow", f"-n{n}", "--format=%H%x1f%ct%x1f%an%x1f%s", "--",
+                       self.rel(path), timeout=30)
         rows = []
         for line in out.splitlines():
             parts = line.split("\x1f")
@@ -332,7 +377,9 @@ class GitSync:
         """`path` as it was at `rev`, and what that commit changed in it."""
         if not all(c in "0123456789abcdef" for c in rev.lower()) or not 4 <= len(rev) <= 40:
             raise ValueError("bad revision")
-        name = self._ok("log", "--follow", "-n1", "--format=", "--name-only", rev, "--", path).strip() or path
+        full = self.rel(path)
+        name = self._ok("log", "--follow", "-n1", "--format=", "--name-only", rev, "--", full).strip() or full
         content = self.git("show", f"{rev}:{name}", timeout=30)
         diff = self.git("show", "--format=", "--no-color", rev, "--", name, timeout=30)
-        return {"content": content.stdout if content.returncode == 0 else None, "diff": diff.stdout, "path": name}
+        return {"content": content.stdout if content.returncode == 0 else None, "diff": diff.stdout,
+                "path": name[len(self.prefix):] if name.startswith(self.prefix) else name}

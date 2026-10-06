@@ -97,6 +97,26 @@ function folderOptions(selected, { none = "— Not in a folder —", exclude = n
     .join("");
 }
 const currentFolder = () => (H.view.kind === "folder" ? H.view.id : "");
+// Like hub.disk_name: a folder name usable on disk.
+const diskName = (name) => name.replace(/[<>:"\/\\|?*\x00-\x1f]/g, "-").replace(/^[ .]+|[ .]+$/g, "") || "folder";
+// The shared repository folder `fid` is in ({owner, repo, dir}: its own subdirectory), if any.
+function sharedRepo(fid) {
+  const path = folderPath(fid);
+  for (let i = path.length - 1; i >= 0; i--) {
+    const s = path[i].sync;
+    if (s && s.mode === "shared" && s.repo) {
+      const sep = s.repo.includes("\\") ? "\\" : "/";
+      return { owner: path[i], repo: s.repo, dir: [s.repo, ...path.slice(i + 1).map((f) => diskName(f.name))].join(sep) };
+    }
+  }
+  return null;
+}
+function syncChip(fid) {
+  const sr = sharedRepo(fid);
+  if (sr) return `<button class="chip sync-chip" data-act="sync" data-fid="${sr.owner.id}" title="${esc(sr.repo)}">⎇ One repository${sr.owner.id === fid ? "" : ` (${esc(sr.owner.name)})`}</button>`;
+  const s = (folderById(fid) || {}).sync;
+  return s && s.mode === "separate" ? `<button class="chip sync-chip" data-act="sync" data-fid="${fid}">⎇ A repository per project</button>` : "";
+}
 function setView(view) {
   H.view = view; store.set("home.view", view);
   render(); window.scrollTo(0, 0);
@@ -122,9 +142,10 @@ function gitChip(id) {
   const g = H.git[id];
   if (!g) return `<span class="gitchip"></span>`;
   if (g.nested) return `<span class="gitchip chip muted" title="No repository of its own: this folder is inside ${esc(g.toplevel_path)}">inside ${esc(g.toplevel)} repo</span>`;
-  const extra = [g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : "", g.behind ? `↓${g.behind}` : ""].filter(Boolean).join(" ");
+  const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : "", g.behind ? `↓${g.behind}` : ""].filter(Boolean).join(" · ");
   const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>` : "";
-  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${gh}</span>`;
+  const where = g.shared ? `, in the repository shared by its folder (${g.toplevel_path})` : "";
+  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${gh}</span>`;
 }
 function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);
@@ -254,6 +275,7 @@ function renderHead() {
     path.map((x, i) => `<span class="sep">›</span>` + (i === path.length - 1
       ? `<h1 class="crumb here">${esc(x.name)}</h1>`
       : `<button class="crumb" data-act="folder" data-fid="${x.id}">${esc(x.name)}</button>`)).join("") +
+    syncChip(f.id) +
     `<span class="crumb-actions">
        <button class="tiny" data-act="new-folder" data-parent="${f.id}" title="New folder inside ${esc(f.name)}">${icon("plus")}Subfolder</button>
        <button class="tiny icon" data-act="folder-menu" data-fid="${f.id}" title="Folder actions" aria-label="Folder actions">${icon("more")}</button>
@@ -448,6 +470,7 @@ document.addEventListener("click", (e) => {
     case "new-folder": e.stopPropagation(); return openFolder(null, d.parent || currentFolder());
     case "folder-menu": e.stopPropagation(); return showMenu(act, folderMenu(d.fid));
     case "tag-menu": e.stopPropagation(); return showMenu(act, tagMenu(d.tag));
+    case "sync": e.stopPropagation(); return openSync(d.fid);
   }
 });
 // The sidebar's rows are not buttons (they hold buttons): Enter and Space work on them too.
@@ -490,6 +513,7 @@ function folderMenu(fid) {
     ["New subfolder…", () => openFolder(null, fid)],
     "-",
     ["Rename, move, notes…", () => openFolder(fid)],
+    ["GitHub sync…", () => openSync(fid)],
     ...(f.parent ? [["Move to top level", () => moveFolder(fid, "")]] : []),
     "-",
     ["Delete folder…", () => removeFolder(fid), "danger"],
@@ -601,9 +625,28 @@ function openNew() {
   f.elements.github.disabled = !ready;
   f.elements.github_name.dataset.edited = "";
   f.elements.folder_id.innerHTML = folderOptions(currentFolder());
-  dlgError(dlg, ""); updateTarget(); updateGithubRow();
+  dlgError(dlg, ""); updateShared(); updateTarget(); updateGithubRow();
   dlg.showModal(); f.elements.name.focus();
 }
+// A project created in a folder with one repository goes into that repository's folder,
+// and gets no repository of its own.
+function updateShared() {
+  const f = $("#form-new"), sr = sharedRepo(f.elements.folder_id.value), note = f.querySelector(".shared-note");
+  if (sr) {
+    f.elements.parent.value = sr.dir;
+    f.elements.git.checked = f.elements.github.checked = false;
+  } else if (f.dataset.sharedDir && f.elements.parent.value === f.dataset.sharedDir) {
+    f.elements.parent.value = H.defaultParent;
+    const st = H.settings || {};
+    f.elements.git.checked = st.git_init !== false;
+  }
+  f.dataset.sharedDir = sr ? sr.dir : "";
+  f.elements.git.disabled = !!sr;
+  f.elements.github.disabled = !!sr || !(H.github && H.github.logged_in);
+  note.hidden = !sr;
+  note.textContent = sr ? `Part of the repository of “${sr.owner.name}”: the project is created in its folder and synced with it.` : "";
+}
+$("#form-new").elements.folder_id.addEventListener("change", () => { updateShared(); updateTarget(); updateGithubRow(); });
 $("#form-new").addEventListener("input", (e) => {
   if (e.target.name === "github_name") e.target.dataset.edited = "1";
   updateTarget(); updateGithubRow();
@@ -615,7 +658,7 @@ function updateGithubRow() {
   f.querySelector(".gh-name").hidden = !on;
   // A GitHub repository needs a git repository.
   if (on) f.elements.git.checked = true;
-  f.elements.git.disabled = on;
+  f.elements.git.disabled = on || !!sharedRepo(f.elements.folder_id.value);
   f.elements.github_name.required = on;
   if (on && !f.elements.github_name.dataset.edited) f.elements.github_name.value = repoName(f.elements.name.value.trim());
   $("#gh-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
@@ -713,6 +756,136 @@ $("#form-move").addEventListener("submit", (e) => {
   e.preventDefault();
   $("#dlg-move").close();
   moveProject(e.target.dataset.id, e.target.elements.folder_id.value);
+});
+
+/* a folder's repositories: one shared, or one per project (hub.py: sync_plan, apply_sync) */
+const SYNC_NOW = { own: "own repository", shared: "shared repository", none: "no repository", nested: "inside another repository", missing: "folder not found" };
+function syncRow(r, plan) {
+  const shared = plan.plan_mode === "shared";
+  const rel = (t) => (t && t.startsWith(plan.repo) ? t.slice(plan.repo.length).replace(/^[\\/]/, "") : t);
+  const then = {
+    moves: `moves to <code>${esc(rel(r.target))}</code>` + (r.history ? ", with its history" : ""),
+    stays: r.kind === "shared" ? "already in it" : "already in the folder" + (r.history ? ", with its history" : ""),
+    keeps: "keeps its repository",
+    splits: "gets its own repository, with its history",
+    new: "new repository",
+    blocked: `skipped: ${esc(r.why || "")}`,
+    skip: "skipped",
+  }[r.action];
+  const changes = ["moves", "splits", "new"].includes(r.action) || (shared && r.action === "stays" && r.kind !== "shared");
+  const open = r.running && changes ? `<span class="chip err" title="Close its editor first">editor open</span>` : "";
+  const gh = r.github ? ` <a href="${esc(r.github)}" target="_blank" rel="noopener">GitHub ↗</a>` : "";
+  return `<tr class="${r.action}"><td><b>${esc(r.name)}</b>${r.sub ? `<small>${esc(r.sub)}</small>` : ""}</td>
+    <td>${SYNC_NOW[r.kind] || r.kind}${gh}</td><td>${then} ${open}</td></tr>`;
+}
+function renderSync() {
+  const f = $("#form-sync"), plan = H.syncPlan, gh = (plan && plan.github) || H.github || {};
+  if (!plan) return;
+  const shared = plan.plan_mode === "shared";
+  f.querySelectorAll(".sync-shared").forEach((el) => { el.hidden = !shared; });
+  const missing = plan.projects.filter((r) => r.kind !== "missing" && (shared ? true : !r.github)).length;
+  const label = $("#sync-gh-label");
+  if (shared && plan.repo_github) {
+    label.innerHTML = `Push to <a href="${esc(plan.repo_github)}" target="_blank" rel="noopener">${esc(plan.repo_github)}</a>`;
+    f.elements.github.checked = true; f.elements.github.disabled = true;
+  } else {
+    label.textContent = shared ? "Create a private GitHub repository for it"
+      : `Create private GitHub repositories for the projects that have none (${missing})`;
+    f.elements.github.disabled = !gh.logged_in || (!shared && !missing);
+    if (f.elements.github.disabled) f.elements.github.checked = false;
+  }
+  f.querySelector(".sync-gh-name").hidden = !shared || !f.elements.github.checked || !!plan.repo_github;
+  $("#sync-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
+  if (!f.elements.github_name.dataset.edited) f.elements.github_name.value = repoName(plan.repo.split(/[\\/]/).pop());
+  const note = f.querySelector(".sync-gh-note");
+  note.hidden = !!gh.logged_in;
+  note.textContent = gh.logged_in ? "" : (gh.error || "GitHub is not connected.") + " Without it, the repositories stay on this computer.";
+  const moves = plan.projects.filter((r) => r.action === "moves").length;
+  const open = plan.projects.filter((r) => r.running && ["moves", "splits", "new"].includes(r.action)).length;
+  const warn = [
+    shared && moves ? `${plural(moves, "project folder")} will move into <code>${esc(plan.repo)}</code>. Their files are not changed; tags, folders and notes in this list come along.` : "",
+    shared && plan.others.length ? `That folder also holds ${esc(plan.others.join(", "))}: it would be committed too.` : "",
+    shared && plan.repo_inside ? `That folder is inside the repository ${esc(plan.repo_inside)}.` : "",
+    !shared && plan.projects.some((r) => r.action === "splits") ? "The shared repository's .git is kept, renamed .git-prism-shared." : "",
+    open ? `Close the editors marked “editor open” before applying.` : "",
+  ].filter(Boolean);
+  const current = plan.mode === plan.plan_mode ? " (current)" : "";
+  $("#sync-plan").innerHTML = `<div class="sync-head">What happens${current}</div>
+    <table><thead><tr><th>Project</th><th>Now</th><th>Then</th></tr></thead>
+    <tbody>${plan.projects.map((r) => syncRow(r, plan)).join("") || `<tr><td colspan="3">No projects in this folder yet.</td></tr>`}</tbody></table>
+    ${warn.map((w) => `<p class="hint warn">${w}</p>`).join("")}`;
+  f.querySelector("button[type=submit]").disabled = !!open || !plan.projects.length;
+}
+let syncTimer = null;
+async function loadSyncPlan() {
+  const f = $("#form-sync"), dlg = $("#dlg-sync");
+  const q = new URLSearchParams({ id: f.dataset.id, mode: f.elements.mode.value || "" });
+  if (f.elements.repo.value.trim()) q.set("repo", f.elements.repo.value.trim());
+  const r = await api("/api/folders/sync?" + q);
+  if (r._status !== 200) { dlgError(dlg, r.error || "Could not look at the projects"); return; }
+  dlgError(dlg, "");
+  if (r.inherited) {
+    H.syncPlan = null;
+    const p = f.querySelector(".sync-inherited");
+    p.hidden = false;
+    p.innerHTML = `This folder is part of the repository of <b>${esc(r.inherited.name)}</b> (<code>${esc(r.inherited.repo)}</code>). Change it there.`;
+    f.querySelectorAll(".sync-modes, .sync-shared, .check, .sync-plan").forEach((el) => { el.hidden = true; });
+    f.querySelector("button[type=submit]").hidden = true;
+    return;
+  }
+  H.syncPlan = r;
+  if (!f.elements.mode.value) f.elements.mode.value = r.plan_mode;
+  if (!f.elements.repo.value) f.elements.repo.value = r.repo;
+  renderSync();
+}
+async function openSync(fid) {
+  const f = $("#form-sync"), dlg = $("#dlg-sync"), folder = folderById(fid);
+  f.reset(); dlgError(dlg, "");
+  f.dataset.id = fid; f.elements.github_name.dataset.edited = "";
+  dlg.querySelector("h3").textContent = `GitHub sync: ${folder.name}`;
+  f.querySelector(".sync-inherited").hidden = true;
+  f.querySelectorAll(".sync-modes, .check, .sync-plan").forEach((el) => { el.hidden = false; });
+  f.querySelector("button[type=submit]").hidden = false;
+  $("#sync-report").hidden = true;
+  $("#sync-plan").innerHTML = `<p class="hint">Looking at the projects…</p>`;
+  H.syncPlan = null;
+  dlg.showModal();
+  if (!H.github) await loadSettings();
+  await loadSyncPlan();
+}
+$("#form-sync").addEventListener("input", (e) => {
+  const f = $("#form-sync");
+  if (e.target.name === "github_name") { e.target.dataset.edited = "1"; return; }
+  if (e.target.name === "github") return renderSync();
+  if (e.target.name === "mode" && e.target.value === "shared" && H.syncPlan && H.syncPlan.plan_mode !== "shared") f.elements.repo.value = "";
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(loadSyncPlan, e.target.name === "repo" ? 400 : 0);
+});
+$("#form-sync").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, dlg = $("#dlg-sync"), btn = f.querySelector("button[type=submit]"), plan = H.syncPlan;
+  if (!plan) return;
+  const shared = plan.plan_mode === "shared";
+  const moves = plan.projects.filter((r) => r.action === "moves").length;
+  if (shared && moves && !confirm(`Move ${plural(moves, "project folder")} into
+${plan.repo}?
+
+Nothing is deleted. Editors of these projects open at the new place afterwards.`)) return;
+  btn.disabled = true; btn.textContent = f.elements.github.checked ? "Applying, with GitHub…" : "Applying…";
+  dlgError(dlg, "");
+  const r = await api("/api/folders/sync", {
+    id: f.dataset.id, mode: f.elements.mode.value, repo: f.elements.repo.value.trim(),
+    github: f.elements.github.checked && !f.elements.github.disabled, github_name: f.elements.github_name.value.trim(),
+    github_owner: (H.settings && H.settings.github_owner) || "",
+  });
+  btn.textContent = "Apply";
+  if (r._status !== 200) { btn.disabled = false; return dlgError(dlg, r.error || "Could not apply"); }
+  const rep = $("#sync-report");
+  rep.hidden = false;
+  rep.className = "sync-report " + (r.ok ? "ok" : "err");
+  rep.innerHTML = [r.ok ? "Done." : "Stopped:", ...r.report].map((x) => `<li>${esc(x)}</li>`).join("");
+  H.sig = null; await load(); loadAllGit();
+  await loadSyncPlan();
 });
 
 /* a project's tags */

@@ -71,6 +71,7 @@
       <label><input type="radio" name="template" value="empty">
         <b>Empty</b><small>just \documentclass and a document body</small></label>
     </fieldset>
+    <p class="hint shared-note" hidden></p>
     <label class="check"><input type="checkbox" name="git" checked> Initialize a git repository</label>
     <label class="check"><input type="checkbox" name="github"> Create a private GitHub repository</label>
     <label class="field gh-name" hidden><span>Repository <i id="gh-owner"></i></span>
@@ -194,6 +195,38 @@
     <div class="dlg-actions">
       <button type="button" data-close>Cancel</button>
       <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-sync" class="wide">
+  <form method="dialog" id="form-sync">
+    <h3>GitHub sync</h3>
+    <p class="hint sync-inherited" hidden></p>
+    <fieldset class="templates sync-modes">
+      <legend>Repositories for the projects in this folder and its subfolders</legend>
+      <label><input type="radio" name="mode" value="shared">
+        <b>One repository for the whole folder</b>
+        <small>The projects are gathered in one folder on disk (subfolders become subdirectories),
+          with one git repository and one GitHub repository. Each editor records its own project there.</small></label>
+      <label><input type="radio" name="mode" value="separate">
+        <b>A repository for each project</b>
+        <small>Every project keeps a repository, and a GitHub repository, of its own.</small></label>
+    </fieldset>
+    <label class="field sync-shared"><span>Folder of the repository</span>
+      <span class="row"><input name="repo" spellcheck="false" autocomplete="off">
+        <button type="button" data-browse="repo">Browse…</button></span></label>
+    <label class="check"><input type="checkbox" name="github"> <span id="sync-gh-label"></span></label>
+    <label class="field sync-shared sync-gh-name" hidden><span>Repository name <i id="sync-owner"></i></span>
+      <input name="github_name" spellcheck="false" autocomplete="off" pattern="[A-Za-z0-9._-]{1,100}"
+             title="Letters, digits, '.', '-' and '_'"></label>
+    <p class="hint sync-gh-note" hidden></p>
+    <div id="sync-plan" class="sync-plan"></div>
+    <div class="dlg-error" hidden></div>
+    <ul id="sync-report" class="sync-report" hidden></ul>
+    <div class="dlg-actions">
+      <button type="button" data-close>Close</button>
+      <button type="submit" class="primary">Apply</button>
     </div>
   </form>
 </dialog>

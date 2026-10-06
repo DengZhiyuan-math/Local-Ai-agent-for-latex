@@ -127,5 +127,56 @@ class GitSyncTest(unittest.TestCase):
         self.assertFalse(g.active())
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class SharedRepositoryTest(unittest.TestCase):
+    """Several projects in one repository: each editor records its own project only."""
+
+    def setUp(self):
+        self.remote = tmpdir()
+        git(self.remote, "init", "-q", "--bare", "-b", "main")
+        self.top = tmpdir()
+        git(self.top, "init", "-q", "-b", "main")
+        identity(self.top)
+        (self.top / gitsync.SHARED_MARKER).write_text('{"shared": true}', encoding="utf-8")
+        for name in ("ex 1", "ex 2"):
+            (self.top / "sheets" / name).mkdir(parents=True)
+            (self.top / "sheets" / name / "main.tex").write_text("one\n", encoding="utf-8")
+        git(self.top, "add", "-A")
+        git(self.top, "commit", "-q", "-m", "init")
+        git(self.top, "remote", "add", "origin", str(self.remote))
+        git(self.top, "push", "-q", "-u", "origin", "main")
+        self.a = self.top / "sheets" / "ex 1"
+        self.g = gitsync.GitSync(lambda: self.a, lambda: "build")
+
+    def test_commits_only_its_own_project_and_pushes(self):
+        st = self.g.status()
+        self.assertTrue(st["own"])
+        self.assertEqual(st["shared"], self.top.name)
+        (self.a / "main.tex").write_text("two\n", encoding="utf-8")
+        (self.a / "build").mkdir()
+        (self.a / "build" / "main.pdf").write_bytes(b"%PDF")
+        (self.top / "sheets" / "ex 2" / "main.tex").write_text("theirs\n", encoding="utf-8")
+        self.g.touched()
+        self.g.dirty_since = self.g.last_edit = time.time() - gitsync.IDLE - 1
+        self.g.tick()
+        self.assertEqual(git(self.top, "log", "-1", "--format=%s"), "ex 1: Autosave: main.tex")
+        self.assertEqual(git(self.top, "show", "--name-only", "--format=", "HEAD"), "sheets/ex 1/main.tex")
+        self.assertIn("sheets/ex 2/main.tex", git(self.top, "status", "--porcelain"), "the other project's edit stays")
+        self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.top, "rev-parse", "HEAD"), "pushed")
+
+    def test_agent_turns_and_history_use_project_paths(self):
+        (self.a / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.after_turn(["main.tex"], "Fix the proof")
+        self.assertEqual(git(self.top, "log", "-1", "--format=%s"), "ex 1: Agent: Fix the proof")
+        log = self.g.log("main.tex")
+        self.assertEqual(len(log), 2)
+        old = self.g.show(log[1]["hash"], "main.tex")
+        self.assertEqual((old["content"], old["path"]), ("one\n", "main.tex"))
+
+    def test_no_marker_no_sync(self):
+        (self.top / gitsync.SHARED_MARKER).unlink()
+        self.assertFalse(gitsync.GitSync(lambda: self.a, lambda: "build").check_repo())
+
+
 if __name__ == "__main__":
     unittest.main()

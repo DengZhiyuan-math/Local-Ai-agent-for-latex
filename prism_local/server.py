@@ -415,13 +415,13 @@ def sync_upload(rel: str) -> None:
     g = GITSYNC
     try:
         if not g.check_repo():
-            return done("local", "Saved in the project. It has no git repository of its own "
+            return done("local", "Saved in the project. It has no git repository to sync with "
                                  "(none, or it is inside another one), so nothing was committed.")
         if not g.enabled:
             return done("local", "Saved in the project. Sync with GitHub is off for this project.")
-        if g.git("check-ignore", "-q", "--", rel, timeout=20).returncode == 0:
+        if g.git("check-ignore", "-q", "--", g.rel(rel), timeout=20).returncode == 0:
             return done("local", f"Saved in the project. {UPLOAD_DIR}/ is in .gitignore, so it is not committed.")
-        g.commit([rel], f"Add {rel} (a file used in the agent chat)")
+        g.commit([g.rel(rel)], f"Add {rel} (a file used in the agent chat)")
         g._remote_state()
         if not g.has_remote:
             return done("local", "Committed. The repository has no remote, so nothing was pushed.")
@@ -708,7 +708,7 @@ class Handler(httpbase.Handler):
             return self._json({"github": github_url()})
         if path == "/api/git/log":
             if not GITSYNC.check_repo():
-                return self._json({"commits": [], "error": "This project has no git repository of its own."})
+                return self._json({"commits": [], "error": "This project has no git repository to sync with."})
             return self._json({"commits": GITSYNC.log(q["path"])})
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))

@@ -192,6 +192,86 @@ class FoldersAndTags(TempState):
         self.assertEqual(hub.list_projects()["tags"], {})
 
 
+@unittest.skipUnless(hub.shutil.which("git"), "needs git")
+class FolderSync(TempState):
+    """A folder of projects: one shared repository, or one each, and back."""
+
+    def setUp(self):
+        super().setUp()
+        ident = {"GIT_AUTHOR_NAME": "T", "GIT_COMMITTER_NAME": "T",
+                 "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        for k, v in ident.items():
+            self.addCleanup(lambda k=k, old=os.environ.get(k): os.environ.pop(k, None) if old is None
+                            else os.environ.__setitem__(k, old))
+            os.environ[k] = v
+        self.projects = self.tmp / "projects"
+        for n in ("ex 1", "ex 1 sol", "exam"):
+            (self.projects / n / "build").mkdir(parents=True)
+            (self.projects / n / "main.tex").write_text(f"{n}\n", encoding="utf-8")
+            (self.projects / n / "build" / "main.pdf").write_bytes(b"%PDF")
+        exam = self.projects / "exam"
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "exam: first"]):
+            subprocess.run(["git", *args], cwd=exam, check=True, capture_output=True)
+        self.ids = {n: hub.add_project(str(self.projects / n))["id"] for n in ("ex 1", "ex 1 sol", "exam")}
+        self.top = hub.create_folder({"name": "Course"})
+        self.ex = hub.create_folder({"name": "练习", "parent": self.top["id"]})
+        self.sol = hub.create_folder({"name": "Answers: all", "parent": self.top["id"]})
+        hub.change_project(self.ids["ex 1"], {"folder_id": self.ex["id"]})
+        hub.change_project(self.ids["exam"], {"folder_id": self.ex["id"]})
+        hub.change_project(self.ids["ex 1 sol"], {"folder_id": self.sol["id"]})
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=cwd, capture_output=True,
+                              text=True, encoding="utf-8").stdout
+
+    def test_shared_then_separate(self):
+        plan = hub.sync_plan(self.top["id"], "shared")
+        repo = Path(plan["repo"])
+        self.assertEqual(repo, (self.projects / "Course").resolve())
+        self.assertEqual({r["name"]: r["action"] for r in plan["projects"]},
+                         {"ex 1": "moves", "exam": "moves", "ex 1 sol": "moves"})
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(r["ok"], r["report"])
+        # Subfolders become directories (a name made safe for disk), build output stays out,
+        # and exam's own history comes along.
+        files =self.git(repo, "ls-files").splitlines()
+        self.assertEqual(sorted(files), sorted([".gitignore", "prism-repo.json", "Answers- all/ex 1 sol/main.tex",
+                                                "练习/ex 1/main.tex", "练习/exam/main.tex"]))
+        self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
+        self.assertTrue((repo / "练习" / "exam" / hub.SPLIT_BACKUP).is_dir())
+        listed = {p["name"]: p for p in hub.list_projects()["projects"]}
+        self.assertEqual(Path(listed["ex 1"]["path"]), repo / "练习" / "ex 1")
+        self.assertEqual(listed["ex 1"]["tags"], [])
+        self.assertEqual(hub.git_info(repo / "练习" / "ex 1")["shared"], "Course")
+        self.assertEqual(hub.sync_plan(self.ex["id"])["inherited"]["id"], self.top["id"])
+        # A new project in the folder belongs to the shared repository.
+        new = hub.create_project({"name": "ex 2", "parent": str(repo / "练习"), "template": "empty",
+                                  "folder_id": self.ex["id"], "git": True})
+        self.assertEqual(hub.repo_kind(Path(new["path"]))[0], "shared")
+
+        r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertTrue(r["ok"], r["report"])
+        for p in hub.list_projects()["projects"]:
+            root = Path(p["path"])
+            self.assertEqual(hub.repo_kind(root)[0], "own", p["name"])
+            self.assertNotIn(".git-prism", self.git(root, "status", "--porcelain"))
+        self.assertIn("in one repository", self.git(repo / "练习" / "ex 1", "log", "--format=%s"))
+        self.assertTrue((repo / hub.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
+        self.assertFalse((repo / "prism-repo.json").exists())
+
+    def test_separate_creates_missing_repositories(self):
+        r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertTrue(r["ok"], r["report"])
+        kinds = {p["name"]: hub.repo_kind(Path(p["path"]))[0] for p in hub.list_projects()["projects"]}
+        self.assertEqual(kinds, {"ex 1": "own", "ex 1 sol": "own", "exam": "own"})
+        self.assertIn("exam: first", self.git(self.projects / "exam", "log", "--format=%s"))
+
+    def test_refuses_a_repository_inside_a_project(self):
+        with self.assertRaises(ValueError):
+            hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(self.projects / "exam" / "all")})
+        self.assertTrue((self.projects / "exam" / "main.tex").exists())
+
+
 class SettingsAndGitHub(TempState):
     def test_settings_round_trip_and_checks(self):
         self.assertEqual(hub.load_settings(), hub.SETTINGS_DEFAULTS)

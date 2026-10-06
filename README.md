@@ -26,7 +26,8 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
   papers as subfolders) and tag them. The ⌂ button in the editor brings you back.
 - **Autosave**: edits are saved a moment after you stop typing, as in Overleaf. There is no
   Save button. Auto-compile (in the Compile menu) builds shortly after that.
-- **History and sync with GitHub**: in a project with its own repository, your changes are
+- **History and sync with GitHub**: in a project with its own repository, or in one its Home
+  folder shares with the folder's other projects, your changes are
   committed two minutes after you stop editing (at the latest ten minutes after the first),
   each agent turn gets a commit of its own with your request as the message, and every commit
   is pushed. Changes on GitHub (another computer) are pulled in. The GitHub button in the top
@@ -121,7 +122,8 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   `CLAUDE_CODE_OAUTH_TOKEN`, Bedrock/Vertex, or an `apiKeyHelper` or such `env` in the user or
   project `.claude/settings*.json`), nothing is sent and the panel says why. The agent panel
   always shows the account in use.
-- The git chip shows the project's own repository, with a link to it on GitHub. A folder
+- The git chip shows the project's repository (its own, or the one its folder shares), with a
+  link to it on GitHub. A folder
   inside some other repository (such as `examples/minimal`, inside prism-local's) has none of
   its own, and the chip says so.
 - **Add existing…** adds an existing LaTeX folder. **Browse…** opens a native folder dialog (tkinter).
@@ -133,6 +135,21 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   own projects and those of its subfolders. Drag a card onto a folder to move it there, or a
   folder onto another to nest it; deleting a folder moves its contents up a level. Folders
   exist only in this list: no files move on disk.
+- **GitHub sync…** in a folder's ⋯ menu chooses how the folder's projects (and its subfolders')
+  are kept in git and on GitHub:
+  - *One repository for the whole folder*: the projects are gathered in one folder on disk,
+    subfolders becoming subdirectories (练习/, 答案/ …), with one git and one private GitHub
+    repository. Each editor commits only its own project's files there, its name leading the
+    message, and pushes and pulls the shared branch. New projects created in the folder go
+    into it. The repository's top holds `prism-repo.json`, which marks it as shared.
+  - *A repository for each project*: every project has its own; missing ones are created, and
+    on GitHub too if you like.
+
+  The dialog lists what will happen to each project before anything does. Project folders
+  move only after you confirm, and only while their editors are closed. Nothing is deleted:
+  a project's own history comes along into the shared repository (its old `.git` is kept as
+  `.git-prism-separate`), and going back to one repository each cuts every project's history
+  out of the shared one (`git subtree split`), keeping the shared `.git` as `.git-prism-shared`.
 - **Tags** (draft, submitted, a coauthor…) can be given to any project; click one to see every
   project with it. Rename a tag or change its color from its ⋯ menu in the sidebar.
 - Every project you open with prism-local, by any route, is added to the list automatically.
