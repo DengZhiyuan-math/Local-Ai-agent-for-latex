@@ -300,11 +300,59 @@ async function loadSymbols() {
 let symbolsTimer = null;
 function scheduleSymbols() { clearTimeout(symbolsTimer); symbolsTimer = setTimeout(loadSymbols, 1000); }
 
+/* The project's name, as the Home page lists it: click it to rename (only the name shown
+   changes; the folder keeps its own). */
+function showProjectName(name, folder) {
+  const el = $("#projname");
+  S.projectFolder = folder;
+  if (el.querySelector("input")) return;          // being renamed: leave it
+  el.textContent = name;
+  el.title = name === folder ? "Rename this project" : `Rename this project (folder: ${folder})`;
+  document.title = name + " · prism-local";
+}
+function renameProject() {
+  const el = $("#projname");
+  if (el.querySelector("input")) return;
+  const old = el.textContent, input = document.createElement("input");
+  input.value = old; input.spellcheck = false; input.maxLength = 120;
+  input.setAttribute("aria-label", "Project name");
+  input.placeholder = S.projectFolder || "";
+  el.textContent = ""; el.append(input); input.focus(); input.select();
+  let done = false;
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    const name = input.value.trim();
+    input.remove();
+    if (!save || name === old) return showProjectName(old, S.projectFolder);
+    showProjectName(name || S.projectFolder, S.projectFolder);
+    let r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
+    if (r._status === 404) {
+      // This project's server started before renaming existed: restart it with the new
+      // code, rename, and load the page again.
+      toast("Updating this project's server to rename it…");
+      const ok = await restartServer();
+      if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
+      r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
+      if (r._status === 200) return reloadPage();
+    }
+    if (r._status !== 200) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + (r.error || "unknown error")); }
+    showProjectName(r.name, S.projectFolder);
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    e.stopPropagation();                          // not the editor's shortcuts
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+$("#projname").addEventListener("click", renameProject);
+$("#projname").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === "F2") && e.target === $("#projname")) { e.preventDefault(); renameProject(); } });
+
 async function poll() {
   const r = await api("/api/tree").catch(() => null);
   if (!r || r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
-  $("#projname").textContent = r.root;
-  document.title = r.root + " · prism-local";
+  showProjectName(r.name || r.root, r.root);
   const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]));
   S.files = r.files; S.order = r.order || [];
   if (changed) renderTree();
@@ -413,23 +461,30 @@ $("#hist-list").addEventListener("click", async (e) => {
 });
 $("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('[data-panel="history"]'); if (b) showHistory(); });
 
-// prism-local was updated while this server ran: restart it, then load the new page.
-$("#btn-restart").onclick = async () => {
-  if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
-  if (!(await saveAll())) return toast("Resolve the save conflict first.");
-  const b = $("#btn-restart"); b.disabled = true; b.textContent = "restarting…";
+// prism-local was updated while this server ran: restart it with the new code. Resolves
+// to true once the new server answers (or to an error message). The page then reloads.
+async function restartServer() {
+  if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
+  if (!(await saveAll())) return "Resolve the save conflict first.";
   const r = await api("/api/restart", {}).catch(() => ({ error: "server not reachable" }));
-  if (r.error) { b.disabled = false; b.textContent = "Update: restart"; return toast(r.error); }
+  if (r.error) return r.error;
   for (let i = 0; i < 60; i++) {           // the new server listens within a few seconds
     await new Promise((res) => setTimeout(res, 500));
     const t = await fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
-    if (t && t.server !== S.server) {
-      if (pdfChannel) pdfChannel.postMessage({ type: "reload" });     // the pop-out PDF too
-      return location.reload();
-    }
+    if (t && t.server !== S.server) return true;
   }
+  return "The server did not come back. Reopen the project from the Home page.";
+}
+function reloadPage() {
+  if (pdfChannel) pdfChannel.postMessage({ type: "reload" });     // the pop-out PDF too
+  location.reload();
+}
+$("#btn-restart").onclick = async () => {
+  const b = $("#btn-restart"); b.disabled = true; b.textContent = "restarting…";
+  const ok = await restartServer();
+  if (ok === true) return reloadPage();
   b.disabled = false; b.textContent = "Update: restart";
-  toast("The server did not come back. Reopen the project from the Home page.");
+  toast(ok);
 };
 
 /* ------------------------------------------------------------------ completion */

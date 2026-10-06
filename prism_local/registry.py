@@ -236,6 +236,36 @@ def touch(project: Path, opened: bool = True) -> dict:
     return update_projects(fn)
 
 
+def set_entry_name(entry: dict, name) -> None:
+    """The name shown for a project; empty (or the folder's own name) shows the folder's."""
+    name = str(name or "").strip()[:120]
+    if name and name != Path(entry["path"]).name:
+        entry["name"] = name
+    else:
+        entry.pop("name", None)
+
+
+def display_name(project: Path) -> str:
+    """The project's name in the list (Rename), else its folder's name."""
+    entry = find(load_projects(), Path(project).resolve())
+    return (entry or {}).get("name") or Path(project).name
+
+
+def rename(project: Path, name) -> str:
+    """Set the project's name in the list (adding it if needed); its folder keeps its name."""
+    project = Path(project).resolve()
+
+    def fn(data):
+        entry = find(data, project)
+        if entry is None:
+            entry = {"path": str(project), "added": time.time()}
+            data["projects"].append(entry)
+        set_entry_name(entry, name)
+        return entry.get("name") or project.name
+
+    return update_projects(fn)
+
+
 def safe_touch(project: Path) -> None:
     """touch(), for callers that must not fail because of the project list."""
     try:

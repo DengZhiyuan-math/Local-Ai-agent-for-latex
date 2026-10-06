@@ -654,6 +654,24 @@ AGENT.on_start = GITSYNC.before_turn
 AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
 
 
+# The project's name as the Home page lists it (Rename): read again only when the list changed.
+_NAME: dict = {"mtime": None, "name": None}
+
+
+def project_name() -> str:
+    try:
+        m = (registry.state_dir() / "projects.json").stat().st_mtime_ns
+    except OSError:
+        m = None
+    if m != _NAME["mtime"] or _NAME["name"] is None:
+        try:
+            _NAME["name"] = registry.display_name(ROOT)
+        except (OSError, ValueError):
+            _NAME["name"] = ROOT.name
+        _NAME["mtime"] = m
+    return _NAME["name"]
+
+
 def github_url() -> str | None:
     """The repository's page on GitHub, from the origin remote."""
     try:
@@ -700,7 +718,7 @@ class Handler(httpbase.Handler):
             st = git_status()
             files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f)}
                      for f in list_files()]
-            return self._json({"root": ROOT.name, "files": files, "order": document_order(),
+            return self._json({"root": ROOT.name, "name": project_name(), "files": files, "order": document_order(),
                                "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
                                "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
@@ -770,6 +788,9 @@ class Handler(httpbase.Handler):
             return self._err(500, f"{type(e).__name__}: {e}")
 
     def _post(self, path, body):
+        if path == "/api/project/rename":
+            _NAME["mtime"] = None
+            return self._json({"name": registry.rename(ROOT, body["name"])})
         if path == "/api/file":
             r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
                                 bool(body.get("force")))

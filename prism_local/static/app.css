@@ -66,6 +66,13 @@ button.flip .ico { transform: rotate(180deg); }
   background: var(--panel); border-bottom: 1px solid var(--border); flex: none;
 }
 .brand { font-weight: 700; font-size: 14px; white-space: nowrap; }
+.projname { cursor: text; border-radius: 4px; padding: 1px 4px; margin-left: -2px; }
+.projname:hover { background: var(--panel2); box-shadow: 0 0 0 1px var(--border); }
+.projname:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.projname input {
+  font: inherit; color: var(--text); background: var(--cm-bg); border: 1px solid var(--accent); border-radius: 4px;
+  padding: 0 4px; width: 22ch; max-width: 40vw; height: 22px; box-sizing: border-box; outline: none;
+}
 .logo { color: var(--accent); font-size: 17px; }
 .actions { display: flex; align-items: center; gap: 8px; }
 .actions.right { margin-left: auto; }

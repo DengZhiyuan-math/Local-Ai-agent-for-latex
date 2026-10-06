@@ -988,11 +988,7 @@ def change_project(pid: str, body: dict) -> dict:
                     if not e["tags"]:
                         del e["tags"]
                 if "name" in body:
-                    name = str(body["name"] or "").strip()[:120]
-                    if name and name != Path(e["path"]).name:
-                        e["name"] = name
-                    else:
-                        e.pop("name", None)
+                    registry.set_entry_name(e, body["name"])
                 return True
         return False
     if not registry.update_projects(fn):

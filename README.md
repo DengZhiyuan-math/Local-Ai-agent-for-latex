@@ -156,6 +156,9 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   project with it. Rename a tag or change its color from its ⋯ menu in the sidebar.
 - Every project you open with prism-local, by any route, is added to the list automatically.
 - The ⌂ button in the editor opens the Home page, starting it if needed.
+- The project's name next to it is the one in this list: click it to rename the project
+  (Enter saves, Esc cancels, empty goes back to the folder's name). Only the name shown
+  changes; the folder on disk keeps its own.
 
 The list is stored in `projects.json`, and the settings in `settings.json`, in the state directory (`%LOCALAPPDATA%\prism-local` on
 Windows, `~/.local/state/prism-local` elsewhere, or `$PRISM_STATE_DIR`).

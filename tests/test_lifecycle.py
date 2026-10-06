@@ -91,6 +91,19 @@ class ServerLifecycle(unittest.TestCase):
         self.assertLessEqual(took, hi)
         self.assertFalse(self.ready.exists(), "ready file should be removed on exit")
 
+    def test_rename_project_from_the_editor(self):
+        url = self.start("30,1,30")
+        headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+        rename = lambda name: request(url, "/api/project/rename", json.dumps({"name": name}).encode(), headers)
+        self.assertEqual(request(url, "/api/tree")[1]["name"], PROJECT.name)
+        self.assertEqual(rename("  My paper "), (200, {"name": "My paper"}))
+        self.assertEqual(request(url, "/api/tree")[1]["name"], "My paper")
+        listed = json.loads((self.tmp / "state" / "projects.json").read_text(encoding="utf-8"))
+        self.assertEqual([e.get("name") for e in listed["projects"]], ["My paper"])
+        self.assertTrue(PROJECT.is_dir(), "the folder keeps its name")
+        self.assertEqual(rename(""), (200, {"name": PROJECT.name}))      # back to the folder's
+        self.assertEqual(request(url, "/api/tree")[1]["name"], PROJECT.name)
+
     def test_exits_when_no_page_ever_connects(self):
         self.start("2,1,5")
         t0 = time.monotonic()
