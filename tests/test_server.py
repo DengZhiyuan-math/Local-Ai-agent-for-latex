@@ -132,6 +132,27 @@ class GitState(unittest.TestCase):
         self.assertIn("a/main.tex", diff)
         self.assertNotIn("README", diff)
 
+    def test_diff_panel_says_what_it_shows(self):
+        root = tmpdir()
+        (root / "main.tex").write_text("a\n", encoding="utf-8")
+        server.set_root(root)
+        self.assertEqual(server.project_diff("."), {"repo": False, "diff": ""})
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-qm", "first")
+        (root / "main.tex").write_text("b\n", encoding="utf-8")
+        self.git(root, "commit", "-qam", "Autosave: main.tex")
+        # Everything committed (as with sync on): the last commit's changes, not an empty panel.
+        d = server.project_diff(".")
+        self.assertEqual((d["diff"], d["untracked"], d["last"]["message"]), ("", [], "Autosave: main.tex"))
+        self.assertIn("+b", d["last"]["diff"])
+        (root / "main.tex").write_text("c\n", encoding="utf-8")
+        self.git(root, "add", "main.tex")                   # staged counts as uncommitted too
+        (root / "new.tex").write_text("n\n", encoding="utf-8")
+        d = server.project_diff(".")
+        self.assertIn("+c", d["diff"])
+        self.assertEqual((d["untracked"], d["last"]), (["new.tex"], None))
+
 
 class Symbols(unittest.TestCase):
     def test_theorem_names_and_their_titles(self):

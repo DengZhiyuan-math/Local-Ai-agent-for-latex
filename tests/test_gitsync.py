@@ -128,6 +128,19 @@ class GitSyncTest(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
+class RepositoryCreatedLater(unittest.TestCase):
+    def test_an_open_editor_finds_a_new_repository(self):
+        root = tmpdir()
+        (root / "main.tex").write_text("x\n", encoding="utf-8")
+        g = gitsync.GitSync(lambda: root, lambda: "build")
+        self.assertFalse(g.status()["own"])
+        git(root, "init", "-q", "-b", "main")              # the Home page's "+ GitHub", say
+        self.assertFalse(g.check_repo(), "not looked for again by itself: no timer")
+        self.assertTrue(g.recheck())                       # the Home page tells it, or the menu opens
+        self.assertTrue(g.status()["own"])
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
 class SharedRepositoryTest(unittest.TestCase):
     """Several projects in one repository: each editor records its own project only."""
 

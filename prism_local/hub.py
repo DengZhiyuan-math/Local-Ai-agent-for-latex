@@ -622,6 +622,7 @@ def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         root = Path(r["path"])
         if body.get("github") or github_of(root):
             _publish(root, bool(body.get("github")), owner, repo_name(root.name), report)
+        tell_editor(root)
     f["sync"] = {"mode": "separate"}
 
 
@@ -920,7 +921,23 @@ def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"git init failed: {e}"}
     r = create_github_repo(target, owner, name or info["name"])
+    if "url" in r:
+        tell_editor(root)
     return {**r, "created": "url" in r}
+
+
+def tell_editor(root: Path) -> None:
+    """The project's open editor, if any, looks for its new repository (gitsync.recheck)."""
+    inst = registry.running_instance(registry.instance_file(registry.project_key(root)), "prism-local",
+                                     root, timeout=1.0, cleanup=False)
+    if not inst:
+        return
+    req = registry.urllib.request.Request(inst["url"] + "api/git/recheck", data=b"{}", method="POST",
+                                          headers={"Content-Type": "application/json", "X-Prism-Local": "1"})
+    try:
+        registry.HTTP.open(req, timeout=10).close()
+    except OSError:
+        pass                    # an editor of an older version: its GitHub menu looks again
 
 
 TEMPLATES = {

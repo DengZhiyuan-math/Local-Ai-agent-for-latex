@@ -231,6 +231,25 @@ def git_status() -> dict[str, str]:
     return st
 
 
+def project_diff(spec: str) -> dict:
+    """What changed since the last commit (staged or not, and new files), and when nothing
+    did, what the last commit changed: with sync on, edits are committed a moment after you
+    stop typing, so "nothing uncommitted" is the usual state, not an empty one.
+    --relative: paths as the project sees them, and nothing from outside it."""
+    if git("rev-parse", "--git-dir", timeout=10).returncode != 0:
+        return {"repo": False, "diff": ""}
+    has_head = git("rev-parse", "-q", "--verify", "HEAD", timeout=10).returncode == 0
+    diff = git("diff", "--no-color", "--relative", *(["HEAD"] if has_head else []), "--", spec, timeout=20).stdout
+    new = [x for x in git("ls-files", "--others", "--exclude-standard", "--", spec, timeout=20).stdout.splitlines() if x]
+    out = {"repo": True, "diff": diff, "untracked": new[:50], "last": None}
+    if not diff and has_head:
+        log = git("log", "-1", "--format=%h%x1f%ct%x1f%s", "--", spec, timeout=20).stdout.strip().split("\x1f")
+        if len(log) == 3:
+            shown = git("show", "--no-color", "--relative", "--format=", log[0], "--", spec, timeout=20).stdout
+            out["last"] = {"hash": log[0], "at": int(log[1]), "message": log[2], "diff": shown}
+    return out
+
+
 def mtime(p: Path) -> float:
     return p.stat().st_mtime_ns / 1e9
 
@@ -805,9 +824,7 @@ class Handler(httpbase.Handler):
         if path == "/api/diff":
             if q.get("path"):
                 resolve(q["path"])
-            # --relative: paths as the project sees them, and nothing from outside it
-            return self._json({"diff": git("diff", "--no-color", "--relative", "--",
-                                           q.get("path") or ".", timeout=20).stdout})
+            return self._json(project_diff(q.get("path") or "."))
         if path == "/api/upload/sync":             # how the uploads' commits and pushes went
             return self._json({p: UPLOAD_SYNC.get(p) for p in q.get("paths", "").split("\n") if p})
         if path == "/api/synctex/forward":
@@ -841,10 +858,11 @@ class Handler(httpbase.Handler):
             with GITSYNC.lock:
                 r = hub.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
                                         list(body.get("leave_out") or []))
-                GITSYNC._checked = None         # a repository may exist now: look again
-                if GITSYNC.check_repo():
-                    GITSYNC._safe(GITSYNC._remote_state)
+            GITSYNC.recheck()                   # a repository exists now
             return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)
+        if path == "/api/git/recheck":
+            GITSYNC.recheck()
+            return self._json(GITSYNC.status())
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
         if path == "/api/file":

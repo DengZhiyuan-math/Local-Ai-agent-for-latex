@@ -424,7 +424,12 @@ function renderSync(st) {
 function syncMenu(open) { $("#sync-menu").hidden = !open; $("#btn-sync").setAttribute("aria-expanded", String(open)); }
 $("#btn-sync").onclick = async (e) => {
   e.stopPropagation(); syncMenu($("#sync-menu").hidden);
-  if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) loadPublish();
+  if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) {
+    // Created in a terminal since the editor started? Look once, now that you ask.
+    const st = await api("/api/git/recheck", {}).catch(() => null);
+    if (st && st._status === 200) { delete st._status; renderSync(st); }
+    if (!$("#sync-publish").hidden) loadPublish();
+  }
   if (!$("#sync-menu").hidden && !S.githubUrl) {
     const r = await api("/api/git/github").catch(() => ({}));
     S.githubUrl = r.github || "";
@@ -741,7 +746,18 @@ $("#panel-toggle").onclick = () => {
 };
 async function showDiff(path) {
   const r = await api("/api/diff" + (path ? "?path=" + encodeURIComponent(path) : ""));
-  const text = r.diff || "(no uncommitted changes, or not a git repository)";
+  const what = path ? path : "this project";
+  let text;
+  if (r.repo === false) text = `${what === "this project" ? "This project" : what} is not in a git repository, so there is nothing to compare with.\nCreate one from the GitHub button at the top (Not on GitHub).`;
+  else {
+    const parts = [];
+    if (r.untracked && r.untracked.length) parts.push(`New files, not committed yet: ${r.untracked.join(", ")}`);
+    if (r.diff) parts.push(r.diff);
+    else if (r.last) parts.push(`No uncommitted changes in ${what}: everything is committed${S.sync && S.sync.remote ? " (and pushed to GitHub with sync on)" : ""}.\n`
+      + `The last commit that changed it, ${ago(r.last.at)}: ${r.last.message}  [${r.last.hash}]\n\n${r.last.diff}`);
+    else if (!parts.length) parts.push(`No uncommitted changes in ${what}.`);
+    text = parts.join("\n\n") || r.diff || "";
+  }
   $("#diff").innerHTML = text.split("\n").map((l) => {
     const cls = l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "";
     return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);

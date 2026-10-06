@@ -120,7 +120,7 @@ class GitSync:
 
     def check_repo(self) -> bool:
         """Whether the project is the top of its own repository, or in a shared one
-        (looked up once per folder)."""
+        (looked up once per folder; recheck() looks again)."""
         root = self.root_fn().resolve()
         if getattr(self, "_checked", None) != root:
             self._checked, self.own, self.git_dir, self.top, self.prefix = root, None, None, None, ""
@@ -139,6 +139,17 @@ class GitSync:
                     self.git_dir, self.top = Path(lines[1]), top
             except (OSError, subprocess.SubprocessError, ValueError):
                 self.own = False
+        return bool(self.own)
+
+    def recheck(self) -> bool:
+        """Look for a repository again: one may have been created while the editor runs (the
+        Home page's "+ GitHub" says so; git init in a terminal is seen when the GitHub menu
+        opens). Not on a timer: a project without a repository costs nothing."""
+        with self.lock:
+            if not self.own:
+                self._checked = None
+            if self.check_repo():
+                self._safe(self._remote_state)
         return bool(self.own)
 
     @property
