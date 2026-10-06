@@ -127,7 +127,7 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   inside some other repository (such as `examples/minimal`, inside prism-local's) has none of
   its own, and the chip says so.
 - **Add existing…** adds an existing LaTeX folder. **Browse…** opens a native folder dialog (tkinter).
-- The **⋯** menu (or a right-click) pins a project to the top, renames it in the list, moves it
+- The **⋯** menu (or a right-click) pins a project to the top, renames it (and its folder), moves it
   to a folder, edits its tags, shows it in Explorer/Finder, copies its path, or removes it from
   the list. Removing never touches the files.
 - **Folders** in the sidebar organize the list: one per research topic, say, with a subfolder
@@ -157,8 +157,13 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
 - Every project you open with prism-local, by any route, is added to the list automatically.
 - The ⌂ button in the editor opens the Home page, starting it if needed.
 - The project's name next to it is the one in this list: click it to rename the project
-  (Enter saves, Esc cancels, empty goes back to the folder's name). Only the name shown
-  changes; the folder on disk keeps its own.
+  (Enter saves, Esc cancels, empty goes back to the folder's name). Its folder on disk is
+  renamed too: the editor saves, its server stops, the folder is renamed, and the server
+  starts again in it on the same port, so the page simply reloads. Characters no folder may
+  have (`: * ? " < > | / \`) become `-` in the folder's name; the list keeps the name as
+  typed. A folder in use by another program is not renamed, and the editor says so. In a
+  repository shared by a folder of projects, the rename is committed. The Home page's
+  **Rename…** does the same for a project whose editor is closed.
 
 The list is stored in `projects.json`, and the settings in `settings.json`, in the state directory (`%LOCALAPPDATA%\prism-local` on
 Windows, `~/.local/state/prism-local` elsewhere, or `$PRISM_STATE_DIR`).

@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import time
 import urllib.request
 import zlib
@@ -264,6 +265,53 @@ def rename(project: Path, name) -> str:
         return entry.get("name") or project.name
 
     return update_projects(fn)
+
+
+BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
+
+
+def folder_name(name) -> str:
+    """A folder name Windows, macOS and Linux all accept, from a project's name
+    ("Paper: draft" -> "Paper- draft"); "" when nothing is left."""
+    return BAD_NAME.sub("-", str(name or "")).strip(" .")[:120]
+
+
+def inside(p: Path, top: Path) -> bool:
+    """Whether p is top or below it."""
+    return norm(p) == norm(top) or norm(p).startswith(norm(top).rstrip("\\/") + os.sep)
+
+
+def move_folder(old: Path, new: Path, wait: float = 20.0) -> None:
+    """Rename a project's folder, and make the list follow it (projects inside it, a
+    folder's shared repository there). A folder still in use (a server that is just
+    exiting, an Explorer window) is tried again for `wait` seconds."""
+    old, new = Path(old), Path(new)
+    same = norm(old) == norm(new)            # only the case changes
+    if new.exists() and not same:
+        raise FileExistsError(f"a folder named {new.name} already exists there")
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            os.rename(old, new)
+            break
+        except PermissionError:
+            if time.monotonic() > deadline:
+                raise PermissionError(f"{old.name} is in use by another program (an Explorer "
+                                      "window, a terminal, a PDF viewer?); close it and try again")
+            time.sleep(0.25)
+
+    def fn(data):
+        for e in data["projects"]:
+            p = Path(e["path"])
+            if inside(p, old):
+                e["path"] = str(new / p.relative_to(old))
+                if e.get("name") == Path(e["path"]).name:
+                    e.pop("name")
+        for f in data.get("folders", []):
+            sync = f.get("sync") or {}
+            if sync.get("repo") and inside(Path(sync["repo"]), old):
+                sync["repo"] = str(new / Path(sync["repo"]).relative_to(old))
+    update_projects(fn)
 
 
 def safe_touch(project: Path) -> None:

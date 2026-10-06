@@ -313,10 +313,7 @@ def disk_name(name: str) -> str:
     return BAD_NAME.sub("-", name).strip(" .") or "folder"
 
 
-def inside(p: Path, top: Path) -> bool:
-    """Whether p is top or below it."""
-    return registry.norm(p) == registry.norm(top) or \
-        registry.norm(p).startswith(registry.norm(top).rstrip("\\/") + os.sep)
+inside = registry.inside
 
 
 def repo_top(p: Path) -> Path | None:
@@ -996,6 +993,27 @@ def change_project(pid: str, body: dict) -> dict:
     return {"ok": True}
 
 
+def rename_project(pid: str, name: str, folder: bool) -> dict:
+    """Rename a project in the list and, with `folder`, its folder on disk too (only while
+    no editor runs in it: the editor renames a project it has open itself)."""
+    root = Path(entry_for(pid)["path"])
+    name = name.strip()
+    new_folder = registry.folder_name(name)
+    if not folder or not name or not new_folder or new_folder == root.name:
+        change_project(pid, {"name": name})
+        return {"id": pid, "path": str(root), "moved": False}
+    if not root.is_dir():
+        raise ValueError(f"folder not found: {root}")
+    if is_running(root):
+        raise ValueError("its editor is open: rename it there (click the name at the top left), "
+                         "or close the editor first")
+    new = root.parent / new_folder
+    change_project(pid, {"name": name})
+    registry.move_folder(root, new)
+    gitsync.record_move(root, new)
+    return {"id": registry.project_key(new), "path": str(new), "moved": True}
+
+
 def remove_project(pid: str) -> dict:
     """Forget a project. Its files are not touched."""
     def fn(data):
@@ -1128,6 +1146,9 @@ class Handler(httpbase.Handler):
                 return self._json(create_project(body))
             if path == "/api/projects/update":
                 return self._json(change_project(body["id"], body))
+            if path == "/api/projects/rename":
+                return self._json(rename_project(body["id"], str(body.get("name") or ""),
+                                                 bool(body.get("folder"))))
             if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
             if path == "/api/folders/create":

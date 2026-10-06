@@ -326,6 +326,8 @@ function renameProject() {
     input.remove();
     if (!save || name === old) return showProjectName(old, S.projectFolder);
     showProjectName(name || S.projectFolder, S.projectFolder);
+    if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
+    if (!(await saveAll())) { showProjectName(old, S.projectFolder); return toast("Resolve the save conflict first."); }
     let r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
     if (r._status === 404) {
       // This project's server started before renaming existed: restart it with the new
@@ -334,9 +336,19 @@ function renameProject() {
       const ok = await restartServer();
       if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
       r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
-      if (r._status === 200) return reloadPage();
+      if (r._status === 200) {
+        if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(); }
+        return reloadPage();
+      }
     }
     if (r._status !== 200) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + (r.error || "unknown error")); }
+    if (r.moving) {
+      // The folder is renamed too: the server stops, and starts again in it on this port.
+      toast(`Renaming the folder to “${r.folder}”…`);
+      const ok = await waitForNewServer();
+      if (ok === true) return reloadPage();
+      return toast("Could not rename the folder: " + ok);
+    }
     showProjectName(r.name, S.projectFolder);
   };
   input.addEventListener("keydown", (e) => {
@@ -353,6 +365,7 @@ async function poll() {
   const r = await api("/api/tree").catch(() => null);
   if (!r || r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
   showProjectName(r.name || r.root, r.root);
+  if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
   const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]));
   S.files = r.files; S.order = r.order || [];
   if (changed) renderTree();
@@ -468,7 +481,11 @@ async function restartServer() {
   if (!(await saveAll())) return "Resolve the save conflict first.";
   const r = await api("/api/restart", {}).catch(() => ({ error: "server not reachable" }));
   if (r.error) return r.error;
-  for (let i = 0; i < 60; i++) {           // the new server listens within a few seconds
+  return waitForNewServer();
+}
+// The server stopped to start again (restart, folder rename): wait until the new one answers.
+async function waitForNewServer() {
+  for (let i = 0; i < 80; i++) {           // the new server listens within a few seconds
     await new Promise((res) => setTimeout(res, 500));
     const t = await fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
     if (t && t.server !== S.server) return true;

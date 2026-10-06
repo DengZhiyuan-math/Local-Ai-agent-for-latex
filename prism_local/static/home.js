@@ -530,7 +530,7 @@ function projectMenu(id) {
   return p.exists ? [
     [p.running ? "Show editor" : "Open", () => openProject(id)],
     [p.pinned ? "Unpin" : "Pin to top", () => setPinned(id, !p.pinned)],
-    ["Rename in list…", () => openRename(id)],
+    ["Rename…", () => openRename(id)],
     "-", ...org,
     "-",
     ["Show in folder", () => reveal(id)],
@@ -741,20 +741,39 @@ $("#form-add").addEventListener("submit", async (e) => {
   await load(); loadAllGit();
 });
 
-function openRename(id) {
-  const p = byId(id), f = $("#form-rename");
-  f.elements.name.value = p.custom_name ? p.name : "";
-  f.elements.name.placeholder = p.folder;
-  f.dataset.id = id;
-  $("#dlg-rename").showModal(); f.elements.name.select();
+// Like registry.folder_name: the folder a name gives.
+const folderFor = (name) => name.replace(/[<>:"\/\\|?*\x00-\x1f]/g, "-").replace(/^[ .]+|[ .]+$/g, "").slice(0, 120);
+function renameHint() {
+  const f = $("#form-rename"), p = byId(f.dataset.id), name = f.elements.name.value.trim();
+  const folder = folderFor(name), hint = f.querySelector(".rename-hint");
+  f.elements.folder.disabled = !!p.running;
+  if (p.running) f.elements.folder.checked = false;
+  hint.textContent = p.running
+    ? "Its editor is open, so only the name in the list changes here. To rename the folder too, click the name at the top left of the editor."
+    : !name ? `Empty: the list shows the folder's name, ${p.folder}.`
+    : f.elements.folder.checked && folder && folder !== p.folder ? `The folder ${p.folder} becomes ${folder}.`
+    : f.elements.folder.checked ? "The folder keeps its name."
+    : `Only the name in the list changes; the folder stays ${p.folder}.`;
 }
+function openRename(id) {
+  const p = byId(id), f = $("#form-rename"), dlg = $("#dlg-rename");
+  f.dataset.id = id;
+  f.elements.name.value = p.name;
+  f.elements.name.placeholder = p.folder;
+  f.elements.folder.checked = true;
+  dlgError(dlg, ""); renameHint();
+  dlg.showModal(); f.elements.name.select();
+}
+$("#form-rename").addEventListener("input", renameHint);
 $("#form-rename").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const f = e.target;
-  const r = await api("/api/projects/update", { id: f.dataset.id, name: f.elements.name.value });
-  $("#dlg-rename").close();
-  if (r._status !== 200) toast(r.error || "Could not rename", true);
-  load();
+  const f = e.target, dlg = $("#dlg-rename");
+  const r = await api("/api/projects/rename", { id: f.dataset.id, name: f.elements.name.value,
+                                                folder: f.elements.folder.checked && !f.elements.folder.disabled });
+  if (r._status !== 200) return dlgError(dlg, r.error || "Could not rename");
+  dlg.close();
+  if (r.moved) toast(`Folder renamed: ${r.path}`);
+  H.sig = null; await load(); loadAllGit();
 });
 
 /* folders: new, or rename, move and notes of an existing one */

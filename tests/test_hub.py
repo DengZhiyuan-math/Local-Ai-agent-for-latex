@@ -259,6 +259,29 @@ class FolderSync(TempState):
         self.assertTrue((repo / hub.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
         self.assertFalse((repo / "prism-repo.json").exists())
 
+    def test_rename_project_and_folder(self):
+        old = self.projects / "ex 1"
+        r = hub.rename_project(self.ids["ex 1"], "Exercise: one", folder=True)
+        new = self.projects / "Exercise- one"
+        self.assertEqual((Path(r["path"]), r["moved"]), (new, True))
+        self.assertFalse(old.exists())
+        p = {x["name"]: x for x in hub.list_projects()["projects"]}["Exercise: one"]
+        self.assertEqual((Path(p["path"]), p["folder_id"]), (new, self.ex["id"]), "folder in the list kept")
+        with self.assertRaises(FileExistsError):
+            hub.rename_project(r["id"], "exam", folder=True)
+        r2 = hub.rename_project(r["id"], "Just a label", folder=False)
+        self.assertFalse(r2["moved"])
+        self.assertTrue(new.is_dir())
+
+    def test_rename_inside_a_shared_repository_is_committed(self):
+        self.assertTrue(hub.apply_sync({"id": self.top["id"], "mode": "shared"})["ok"])
+        repo = self.projects / "Course"
+        pid = {p["name"]: p["id"] for p in hub.list_projects()["projects"]}["ex 1"]
+        hub.rename_project(pid, "ex one", folder=True)
+        self.assertEqual(self.git(repo, "log", "-1", "--format=%s").strip(), "Rename ex 1 to ex one")
+        self.assertEqual(self.git(repo, "status", "--porcelain"), "", "nothing left over")
+        self.assertIn("练习/ex one/main.tex", self.git(repo, "ls-files"))
+
     def test_separate_creates_missing_repositories(self):
         r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
         self.assertTrue(r["ok"], r["report"])

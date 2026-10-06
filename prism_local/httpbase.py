@@ -165,10 +165,26 @@ def quiet_stdio() -> None:
         sys.stdout = open(os.devnull, "w")
     if sys.stderr is None:
         sys.stderr = sys.stdout
+    # A console or pipe that cannot show a character (a Chinese folder name in cp1252) shows
+    # "?": printing a path must never stop a server.
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
 
 
 def log(msg: str) -> None:
-    print(time.strftime("%H:%M:%S ") + msg, flush=True)
+    """A line in the server's output. Never fails: a console that cannot show a character
+    (a Chinese folder name in a cp1252 console) gets "?" instead."""
+    line = time.strftime("%H:%M:%S ") + msg
+    try:
+        print(line, flush=True)
+    except UnicodeEncodeError:
+        enc = getattr(sys.stdout, "encoding", None) or "ascii"
+        print(line.encode(enc, "replace").decode(enc), flush=True)
+    except (OSError, ValueError):       # no console at all
+        pass
 
 
 def stop_on_signals(srv: Server) -> None:

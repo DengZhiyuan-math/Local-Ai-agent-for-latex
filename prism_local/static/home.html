@@ -145,9 +145,11 @@
 
 <dialog id="dlg-rename">
   <form method="dialog" id="form-rename">
-    <h3>Rename in list</h3>
-    <label class="field"><span>Display name</span><input name="name" autocomplete="off"></label>
-    <p class="hint">Only the name shown here changes. Leave it empty to use the folder name.</p>
+    <h3>Rename project</h3>
+    <label class="field"><span>Name</span><input name="name" autocomplete="off"></label>
+    <label class="check"><input type="checkbox" name="folder" checked> Rename the folder on disk too</label>
+    <p class="hint rename-hint"></p>
+    <div class="dlg-error" hidden></div>
     <div class="dlg-actions">
       <button type="button" data-close>Cancel</button>
       <button type="submit" class="primary">Save</button>

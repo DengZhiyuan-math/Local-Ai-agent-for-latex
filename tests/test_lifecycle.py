@@ -71,11 +71,11 @@ def wait_file(path, timeout=15):
 
 
 class ServerLifecycle(unittest.TestCase):
-    def start(self, timings, *extra):
+    def start(self, timings, *extra, project=PROJECT, port="0"):
         self.tmp = tmpdir()
         self.ready = self.tmp / "ready.json"
         self.proc = subprocess.Popen(
-            [sys.executable, str(SERVER), str(PROJECT), "--port", "0", "--no-browser",
+            [sys.executable, str(SERVER), str(project), "--port", port, "--no-browser",
              "--exit-when-idle", "--idle-timings", timings, "--ready-file", str(self.ready),
              *extra], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
             env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state")})
@@ -91,18 +91,53 @@ class ServerLifecycle(unittest.TestCase):
         self.assertLessEqual(took, hi)
         self.assertFalse(self.ready.exists(), "ready file should be removed on exit")
 
-    def test_rename_project_from_the_editor(self):
-        url = self.start("30,1,30")
+    def copy_project(self, name="my paper"):
+        import shutil
+        root = tmpdir() / name
+        shutil.copytree(PROJECT, root)
+        return root
+
+    def test_rename_only_the_name(self):
+        root = self.copy_project()
+        url = self.start("30,1,30", project=root)
         headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
         rename = lambda name: request(url, "/api/project/rename", json.dumps({"name": name}).encode(), headers)
-        self.assertEqual(request(url, "/api/tree")[1]["name"], PROJECT.name)
-        self.assertEqual(rename("  My paper "), (200, {"name": "My paper"}))
-        self.assertEqual(request(url, "/api/tree")[1]["name"], "My paper")
-        listed = json.loads((self.tmp / "state" / "projects.json").read_text(encoding="utf-8"))
-        self.assertEqual([e.get("name") for e in listed["projects"]], ["My paper"])
-        self.assertTrue(PROJECT.is_dir(), "the folder keeps its name")
-        self.assertEqual(rename(""), (200, {"name": PROJECT.name}))      # back to the folder's
-        self.assertEqual(request(url, "/api/tree")[1]["name"], PROJECT.name)
+        self.assertEqual(request(url, "/api/tree")[1]["name"], "my paper")
+        # The folder keeps its name when the new one is the same, or empty (the folder's).
+        self.assertEqual(rename("my paper")[1], {"name": "my paper", "moving": False})
+        self.assertEqual(rename("")[1], {"name": "my paper", "moving": False})
+        self.assertTrue(root.is_dir())
+
+    def test_rename_the_folder_too(self):
+        root = self.copy_project()
+        with socket.socket() as s:                   # a free port, kept across the restart
+            s.bind(("127.0.0.1", 0))
+            port = s.getsockname()[1]
+        url = self.start("30,1,30", project=root, port=str(port))
+        headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+        status, r = request(url, "/api/project/rename", json.dumps({"name": "Paper: v2"}).encode(), headers)
+        self.assertEqual((status, r), (200, {"name": "Paper: v2", "moving": True, "folder": "Paper- v2"}))
+        new = root.parent / "Paper- v2"
+        deadline = time.monotonic() + 30
+        tree = None
+        while time.monotonic() < deadline:          # the server comes back in the new folder
+            try:
+                tree = request(url, "/api/tree")[1]
+                if tree.get("path") == str(new):
+                    break
+            except (OSError, ValueError, KeyError):
+                pass
+            time.sleep(0.3)
+        self.assertEqual(tree and tree.get("path"), str(new))
+        self.assertEqual((tree["root"], tree["name"], tree["move_error"]), ("Paper- v2", "Paper: v2", None))
+        self.assertFalse(root.exists())
+        self.assertTrue((new / "main.tex").is_file())
+        listed = json.loads((self.tmp / "state" / "projects.json").read_text(encoding="utf-8"))["projects"]
+        self.assertEqual([(e["path"], e.get("name")) for e in listed], [(str(new), "Paper: v2")])
+        # The restarted server is another process: stop it as well.
+        pid = request(url, "/api/ping")[1]["pid"]
+        self.addCleanup(lambda: subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                        if os.name == "nt" else os.kill(pid, 9))
 
     def test_exits_when_no_page_ever_connects(self):
         self.start("2,1,5")

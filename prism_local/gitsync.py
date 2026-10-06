@@ -54,6 +54,31 @@ def shared_marker(top: Path) -> bool:
         return False
 
 
+def record_move(old: Path, new: Path) -> str | None:
+    """A project's folder was renamed inside a repository shared by several projects:
+    commit the move there (its own repository needs nothing: its paths do not change).
+    Returns the commit message, or None."""
+    def git(*args, cwd=new):
+        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                              **NO_WINDOW)
+    try:
+        r = git("rev-parse", "--show-toplevel")
+        if r.returncode != 0:
+            return None
+        top = Path(r.stdout.strip()).resolve()
+        if top == Path(new).resolve() or not shared_marker(top):
+            return None
+        specs = [f":(top,literal){Path(p).resolve().relative_to(top).as_posix()}" for p in (old, new)]
+        git("add", "-A", "--", *specs, cwd=top)
+        message = f"Rename {Path(old).name} to {Path(new).name}"
+        if git("commit", "-q", "-m", message, "--", *specs, cwd=top).returncode != 0:
+            return None
+        return message
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
 def _names(paths: list[str]) -> str:
     names = [p.split("/")[-1] for p in paths]
     return ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")

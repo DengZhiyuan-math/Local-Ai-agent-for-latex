@@ -447,12 +447,53 @@ def code_stamp() -> float:
 
 STARTED_CODE = code_stamp()
 STARTED_AT = time.time()                 # tells the page when a new server answers
-RESTART: dict = {"server": None, "again": False}
+RESTART: dict = {"server": None, "again": False, "move_to": None, "args": None, "port": None}
+# A folder rename that did not work (in use?): the server came back at the old folder.
+MOVE: dict = {"error": None, "from": None}
+
+
+def rename_project(name: str) -> tuple[dict, int]:
+    """Rename the project: the name in the list, and its folder on disk (a name with
+    characters no folder may have keeps them in the list only). The folder cannot be
+    renamed while this server works in it, so the server stops, and starts again at the
+    new folder on the same port (relaunch, --moved-from); the page waits, then reloads."""
+    _NAME["mtime"] = None
+    folder = registry.folder_name(name)
+    if not name or not folder or folder == ROOT.name:
+        return {"name": registry.rename(ROOT, name), "moving": False}, 200
+    new = ROOT.parent / folder
+    if new.exists() and registry.norm(new) != registry.norm(ROOT):
+        return {"error": f"a folder named {folder} already exists next to this project"}, 409
+    if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
+        return {"error": "wait until the build or the agent's turn has finished"}, 409
+    registry.rename(ROOT, name)          # the list keeps the exact name; move_folder tidies it
+    RESTART.update(again=True, move_to=new)
+    threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+    return {"name": name, "moving": True, "folder": folder}, 200
+
+
+def move_argv(new: Path) -> list[str]:
+    """This server's command line for the project at `new`, on the port it has now."""
+    a = RESTART["args"]
+    argv = [sys.executable, *(["-u"] if "-u" in (getattr(sys, "orig_argv", None) or []) else []),
+            str(Path(__file__).resolve()), str(new), "--port", str(RESTART["port"]),
+            "--port-tries", "1", "--no-browser", "--moved-from", str(ROOT)]
+    if a.exit_when_idle:
+        argv.append("--exit-when-idle")
+    if a.idle_timings:
+        argv += ["--idle-timings", a.idle_timings]
+    if a.ready_file:     # the instance file is per project: the new folder has its own
+        own = registry.norm(a.ready_file) == registry.norm(registry.instance_file(registry.project_key(ROOT)))
+        argv += ["--ready-file", str(registry.instance_file(registry.project_key(new)) if own else a.ready_file)]
+    return argv
 
 
 def relaunch() -> None:
-    """Start this server again with the same command line (after it stopped listening)."""
+    """Start this server again with the same command line (after it stopped listening),
+    or, after a rename, for the renamed folder (move_argv)."""
     argv = list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+    if RESTART["move_to"] is not None:
+        argv = move_argv(RESTART["move_to"])
     if "--no-browser" not in argv:
         argv.append("--no-browser")           # the page is already open
     try:
@@ -461,8 +502,9 @@ def relaunch() -> None:
         out = subprocess.DEVNULL
     kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
           if os.name == "nt" else {"start_new_session": True})
+    # Not from inside the project's folder: a process working there keeps it from being renamed.
     subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                     close_fds=True, **kw)
+                     close_fds=True, cwd=str(ROOT.parent), **kw)
 
 
 def run_build(mode: str, clean: bool = False) -> dict:
@@ -718,7 +760,8 @@ class Handler(httpbase.Handler):
             st = git_status()
             files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f)}
                      for f in list_files()]
-            return self._json({"root": ROOT.name, "name": project_name(), "files": files, "order": document_order(),
+            return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
+                               "move_error": MOVE["error"], "files": files, "order": document_order(),
                                "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
                                "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
@@ -789,8 +832,7 @@ class Handler(httpbase.Handler):
 
     def _post(self, path, body):
         if path == "/api/project/rename":
-            _NAME["mtime"] = None
-            return self._json({"name": registry.rename(ROOT, body["name"])})
+            return self._json(*rename_project(str(body["name"] or "").strip()))
         if path == "/api/file":
             r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
                                 bool(body.get("force")))
@@ -859,6 +901,22 @@ def is_scratch(root: Path) -> bool:
     return root == tmp or tmp in root.parents
 
 
+def finish_move(old: Path, new: Path) -> Path:
+    """After rename_project: rename the folder (the old server has let go of it), commit the
+    move if the folder is in a shared repository, and return where the project now is.
+    If the folder cannot be renamed, the project stays where it was, and the page says why."""
+    os.chdir(old.parent)
+    try:
+        registry.move_folder(old, new)
+    except OSError as e:
+        MOVE.update(error=f"The folder was not renamed: {e}", **{"from": str(old)})
+        return old
+    from gitsync import record_move
+    record_move(old, new)
+    MOVE["from"] = str(old)
+    return new
+
+
 def main():
     httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local: local LaTeX studio "
@@ -875,8 +933,14 @@ def main():
                     help="once listening, write {pid, port, url, root} as JSON to this file")
     ap.add_argument("--idle-timings", help=argparse.SUPPRESS)   # "first,grace,stale" for tests
     ap.add_argument("--root", type=Path, help=argparse.SUPPRESS)   # backwards compatible
+    ap.add_argument("--moved-from", type=Path, help=argparse.SUPPRESS)   # see rename_project
     a = ap.parse_args()
-    set_root(a.root or a.project)
+    project = Path(a.root or a.project).resolve()
+    if a.moved_from:
+        project = finish_move(a.moved_from.resolve(), project)
+        if a.ready_file:
+            a.ready_file = registry.instance_file(registry.project_key(project))
+    set_root(project)
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
@@ -906,7 +970,7 @@ def main():
         threading.Thread(target=httpbase.idle_watchdog, daemon=True,
                          args=(srv, PRESENCE, busy, "build or agent turn")).start()
     httpbase.stop_on_signals(srv)
-    RESTART["server"] = srv
+    RESTART.update(server=srv, args=a, port=port)
     GITSYNC.start()
     try:
         srv.serve_forever()
@@ -920,8 +984,9 @@ def main():
         AGENT.shutdown()
         GITSYNC.flush()                 # what is left is committed and pushed
         if RESTART["again"]:
-            httpbase.log("restarting with the updated code")
-            relaunch()
+            relaunch()                  # first: nothing after it may keep the restart from happening
+            httpbase.log(f"restarting in {RESTART['move_to']}" if RESTART["move_to"]
+                         else "restarting with the updated code")
         else:
             httpbase.log("stopped")
 
