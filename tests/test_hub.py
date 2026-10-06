@@ -129,6 +129,15 @@ class Create(TempState):
         with self.assertRaises(ValueError):
             hub.create_project({"name": "ok", "parent": "relative/path"})
 
+    def test_new_repository_is_ready_for_co_authors(self):
+        hub.create_project({"name": "co", "parent": str(self.tmp), "template": "empty", "git": True})
+        root = self.tmp / "co"
+        if not (root / ".git").is_dir():
+            self.skipTest("git not available")
+        self.assertIn("* text=auto", (root / ".gitattributes").read_text(encoding="utf-8"))
+        hook = root / ".git" / "hooks" / "pre-push"
+        self.assertIn(hub.gitsync.GUARD_MARK, hook.read_text(encoding="utf-8"))
+
     def test_git_info_of_new_repository(self):
         hub.create_project({"name": "g", "parent": str(self.tmp), "template": "empty", "git": True})
         g = hub.git_info(self.tmp / "g")
@@ -235,7 +244,7 @@ class FolderSync(TempState):
         # Subfolders become directories (a name made safe for disk), build output stays out,
         # and exam's own history comes along.
         files =self.git(repo, "ls-files").splitlines()
-        self.assertEqual(sorted(files), sorted([".gitignore", "prism-repo.json", "Answers- all/ex 1 sol/main.tex",
+        self.assertEqual(sorted(files), sorted([".gitattributes", ".gitignore", "prism-repo.json", "Answers- all/ex 1 sol/main.tex",
                                                 "练习/ex 1/main.tex", "练习/exam/main.tex"]))
         self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
         self.assertTrue((repo / "练习" / "exam" / hub.SPLIT_BACKUP).is_dir())
@@ -317,8 +326,8 @@ class FolderSync(TempState):
         from unittest import mock
         root = self.projects / "ex 1"
         hub.git_init(root)
-        (root / "huge.bin").write_bytes(b"x" * 64)
-        with mock.patch.object(hub.gitsync, "MAX_FILE", 32):
+        (root / "huge.bin").write_bytes(b"x" * 4096)
+        with mock.patch.object(hub.gitsync, "MAX_FILE", 1024):
             hub.run_git(root, "add", "-A")
             self.assertEqual(hub._unstage_big(root), ["huge.bin"])
         self.assertNotIn("huge.bin", self.git(root, "diff", "--cached", "--name-only"))
@@ -334,6 +343,39 @@ class FolderSync(TempState):
         with self.assertRaises(ValueError):
             hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(self.projects / "exam" / "all")})
         self.assertTrue((self.projects / "exam" / "main.tex").exists())
+
+
+@unittest.skipUnless(hub.shutil.which("git"), "needs git")
+class CheckGitHub(TempState):
+    """When the Home page starts, every repository is fetched: new commits show on the cards."""
+
+    def run_git(self, cwd, *args):
+        subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,
+                       check=True, capture_output=True)
+
+    def test_new_commits_elsewhere_are_found(self):
+        from unittest import mock
+        remote, mine, other = self.tmp / "remote.git", self.tmp / "mine", self.tmp / "other"
+        self.run_git(self.tmp, "init", "-q", "--bare", "-b", "main", str(remote))
+        self.run_git(self.tmp, "clone", "-q", str(remote), str(mine))
+        (mine / "main.tex").write_text("a\n", encoding="utf-8")
+        self.run_git(mine, "add", "-A")
+        self.run_git(mine, "commit", "-qm", "first")
+        self.run_git(mine, "push", "-q", "-u", "origin", "main")
+        self.run_git(self.tmp, "clone", "-q", str(remote), str(other))
+        (other / "main.tex").write_text("b\n", encoding="utf-8")
+        self.run_git(other, "commit", "-qam", "elsewhere")
+        self.run_git(other, "push", "-q")
+        hub.add_project(str(mine))
+        # github_of: a local remote counts as the project's remote here.
+        with mock.patch.object(hub, "github_of", return_value="https://github.com/me/mine"):
+            with mock.patch.object(hub, "is_running", return_value=True):
+                self.assertEqual(hub.fetch_targets(), [], "an open editor fetches by itself")
+            hub.fetch_all()
+        self.assertEqual((hub.FETCH["total"], hub.FETCH["done"], hub.FETCH["errors"]), (1, 1, {}))
+        g = hub.git_info(mine)
+        self.assertEqual((g["behind"], g["fetch_error"]), (1, None))
+        self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
 
 
 class SettingsAndGitHub(TempState):

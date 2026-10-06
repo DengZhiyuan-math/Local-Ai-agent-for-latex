@@ -77,9 +77,30 @@ and the compiled PDF.
   Never run pdflatex or latexmk yourself. Without the tool, do not compile:
   the author compiles in the editor.
 - Never commit, push, or run git commands that modify the repository.
+- Lines between "% [prism-local]" comment lines hold two co-authors' versions of the same
+  passage, kept when they wrote it at the same time. Never delete those marker lines or
+  either version unless the author asks you to settle that passage.
 - Keep replies concise. If the project has a CLAUDE.md or AGENTS.md, follow it exactly.
 - Do not claim an argument is correct, or a step proved, unless you checked it.
 """
+
+
+def agent_env(base: dict | None = None) -> dict:
+    """The environment of an agent and of every command it starts: git may not reach any
+    remote (GIT_ALLOW_PROTOCOL names no protocol, so push, fetch and clone fail, --force and
+    --no-verify included) and the GitHub CLI has no login. prism-local itself syncs with
+    GitHub; an agent never needs to, and so can never rewrite or delete co-authors' work
+    there, whatever it is told or does."""
+    env = dict(os.environ if base is None else base)
+    env["GIT_ALLOW_PROTOCOL"] = "prism-local-agents-do-not-reach-remotes"
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
+        env.pop(k, None)
+    # An empty gh configuration: gh finds no login (it keeps its token there or in the keyring
+    # named by that configuration).
+    import tempfile
+    env["GH_CONFIG_DIR"] = os.path.join(tempfile.gettempdir(), "prism-local-no-gh-login")
+    return env
 
 
 def find_bin(env: str, name: str, extra: tuple[str, ...] = ()) -> str | None:
@@ -213,7 +234,7 @@ class CliBackend(Backend):
         job.proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE,
                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                                     text=True, encoding="utf-8", errors="replace", bufsize=1,
-                                    **TREE)
+                                    env=agent_env(), **TREE)
         job.proc.stdin.write(stdin)
         job.proc.stdin.close()
         threading.Thread(target=lambda: stderr_lines.extend(job.proc.stderr), daemon=True).start()

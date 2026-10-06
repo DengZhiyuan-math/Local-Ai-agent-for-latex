@@ -53,7 +53,7 @@ async function loadGit(p) {
   const r = await api("/api/git?id=" + encodeURIComponent(p.id)).catch(() => null);
   if (r && r._status === 200) { H.git[p.id] = r.git; const el = document.querySelector(`.card-p[data-id="${p.id}"] .gitchip`); if (el) el.outerHTML = gitChip(p.id); }
 }
-function loadAllGit() { H.projects.forEach(loadGit); }
+function loadAllGit() { return Promise.all(H.projects.map(loadGit)); }
 
 /* ------------------------------------------------------------------ folders and tags
    Folders (a research topic, its sub-projects, …) and tags only organize this list;
@@ -144,11 +144,14 @@ function gitChip(id) {
   if (g === null) return `<span class="gitchip"><button class="chip gh add" data-act="publish" title="Create a private GitHub repository for this project">+ GitHub</button></span>`;
   if (!g) return `<span class="gitchip"></span>`;
   if (g.nested) return `<span class="gitchip chip muted" title="No repository of its own: this folder is inside ${esc(g.toplevel_path)}">inside ${esc(g.toplevel)} repo</span>`;
-  const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : "", g.behind ? `↓${g.behind}` : ""].filter(Boolean).join(" · ");
+  const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : ""].filter(Boolean).join(" · ");
+  // New commits on GitHub (fetched when the Home page started): opening the project pulls them.
+  const news = g.behind ? ` <span class="chip news" title="${g.behind} new commit${g.behind === 1 ? "" : "s"} on GitHub (another computer, GitHub's editor). Opening the project brings them in.">↓ ${g.behind} new on GitHub</span>`
+    : g.fetch_error ? ` <span class="chip err" title="${esc(g.fetch_error)}">GitHub not reached</span>` : "";
   const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>`
     : ` <button class="chip gh add" data-act="publish" title="Create a private GitHub repository for ${g.shared ? "the repository it is in" : "this project"}">+ GitHub</button>`;
   const where = g.shared ? `, in the repository shared by its folder (${g.toplevel_path})` : "";
-  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${gh}</span>`;
+  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${news}${gh}</span>`;
 }
 function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);
@@ -342,8 +345,11 @@ function render() {
     unfiled: "Every project is in a folder.",
   }[v.kind] || "";
   const running = H.projects.filter((p) => p.running).length;
+  const behind = H.projects.filter((p) => H.git[p.id] && H.git[p.id].behind).length;
+  const fetchNote = H.fetch && H.fetch.running ? ` · checking GitHub (${H.fetch.done}/${H.fetch.total})…`
+    : behind ? ` · ${plural(behind, "project")} with new changes on GitHub` : "";
   $("#summary").textContent = !H.projects.length ? ""
-    : v.kind === "all" ? plural(H.projects.length, "project") + (running ? ` · ${running} open` : "")
+    : v.kind === "all" ? plural(H.projects.length, "project") + (running ? ` · ${running} open` : "") + fetchNote
     : v.kind === "folder" ? plural(shown, "project") + (childFolders(v.id).length ? ` · ${plural(folderTree(v.id).length, "subfolder")}` : "")
     : plural(shown, "project");
   document.querySelectorAll(".card-p[data-id]").forEach(attachThumb);
@@ -1127,8 +1133,27 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "n" && !e.ctrlKey && !e.metaKey && !e.altKey) { e.preventDefault(); openNew(); }
 });
 
+/* ------------------------------------------------------------------ GitHub check */
+// The Home server fetches every repository when it starts: follow it, then refresh the
+// cards' git state once it is done.
+async function watchFetch() {
+  for (;;) {
+    const r = await api("/api/fetch").catch(() => null);
+    if (!r || r._status !== 200) return;
+    const was = H.fetch && H.fetch.running;
+    H.fetch = r;
+    if (!r.running) {
+      if (was || !H.fetchSeen) { H.fetchSeen = true; await loadAllGit(); }
+      render();
+      return;
+    }
+    render();
+    await new Promise((res) => setTimeout(res, 1000));
+  }
+}
+
 /* ------------------------------------------------------------------ start */
-load().then(loadAllGit);
+load().then(loadAllGit).then(watchFetch);
 loadSettings();
 setInterval(() => { if (document.visibilityState === "visible" && !document.querySelector("dialog[open]")) load(); }, 10000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { load(); loadAllGit(); } });

@@ -87,18 +87,39 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual(self.g.behind, 0)
         self.assertIn("Pulled 1 commit", self.g.notice)
 
-    def test_diverged_is_reported_not_merged(self):
+    def test_opening_the_project_pulls_at_once(self):
+        other = tmpdir()
+        git(other, "clone", "-q", str(self.remote), ".")
+        identity(other)
+        (other / "sec.tex").write_text("written elsewhere\n", encoding="utf-8")
+        git(other, "commit", "-q", "-am", "elsewhere")
+        git(other, "push", "-q")
+        g = gitsync.GitSync(lambda: self.root, lambda: "build")
+        g.stop.set()                      # run() does its start-up work, then no ticks
+        g.run()
+        self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "written elsewhere\n")
+        self.assertIn("Pulled 1 commit", g.notice)
+
+    def test_diverged_histories_are_merged_not_rewritten(self):
+        """Both sides moved on (a co-author pushed while you wrote): a merge keeps both; no
+        commit is rewritten (tests/test_collab.py has the clashes)."""
         other = tmpdir()
         git(other, "clone", "-q", str(self.remote), ".")
         identity(other)
         (other / "sec.tex").write_text("theirs\n", encoding="utf-8")
         git(other, "commit", "-q", "-am", "elsewhere")
         git(other, "push", "-q")
+        theirs = git(other, "rev-parse", "HEAD")
         (self.root / "main.tex").write_text("ours\n", encoding="utf-8")
         git(self.root, "commit", "-q", "-am", "here")
+        ours = git(self.root, "rev-parse", "HEAD")
         self.g.pull()
-        self.assertIn("both changed", self.g.error)
-        self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "a\n")
+        self.assertIsNone(self.g.error)
+        self.assertIn("Combined", self.g.notice)
+        self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "theirs\n")
+        self.assertEqual((self.root / "main.tex").read_text(encoding="utf-8"), "ours\n")
+        parents = git(self.root, "log", "-1", "--format=%P").split()
+        self.assertEqual(sorted(parents), sorted([ours, theirs]), "a merge of the two, nothing rewritten")
 
     def test_switched_off(self):
         self.g.set_enabled(False)

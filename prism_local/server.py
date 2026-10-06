@@ -787,6 +787,9 @@ class Handler(httpbase.Handler):
         if path == "/api/git/publish":
             import hub                  # the Home page's GitHub helpers
             return self._json(hub.publish_info(ROOT))
+        if path == "/api/git/theirs":            # GitHub's version, after a clash
+            resolve(q["path"])
+            return self._json(GITSYNC.theirs(q["path"]))
         if path == "/api/git/github":
             return self._json({"github": github_url()})
         if path == "/api/git/log":
@@ -875,7 +878,9 @@ class Handler(httpbase.Handler):
             action = str(body.get("action") or "")
             if action in ("on", "off"):
                 GITSYNC.set_enabled(action == "on")
-            elif action in ("commit", "pull"):
+            elif action in ("commit", "pull", "resolve"):
+                if action == "resolve" and (BUILD_LOCK.locked() or AGENT.busy()):
+                    return self._err(409, "wait until the build or the agent's turn has finished")
                 GITSYNC.now(action)
             else:
                 return self._err(400, "unknown action")

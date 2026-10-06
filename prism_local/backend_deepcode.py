@@ -31,7 +31,7 @@ import threading
 import time
 from pathlib import Path
 
-from backends import SYSTEM_APPEND, TREE, Backend, Job, find_bin
+from backends import SYSTEM_APPEND, TREE, Backend, Job, agent_env, find_bin
 
 PACKAGE = "@vegamo/deepcode-cli"
 ASK_NOTE = ("[Ask mode] Answer only: do not create, change or delete any file in this turn; "
@@ -146,7 +146,7 @@ class DeepCode(Backend):
         return {**super().info(), "bin": self.bin()}
 
     def env(self, job: Job) -> dict:
-        env = dict(os.environ)
+        env = agent_env()                       # no git remote, no GitHub login
         settings_env = user_settings().get("env") or {}
         if not env.get("DEEPCODE_API_KEY") and env.get("DEEPSEEK_API_KEY") and \
                 not (isinstance(settings_env, dict) and settings_env.get("API_KEY")):

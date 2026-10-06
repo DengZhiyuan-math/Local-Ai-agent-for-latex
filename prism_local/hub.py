@@ -180,9 +180,75 @@ def git_info(root: Path) -> dict | None:
     m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?$", remote)
     if m:
         web = "https://github.com/" + m.group(1)
+    top_s = str(toplevel.resolve())
+    fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
     return {"branch": branch, "changes": len(lines) - 1,
             "ahead": int(ahead.group(1)) if ahead else 0,
-            "behind": int(behind.group(1)) if behind else 0, "github": web, **(shared or {})}
+            "behind": int(behind.group(1)) if behind else 0, "github": web,
+            "fetch_error": fetch_error, **(shared or {})}
+
+
+# ---------------------------------------------------------------- checking GitHub
+#
+# When the Home page starts (and on "Check GitHub"), every project's repository is fetched
+# in the background: once per repository (a folder's shared one holds many projects), and
+# not where an editor is open, since that editor fetches and pulls by itself. A fetch only
+# downloads: the cards then show "N new on GitHub", and opening the project pulls them.
+
+FETCH: dict = {"running": False, "done": 0, "total": 0, "at": None, "errors": {}}
+_fetch_lock = threading.Lock()
+
+
+def fetch_targets() -> list[Path]:
+    """The repositories to fetch: with an origin, and no editor open on any of their projects."""
+    tops: dict[str, Path] = {}
+    busy: set[str] = set()
+    for e in registry.load_projects()["projects"]:
+        root = Path(e["path"])
+        if not root.is_dir():
+            continue
+        kind, top = repo_kind(root)
+        if kind not in ("own", "shared"):
+            continue
+        key = registry.norm(top)
+        tops[key] = top
+        if is_running(root):
+            busy.add(key)
+    return [t for k, t in tops.items() if k not in busy and github_of(t)]
+
+
+def fetch_one(top: Path) -> str | None:
+    """git fetch; an error message, or None."""
+    try:
+        r = subprocess.run(["git", "fetch", "-q", "--prune"], cwd=top, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace", timeout=90,
+                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return str(e)
+    return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "git fetch failed")
+
+
+def fetch_all() -> None:
+    """Fetch every project's repository (see FETCH); one run at a time."""
+    if not _fetch_lock.acquire(blocking=False):
+        return
+    try:
+        targets = fetch_targets()
+        FETCH.update(running=True, done=0, total=len(targets), errors={})
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for top, err in zip(targets, ex.map(fetch_one, targets)):
+                FETCH["done"] += 1
+                if err:
+                    FETCH["errors"][str(top)] = err
+        FETCH["at"] = time.time()
+    finally:
+        FETCH["running"] = False
+        _fetch_lock.release()
+
+
+def start_fetch_all() -> dict:
+    threading.Thread(target=fetch_all, daemon=True).start()
+    return {"ok": True}
 
 
 def entry_for(pid: str) -> dict:
@@ -818,15 +884,27 @@ def run_git(root: Path, *args: str, timeout: float = 60) -> subprocess.Completed
 
 
 def git_init(root: Path) -> None:
-    """A repository of the project's own, with build output ignored."""
+    """A repository of the project's own, with build output ignored, line ends kept the
+    same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
     gi = root / ".gitignore"
     if not gi.exists():
         gi.write_bytes(GITIGNORE.encode("utf-8"))
+    ga = root / ".gitattributes"
+    if not ga.exists():
+        ga.write_bytes(GITATTRIBUTES.encode("utf-8"))
     if not (root / ".git").exists():
         try:
             run_git(root, "init", "-q", "-b", "main")
         except subprocess.CalledProcessError:          # git older than 2.28
             run_git(root, "init", "-q")
+    if (root / ".git").is_dir():
+        gitsync.install_guard(root / ".git")
+
+
+# Text files are stored with \n line ends whatever each co-author's git does with them
+# (core.autocrlf differs between Windows, macOS and Linux setups): without this, one
+# person's CRLF commit would make every line of a shared file clash with everyone else's.
+GITATTRIBUTES = "* text=auto\n*.pdf binary\n*.png binary\n*.jpg binary\n*.jpeg binary\n"
 
 
 def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
@@ -861,7 +939,31 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
         return {"error": (r.stderr or r.stdout).strip()[:500] or "gh repo create failed"}
     m = re.search(r"https://github\.com/\S+", r.stdout + r.stderr)
     url = m.group(0).rstrip(".") if m else f"https://github.com/{owner or st['account']}/{name}"
-    return {"url": url}
+    return {"url": url, "protection": protect_branch(st["gh"], url, root)}
+
+
+def protect_branch(gh: str, url: str, root: Path) -> str:
+    """Ask GitHub itself to refuse force pushes to, and deletion of, the repository's branch,
+    for every co-author whatever tool they use. GitHub offers this for private repositories
+    only on paid plans (Pro, Team …): on a free plan it says so, and prism-local's own guard
+    and self-repair (gitsync.py) are the protection. Returns what happened, in a few words."""
+    full = url.split("github.com/", 1)[-1].strip("/")
+    try:
+        branch = run_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
+        body = json.dumps({"required_status_checks": None, "enforce_admins": False,
+                           "required_pull_request_reviews": None, "restrictions": None,
+                           "allow_force_pushes": False, "allow_deletions": False})
+        r = subprocess.run([gh, "api", "-X", "PUT", f"repos/{full}/branches/{branch}/protection",
+                            "--input", "-"], input=body, capture_output=True, text=True, encoding="utf-8",
+                           errors="replace", timeout=60, env={**os.environ, "GH_PROMPT_DISABLED": "1"},
+                           **NO_WINDOW)
+    except (OSError, subprocess.SubprocessError) as e:
+        return f"not set ({e})"
+    if r.returncode == 0:
+        return "on: GitHub refuses force pushes and branch deletion"
+    if "Upgrade to GitHub Pro" in (r.stdout + r.stderr):
+        return "not available for private repositories on GitHub's free plan"
+    return "not set: " + (r.stderr or r.stdout).strip()[-200:]
 
 
 def _unstage_big(root: Path) -> list[str]:
@@ -1200,6 +1302,8 @@ class Handler(httpbase.Handler):
                 return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
             if path == "/api/projects/publish":
                 return self._json(publish_info(Path(entry_for(q["id"])["path"])))
+            if path == "/api/fetch":
+                return self._json({k: v for k, v in FETCH.items()})
             if path == "/api/git":
                 return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
             if path == "/api/pdf":
@@ -1235,6 +1339,8 @@ class Handler(httpbase.Handler):
                 return self._json(r, 502 if "error" in r else 200)
             if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
+            if path == "/api/fetch":
+                return self._json(start_fetch_all())
             if path == "/api/folders/create":
                 return self._json(create_folder(body))
             if path == "/api/folders/update":
@@ -1298,6 +1404,7 @@ def main():
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
         threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
+    start_fetch_all()                   # what changed on GitHub since last time
     httpbase.stop_on_signals(srv)
     try:
         srv.serve_forever()

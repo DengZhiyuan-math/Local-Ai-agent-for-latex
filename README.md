@@ -166,8 +166,12 @@ In a project with a repository (its own, or its folder's shared one):
 - your changes are committed two minutes after you stop editing (at the latest ten minutes
   after the first), and every agent turn gets a commit of its own with your request as the
   message;
-- every commit is pushed, and changes on GitHub (another computer) are pulled in. Histories
-  that diverged are reported, never merged for you;
+- every commit is pushed, and changes on GitHub (another computer) are pulled in: right when
+  the project opens, then every five minutes. Histories that diverged are reported, never
+  merged for you;
+- when the Home page starts, it checks GitHub for every project in the background (a fetch:
+  no file changes) and marks the cards with new commits *↓ N new on GitHub*; opening the
+  project brings them in;
 - the GitHub button at the top says where things stand, and has *Save to GitHub now*, *Get
   changes from GitHub* and a switch;
 - the **History** tab lists every version of the open file, shows what each changed, and
@@ -176,6 +180,67 @@ In a project with a repository (its own, or its folder's shared one):
 
 Files changed on disk by other programs (Claude Code in a terminal, `git checkout`, another
 editor) reload by themselves, and a save never silently overwrites a newer version on disk.
+
+## Writing together
+
+Several co-authors can work on one repository, each with prism-local (or plain git):
+
+- **Edits at the same time are combined.** When GitHub has commits you do not have (a
+  co-author pushed), your changes are committed and merged with theirs, then pushed. Changes
+  to different files, or to different parts of a file, combine by themselves. Nothing is ever
+  rebased or rewritten: a merge commit keeps both sides.
+- **When you both changed the same lines**, syncing does not stop and nobody has to step in:
+  the file gets both versions, one after the other, so neither disappears from the paper.
+  In TeX files comment lines mark the place and say whose version is whose
+  (`% [prism-local] Alice's version (from GitHub):` …); a `.bib` gets both without them. The
+  GitHub button then says *Both versions kept (N)*, and its menu jumps to each place: keep
+  what you want and delete the `[prism-local]` lines whenever it suits you. A figure both
+  changed keeps yours, with theirs saved next to it (`fig.from-Alice.png`); a file one deleted
+  while the other changed keeps the changed version. Only if this automatic merge itself
+  fails is it called off, everything stays as it was, and the menu offers *Compare with
+  GitHub's version* and *I've combined them*.
+- **With AI agents at work on both sides.** On one computer, you and the agent never write at
+  the same moment: a turn starts by committing your edits, what you type during it is saved
+  when it ends, and the turn's changes get a commit of their own. While a turn runs, nothing
+  from GitHub is merged into the files (it is fetched, and merged as soon as the turn ends),
+  and *Save to GitHub now* waits for the turn too, so a merge never changes a file under an
+  agent that is rewriting it. Agents are told to leave `[prism-local]` blocks alone. When a
+  clash is large and most of the file (an agent reformatted it all), the file keeps one
+  version and the other is saved whole next to it (`main.from-Alice.tex`), instead of the
+  paper being doubled.
+- **It keeps going by itself**: GitHub is checked every minute, but not while you are typing
+  (20 seconds after your last save); changes not yet recorded that are in the way (another
+  project of a folder's shared repository) are recorded first; a lock file left by a git that
+  crashed is cleared after 10 minutes; a merge left half-done when the editor was killed is
+  called off at the next start and redone.
+- **No force push from here.** Every repository prism-local syncs gets a `pre-push` hook
+  that refuses a push which would drop commits from GitHub or delete a branch there: from the
+  editor or a terminal. A repository with a pre-push hook of its own keeps it.
+- **AI agents cannot reach GitHub at all.** Claude Code, Codex, Deep Code and every command
+  they start run with git's network transports switched off (`GIT_ALLOW_PROTOCOL`) and without
+  the GitHub CLI's login: no push, fetch or `gh` from an agent gets anywhere, `--force` and
+  `--no-verify` included. prism-local itself does the syncing.
+- **A force push from elsewhere is undone.** A co-author's own git (or `--no-verify` past the
+  hook) can still rewrite the branch on GitHub. Every prism-local copy keeps the full history,
+  and its next sync notices (git's log of where GitHub's branch has been) that commits were
+  dropped: it merges them back and pushes, an ordinary push, and says who rewrote it. One
+  force push cannot erase the team's work. To remove something from history on purpose (a
+  file committed by mistake), set `"restore_rewritten": false` in each copy's
+  `.git/prism-local.json` first: that copy then stops syncing, keeping everything, until it
+  follows the new history (`git reset --keep @{u}`).
+- **GitHub's own protection** (no force push, no branch deletion, for every tool) is switched on
+  when prism-local creates a repository, where GitHub offers it: for private repositories that
+  needs a paid plan (Pro, Team …); on the free plan the hook and the repair above protect.
+- **Same line ends for everyone.** Repositories prism-local creates have a `.gitattributes`
+  (`* text=auto`), so a co-author on Windows and one on a Mac do not turn every line into a
+  change.
+- Opening a project pulls first, and the Home page shows which projects have new commits on
+  GitHub.
+
+`tests/test_collab.py` plays these situations through with several clones of one repository
+(same and different lines, deletions, force pushes from outside that get repaired, agents
+trying to push, random edits by three people with and without force pushes, a folder's shared
+repository) and checks that no commit that reached the remote is ever lost.
 
 ## Keyboard
 

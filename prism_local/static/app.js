@@ -403,6 +403,7 @@ function renderSync(st) {
   const when = st.last_push || (st.last_commit && st.last_commit.at);
   if (!st.own) { text = "Not on GitHub"; cls = "off"; detail = "This project has no git repository yet. Create a private GitHub repository for it below: it is then saved and synced automatically."; }
   else if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
+  else if (st.clash && st.clash.length) { text = "Clash with GitHub"; cls = "warn"; detail = st.error || ""; }
   else if (st.error) { text = "Not synced"; cls = "warn"; detail = st.error; }
   else if (st.state !== "idle") { text = { committing: "Saving…", pushing: "Pushing…", pulling: "Pulling…" }[st.state] || "Syncing…"; cls = "busy"; detail = "Working with git…"; }
   else if (st.pending) {
@@ -411,6 +412,10 @@ function renderSync(st) {
     detail = `Your latest edits are saved on disk, not yet in GitHub. They are committed ${n <= 0 ? "now" : `in about ${n} min`} (or once you stop editing for 2 min).`;
   }
   else if (st.ahead && st.remote) { text = `${st.ahead} to push`; cls = "pending"; detail = `${st.ahead} commit${st.ahead > 1 ? "s" : ""} not on GitHub yet.`; }
+  else if (st.remote && st.kept && st.kept.length) {
+    text = `Both versions kept (${st.kept.length})`; cls = "pending";
+    detail = "Synced with GitHub. Where you and a co-author changed the same lines, both versions are in the file: open the menu to go there.";
+  }
   else if (!st.remote) { text = "Not on GitHub"; cls = "off"; detail = "Committed in the project's repository, which has no GitHub remote yet: nothing is pushed. Create one below."; }
   else { text = "Saved to GitHub"; cls = "ok"; detail = `Everything is on GitHub (${esc(st.upstream || "origin")})${when ? ", " + ago(when) : ""}.`; }
   label.textContent = text;
@@ -419,7 +424,20 @@ function renderSync(st) {
   const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
   $("#sync-detail").innerHTML = esc(detail) + last;
   $("#sync-auto").checked = !!st.enabled;
-  if (st.notice) toast(st.notice + "; the editor shows the new versions.");
+  // Where you and a co-author changed the same lines, both versions were kept: list them.
+  const kept = (st.own && st.kept) || [];
+  $("#sync-kept").hidden = !kept.length;
+  $("#sync-kept").innerHTML = kept.length ? `<div class="dd-note">Both versions kept where you and a co-author changed the same lines.
+      Keep what you want and delete the <code>% [prism-local]</code> lines:</div>` + kept.map((k) =>
+    `<button type="button" class="dd-item" data-kept="${esc(k.path)}" data-line="${k.line || 1}">${esc(k.path)}${k.line ? ":" + k.line : ""}
+       <small>${k.side ? "GitHub's version saved as " + esc(k.side) : "with " + esc(k.who)}</small></button>`).join("") + "<hr>" : "";
+  // The automatic merge could not be done: compare, combine, then keep the combination.
+  const clash = (st.own && st.clash) || [];
+  $("#sync-clash").hidden = !clash.length;
+  $("#sync-clash").innerHTML = clash.map((f) =>
+    `<button type="button" class="dd-item" data-theirs="${esc(f)}">Compare with GitHub's version: ${esc(f)}</button>`).join("")
+    + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : "");
+  if (st.notice) toast(st.notice + (/[.)]$/.test(st.notice) ? "" : ".") + " The editor shows the new versions.");
 }
 function syncMenu(open) { $("#sync-menu").hidden = !open; $("#btn-sync").setAttribute("aria-expanded", String(open)); }
 $("#btn-sync").onclick = async (e) => {
@@ -441,7 +459,13 @@ $("#sync-menu").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-sync]"); if (!b) return;
   syncMenu(false);
   if (b.dataset.sync === "history") return showHistory();
-  if (b.dataset.sync === "commit" && !(await saveAll())) return;
+  if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
+      + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
+      + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
+  if (b.dataset.sync === "resolve" && !(await saveAll())) return;
+  // Your open files go to disk first: committed by Save now, and out of the way of what Get
+  // changes brings in (no "changed on disk" clash with text not saved yet).
+  if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll())) return;
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
   const r = await api("/api/git/sync", { action: b.dataset.sync }).catch(() => null);
   if (r) renderSync(r);
@@ -487,6 +511,23 @@ $("#sync-publish").addEventListener("submit", async (e) => {
   syncMenu(false);
   toast(r.created ? `Created ${r.url}; this project now syncs with it.` : `Already on GitHub: ${r.url}`);
   await poll();
+});
+$("#sync-kept").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-kept]"); if (!b) return;
+  e.stopPropagation(); syncMenu(false);
+  openFile(b.dataset.kept, +b.dataset.line);
+});
+$("#sync-clash").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-theirs]"); if (!b) return;
+  e.stopPropagation(); syncMenu(false);
+  const r = await api("/api/git/theirs?path=" + encodeURIComponent(b.dataset.theirs));
+  if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
+  const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
+  $("#diff").innerHTML = [head, "", ...(r.diff || "(the same)").split("\n")].map((l) => {
+    const cls = l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "";
+    return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
+  }).join("\n");
+  openPanel("diff");
 });
 $("#sync-auto").onchange = async (e) => { const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" }); renderSync(r); };
 document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) syncMenu(false); });
