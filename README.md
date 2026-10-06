@@ -1,297 +1,179 @@
 # prism-local
 
-A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
+An Overleaf-style LaTeX studio that runs on your own computer: an editor, a PDF preview that
+stays in sync with the source, an AI agent that edits your project, and a Home page for all
+your papers, each kept in git and on GitHub.
 
-- **Editor**: CodeMirror 5 with tabs, LaTeX highlighting, search, and folding of sections,
-  environments (`equation`, `proof`, …) and display math from the gutter. It autocompletes
-  `\cref{…}`/`\eqref{…}` from your labels, `\cite{…}` from your `.bib` files, and `\…` from your
-  own `\newcommand`s.
-- **Compile and see errors**: one click (⌘↵) builds the project. The engine (pdflatex,
-  XeLaTeX or LuaLaTeX) is chosen from the document, bibtex/biber and makeindex run when needed,
-  and the engine reruns until references settle. Errors and warnings (undefined references and
-  citations included) are listed with their source lines, and a click jumps to the line.
-- **PDF preview with SyncTeX**: the preview reloads after every build and keeps its scroll position.
-  Links, text selection and copying, search, and a bookmarks sidebar work as in a PDF reader.
-  Double-click the PDF to jump to the source; ⌘J jumps from the source to the PDF. The PDF can
-  **pop out into its own tab** and stays in sync there.
-- **✦ Agent panel**: an AI agent that edits your project. Pick who runs it: your local
-  [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or
-  [Codex](https://github.com/openai/codex) CLI, or an API model with a key: DeepSeek, OpenAI,
-  OpenRouter, Qwen, Kimi, or a local Ollama/vLLM. Every turn ends with a per-file diff and
-  **Undo this turn**. With Claude Code the panel also shows your remaining 5-hour and 7-day
-  usage limits, and a ring by Send shows how full the conversation's context window is.
-- **Home page**: all your projects in one place, with PDF thumbnails, titles, git state and
-  which ones are open. Create a project from a template, add an existing folder, pin, rename
-  or open any project in one click. Group projects in folders (a research topic with its
-  papers as subfolders) and tag them. The ⌂ button in the editor brings you back.
-- **Autosave**: edits are saved a moment after you stop typing, as in Overleaf. There is no
-  Save button. Auto-compile (in the Compile menu) builds shortly after that.
-- **History and sync with GitHub**: in a project with its own repository, or in one its Home
-  folder shares with the folder's other projects, your changes are
-  committed two minutes after you stop editing (at the latest ten minutes after the first),
-  each agent turn gets a commit of its own with your request as the message, and every commit
-  is pushed. Changes on GitHub (another computer) are pulled in. The GitHub button in the top
-  bar says where things stand and has *Save to GitHub now*, *Get changes from GitHub* and a
-  switch; the **History** tab lists every version of the open file, shows what each changed,
-  and restores one. Build output is never committed, and histories that diverged are reported,
-  never merged for you.
-- **Works with other tools**: files changed on disk (by Claude Code in a terminal, `git
-  checkout`, another editor) reload automatically. A save never silently overwrites a newer
-  version on disk, and keeps the file's line endings (CRLF or LF).
+- **Editor**: tabs, LaTeX highlighting, search, folding of sections and environments, and
+  completion of `\cref{…}`, `\cite{…}` and your own `\newcommand`s. Edits save themselves.
+- **Compile** (⌘↵ / Ctrl-Enter): the engine (pdflatex, XeLaTeX, LuaLaTeX) is picked from the
+  document, bibtex/biber and makeindex run when needed, and errors are listed with their
+  source lines.
+- **PDF preview with SyncTeX**: double-click the PDF to jump to the source, ⌘J / Ctrl-J to jump
+  back. Links, search and bookmarks work; the PDF can pop out into its own tab.
+- **✦ Agent panel**: Claude Code, Codex, or an API model (DeepSeek, OpenAI, Qwen, Kimi, a local
+  Ollama …) edits the project. Every turn ends with a diff and **Undo this turn**.
+- **Home page**: every project with a PDF thumbnail, organized in folders (a research topic
+  and its papers) and tags.
+- **History and GitHub**: changes are committed and pushed by themselves; the History tab shows
+  and restores every version of a file.
 
-It is a single Python process that uses only the standard library, listens on `127.0.0.1`, and
-needs nothing from npm. The front-end libraries are vendored, so it also works offline.
+It is one Python program using only the standard library, listening on `127.0.0.1`. Nothing
+to `pip install`, no npm, and it works offline.
 
-## Requirements
+## Install
 
-prism-local runs on Windows, Linux and macOS. For Linux packages and menu entries, see
-[Linux](#linux).
+### 1. Prerequisites
 
-- Python ≥ 3.9 (tested with 3.12 and 3.14)
-- A TeX distribution: [MiKTeX](https://miktex.org) or [TeX Live](https://tug.org/texlive/).
-  prism-local runs its programs directly (pdflatex, xelatex, lualatex, bibtex, biber,
-  makeindex), so it needs neither Perl nor latexmk. Without a TeX distribution,
-  [Tectonic](https://tectonic-typesetting.github.io/) is used if it is on `PATH`. latexmk, or
-  commands of your own, can be chosen in `prism.json`.
-- Optional: `git`, for the file status markers and the Diff view.
-- Optional, for the agent panel, one of:
-  - [Claude Code](https://docs.anthropic.com/en/docs/claude-code), logged in (`claude` works
-    in your terminal);
-  - [Codex CLI](https://github.com/openai/codex), logged in (`codex` works in your terminal);
-  - an API key for DeepSeek or another OpenAI-compatible API, in an environment variable (see
-    [Choosing the AI](#choosing-the-ai-claude-code-codex-deepseek-and-other-apis)).
+Python 3.9 or newer, a TeX distribution and git. The GitHub CLI is optional (for GitHub).
 
-## Quick start
+| System | One command |
+|---|---|
+| Windows | `winget install Python.Python.3.12 MiKTeX.MiKTeX Git.Git GitHub.cli` |
+| macOS | `brew install python git gh` and `brew install --cask mactex-no-gui` |
+| Debian, Ubuntu | `sudo apt install python3 git gh texlive-latex-extra texlive-xetex texlive-luatex texlive-bibtex-extra biber` |
+| Fedora | `sudo dnf install python3 git gh texlive-scheme-medium biber` |
+| Arch | `sudo pacman -S python git github-cli texlive-basic texlive-latexextra texlive-xetex texlive-luatex texlive-bibtexextra biber` |
+
+- Chinese documents on Linux also need `texlive-lang-chinese` (Debian, Ubuntu) or
+  `texlive-langchinese` (Arch). TeX Live from [tug.org](https://tug.org/texlive/) or TinyTeX
+  work as well; without any TeX, [Tectonic](https://tectonic-typesetting.github.io/) on `PATH`
+  is used.
+- Open a new terminal afterwards, so that the new programs are on `PATH`.
+
+### 2. Get prism-local
 
 ```sh
 git clone https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git prism-local
-cd prism-local
-bin/prism-local examples/minimal          # opens http://127.0.0.1:8765/
 ```
 
-To use it on your own project:
+That is the whole installation: there is nothing to build.
+
+### 3. Start it
+
+**Windows**: make a **Prism** shortcut in the Start menu and on the desktop, then click it:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File prism-local\launcher\make-shortcut.ps1
+```
+
+**Linux**: make a **Prism** menu entry, then start it from your desktop's menu:
 
 ```sh
-/path/to/prism-local/bin/prism-local /path/to/your/latex-project
-# or, from inside the project:
-/path/to/prism-local/bin/prism-local
+python3 prism-local/launcher/make_desktop_entry.py
 ```
 
-Options:
+**macOS, or any terminal**:
 
-- `--port 8765`: the port. `0` picks any free port.
-- `--port-tries N`: if the port is taken, try the next N−1 ports.
-- `--no-browser`: do not open a browser page.
-- `--exit-when-idle`: exit about 10 seconds after the last editor or PDF page is closed.
-- `--ready-file FILE`: once listening, write `{pid, port, url, root}` as JSON to FILE.
+```sh
+prism-local/bin/prism-home                       # the Home page: http://127.0.0.1:8790/
+prism-local/bin/prism-local path/to/paper        # one project's editor
+```
 
-Without `--exit-when-idle`, stop the server with Ctrl-C.
+The Home page opens. Create a project (**+ New project**) or add a folder you already have
+(**Add existing…**); `prism-local/examples/minimal` is a small paper to try it on.
+
+### Optional: GitHub and the AI agent
+
+- **GitHub**: log the GitHub CLI in once, `gh auth login`. Projects can then get a private
+  repository each (or one per folder), and every change is pushed by itself.
+- **Claude Code** for the agent panel: install it
+  (`irm https://claude.ai/install.ps1 | iex` on Windows,
+  `curl -fsSL https://claude.ai/install.sh | bash` elsewhere) and run `claude` once to log in.
+  [Codex](https://github.com/openai/codex) or an API key work too; see
+  [Choosing the AI](#choosing-the-ai-claude-code-codex-deepseek-and-other-apis).
+
+### Update
+
+```sh
+cd prism-local && git pull
+```
+
+Open editors then show **Update: restart**: one click and they run the new version, with your
+files saved first. The Home page picks it up the next time it starts.
 
 ## Home page
 
-The Home page manages all your projects:
+The ⌂ button in an editor opens it. Every project you open, by any route, is listed.
 
-```sh
-bin/prism-home                            # opens http://127.0.0.1:8790/
-```
+**Projects**
 
-- **Project cards** show the first PDF page, the `\title`, the folder, when a source file last
-  changed, the git branch and number of changed files, and a green **Open** badge while an
-  editor runs for the project. Search with `/`, sort by recently opened, recently edited or name.
-- **Open** starts prism-local for the project in the background (through the launcher, so it
-  gets its stable port and stops after its last page closes) and opens the editor in a tab.
-  A second click brings that tab back instead of opening another.
-- **+ New project** (or `n`) creates a folder from a template (math paper with amsart and
-  theorem environments, plain article, or empty), with `prism.json` and optionally a git
-  repository, and opens it.
-- **A private GitHub repository per project.** Tick *Create a private GitHub repository* when
-  creating a project (or make it the default in ⚙ Settings). The project is committed and
-  pushed to a new private repository of its own, never to the prism-local repository. The
-  repository name comes from the folder name and can be edited. It is created with the
-  [GitHub CLI](https://cli.github.com) (`gh`), which must be logged in (`gh auth login`).
-  Settings shows which account it uses; set an owner there to create repositories in an
-  organization. If GitHub refuses, the project is still created and the message says why.
-- **⚙ Settings** also sets the default location for new projects and whether they get a git
-  repository.
-- **Only one Claude account.** prism-local has no login of its own: the agent panel runs your
-  local `claude`, so it uses whichever account Claude Code is logged in to. Settings shows that
-  account (from `claude auth status`), and *Only allow this account* locks it. Before every
-  message the editor then checks, afresh, that Claude Code is logged in to exactly that account
-  with its claude.ai subscription. If it is another account, or something would switch it to
-  API billing or another login (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`,
-  `CLAUDE_CODE_OAUTH_TOKEN`, Bedrock/Vertex, or an `apiKeyHelper` or such `env` in the user or
-  project `.claude/settings*.json`), nothing is sent and the panel says why. The agent panel
-  always shows the account in use.
-- The git chip shows the project's repository (its own, or the one its folder shares), with a
-  link to it on GitHub. A folder
-  inside some other repository (such as `examples/minimal`, inside prism-local's) has none of
-  its own, and the chip says so.
-- **Add existing…** adds an existing LaTeX folder. **Browse…** opens a native folder dialog (tkinter).
-- The **⋯** menu (or a right-click) pins a project to the top, renames it (and its folder), moves it
-  to a folder, edits its tags, shows it in Explorer/Finder, copies its path, or removes it from
-  the list. Removing never touches the files.
-- **Folders** in the sidebar organize the list: one per research topic, say, with a subfolder
-  for each paper or sub-project, and notes shown at the top of the folder. A folder shows its
-  own projects and those of its subfolders. Drag a card onto a folder to move it there, or a
-  folder onto another to nest it; deleting a folder moves its contents up a level. Folders
-  exist only in this list: no files move on disk. **All projects** is grouped the same way:
-  pinned projects first, then a section per top-level folder (its subfolders inside it, each
-  section folding away with ▸), then the projects in no folder.
-- **A GitHub repository for one project**: a card without one has a **+ GitHub** chip, and
-  its ⋯ menu *Create GitHub repository…*; in the editor, the GitHub button says *Not on
-  GitHub* and its menu offers the same. It initializes git if needed, writes a .gitignore
-  (build output, LaTeX's auxiliary files, and `conversations/` with saved AI chats unless you
-  untick it), commits everything except files over 50 MB, creates a private repository with
-  the GitHub CLI and pushes; from then on the editor saves and pushes changes by itself. A
-  project in a folder's shared repository publishes that repository.
-- **GitHub sync…** in a folder's ⋯ menu chooses how the folder's projects (and its subfolders')
-  are kept in git and on GitHub:
-  - *One repository for the whole folder*: the projects are gathered in one folder on disk,
-    subfolders becoming subdirectories (练习/, 答案/ …), with one git and one private GitHub
-    repository. Each editor commits only its own project's files there, its name leading the
-    message, and pushes and pulls the shared branch. New projects created in the folder go
-    into it. The repository's top holds `prism-repo.json`, which marks it as shared.
-  - *A repository for each project*: every project has its own; missing ones are created, and
-    on GitHub too if you like.
+- A card shows the first PDF page, the `\title`, when a source last changed, the git state
+  and whether an editor is open. Search with `/`; sort by recently opened, edited or name.
+- **Open** starts the project's editor in the background, on a port of its own, and opens it
+  in a tab; a second click brings that tab back.
+- **+ New project** (or `n`) creates a folder from a template (math paper with amsart, article,
+  or empty), optionally with a git and a private GitHub repository. **Add existing…** adds a
+  folder you already have.
+- The **⋯** menu (or a right-click) pins, renames, moves to a folder, tags, shows in
+  Explorer/Finder, copies the path, or removes from the list (the files are never touched).
+- **Rename** changes the project's folder on disk too (also from the editor: click the name at
+  the top left). Characters no folder may have (`: * ? " < > | / \`) become `-` in the
+  folder's name; the list keeps the name as typed.
 
-  The dialog lists what will happen to each project before anything does. Project folders
-  move only after you confirm, and only while their editors are closed. Nothing is deleted:
-  a project's own history comes along into the shared repository (its old `.git` is kept as
-  `.git-prism-separate`), and going back to one repository each cuts every project's history
-  out of the shared one (`git subtree split`), keeping the shared `.git` as `.git-prism-shared`.
-- **Tags** (draft, submitted, a coauthor…) can be given to any project; click one to see every
-  project with it. Rename a tag or change its color from its ⋯ menu in the sidebar.
-- Every project you open with prism-local, by any route, is added to the list automatically.
-- The ⌂ button in the editor opens the Home page, starting it if needed.
-- The project's name next to it is the one in this list: click it to rename the project
-  (Enter saves, Esc cancels, empty goes back to the folder's name). Its folder on disk is
-  renamed too: the editor saves, its server stops, the folder is renamed, and the server
-  starts again in it on the same port, so the page simply reloads. Characters no folder may
-  have (`: * ? " < > | / \`) become `-` in the folder's name; the list keeps the name as
-  typed. A folder in use by another program is not renamed, and the editor says so. In a
-  repository shared by a folder of projects, the rename is committed. The Home page's
-  **Rename…** does the same for a project whose editor is closed.
+**Folders and tags**
 
-The list is stored in `projects.json`, and the settings in `settings.json`, in the state directory (`%LOCALAPPDATA%\prism-local` on
-Windows, `~/.local/state/prism-local` elsewhere, or `$PRISM_STATE_DIR`).
+- **Folders** in the sidebar group projects: one per research topic, say, with a subfolder for
+  each paper, and notes shown at the top. Drag a card onto a folder to move it there, or a
+  folder onto another to nest it. Deleting a folder moves its contents up a level.
+- **All projects** is grouped the same way: pinned first, then each top-level folder with its
+  subfolders (each folds away with ▸), then the projects in no folder.
+- **Tags** (draft, submitted, a coauthor …): click one to see every project with it; rename it
+  or change its color from its ⋯ menu.
+- Folders and tags exist only in this list. No file moves on disk unless you choose one
+  repository for a folder (below).
 
-## One-click launcher (Windows)
+**GitHub**
 
-`launcher/` creates a **Prism** shortcut in the Start menu and on the desktop:
+- **One project**: a card without a repository has a **+ GitHub** chip (also in its ⋯ menu,
+  and in the editor's GitHub button, which then says *Not on GitHub*). It runs `git init` if
+  needed, writes a `.gitignore` (build output, LaTeX's auxiliary files, and `conversations/`
+  with saved AI chats unless you untick it), commits everything except files over 50 MB,
+  creates a private repository with the GitHub CLI and pushes. An editor that is open finds
+  the new repository at once.
+- **A whole folder** (its ⋯ menu, **GitHub sync…**) chooses between:
+  - *One repository for the whole folder*: the projects are gathered in one folder on disk
+    (subfolders become subdirectories, such as `练习/` and `答案/`) with one git and one GitHub
+    repository. Each editor commits only its own project there.
+  - *A repository for each project*: missing ones are created, on GitHub too if you like.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File launcher\make-shortcut.ps1
-```
+  The dialog lists what will happen to each project before anything does. Folders move only
+  after you confirm, and only while their editors are closed. Nothing is deleted: histories
+  come along both ways, and a `.git` that is replaced is kept as `.git-prism-separate` or
+  `.git-prism-shared`.
+- Repositories are created with the account `gh` is logged in to; set an organization as
+  owner in ⚙ Settings. They are always separate from the prism-local repository.
 
-Clicking it opens the Home page in a Chrome or Edge window of its own. From there you manage
-your projects, and each project you open becomes a tab of that window with its editor. The
-Home page stops about 10 seconds after you close it; open editors keep running until they
-are closed too.
+**⚙ Settings**
 
-To skip the Home page for one project, make a shortcut that opens its editor directly:
+- The default location of new projects, and whether they get a git and a GitHub repository.
+- **Claude account**: prism-local has no login of its own; the agent panel uses whichever
+  account Claude Code is logged in to. *Only allow this account* locks it: before every message
+  the editor checks that Claude Code uses exactly that account with its subscription, and
+  sends nothing if another account or API billing (`ANTHROPIC_API_KEY`, `apiKeyHelper`,
+  Bedrock/Vertex …) would be used. A Claude Code profile folder (`CLAUDE_CONFIG_DIR`) lets the
+  editor use another login than `claude` in your terminal.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File launcher\make-shortcut.ps1 -Project D:\path\to\paper
-```
+The list and settings live in `%LOCALAPPDATA%\prism-local` on Windows,
+`~/.local/state/prism-local` elsewhere, or `$PRISM_STATE_DIR`.
 
-This creates **Prism · paper**. Clicking a project shortcut:
+## History and sync with GitHub
 
-1. Opens another page if prism-local already runs for that project.
-2. Otherwise starts prism-local in the background, with no console window, and opens the
-   editor in a new Chrome or Edge window of its own. Chrome is used when it is your default
-   browser. The pop-out PDF opens as a second tab in that window.
-3. Stops the server about 10 seconds after you close the last Prism page (editor or pop-out PDF).
-   Reloading a page does not stop it.
+In a project with a repository (its own, or its folder's shared one):
 
-Details:
+- your changes are committed two minutes after you stop editing (at the latest ten minutes
+  after the first), and every agent turn gets a commit of its own with your request as the
+  message;
+- every commit is pushed, and changes on GitHub (another computer) are pulled in. Histories
+  that diverged are reported, never merged for you;
+- the GitHub button at the top says where things stand, and has *Save to GitHub now*, *Get
+  changes from GitHub* and a switch;
+- the **History** tab lists every version of the open file, shows what each changed, and
+  restores one; the **Diff** tab shows what is not committed yet, or what the last commit
+  changed.
 
-- **Processes.** The launcher exits as soon as the page is open. What stays behind is one
-  `python.exe` (with its hidden `conhost.exe`) for the Home page and one for each open project.
-  Nothing else waits in the background.
-- **How a closed page is noticed.** Every page keeps a connection (an event stream) open to its
-  server. When you close the page, the tab or the whole browser window, the connection drops and
-  the server knows at once, even if the page had no time to say goodbye.
-- **Stable port.** Each project always gets the same port, between 8800 and 9799, so the browser
-  keeps its open tabs and chat per project. If the port is taken, the next free one is used.
-- **Logs.** Server output goes to `%LOCALAPPDATA%\prism-local\logs\<project>-<hash>.log`. The
-  previous run is kept as `.log.1`. If the server cannot start, a dialog shows the end of the log.
-- **Running work.** A build or a Claude turn that is still running when the last page closes is
-  allowed to finish, for at most 10 minutes, before the server exits.
-- **Fallback.** Pages also send heartbeats. In the rare case that the event stream cannot be
-  opened, a page that stops sending heartbeats counts as closed after 2 minutes.
-- **Sleep.** After the computer wakes up, pages without an open stream get a fresh 2 minutes
-  to check in.
-- **Server gone.** If the server stopped while a page was still open, for example because the
-  browser discarded a background tab, the page says so. Click the shortcut again and the page
-  reconnects by itself.
-- **Environment.** The shortcut runs in your normal user environment, so your TeX distribution
-  (`pdflatex`, `bibtex` …), `git` and `claude` must be on your user `PATH`.
-- **Browser modes.** `-Browser` picks how the editor opens:
-  - `window`, the default: a new Chrome or Edge window with a tab strip, holding only Prism.
-  - `app`: an app window without tabs or address bar. The pop-out PDF then gets its own app
-    window, which suits a second monitor.
-  - `default`: a tab in your default browser's current window. With Firefox as the default
-    browser, every mode behaves like this.
-- Other options of `make-shortcut.ps1`: `-Name`, `-NoDesktop`, and `-Folder` to put the
-  shortcut somewhere else. To remove a shortcut, delete the `.lnk` file.
-
-The launcher can also be run directly, on any platform:
-
-```sh
-python launcher/prism_launcher.pyw /path/to/paper [--browser window|app|default|none] [--port N]
-python launcher/prism_launcher.pyw --home         # the Home page
-```
-
-`launcher/make_icon.py` redraws `launcher/prism.ico`.
-
-## Linux
-
-prism-local works the same way on Linux. This section covers what is set up differently.
-
-**Install** a TeX distribution and git. Python 3.9 or newer comes with every distribution.
-
-| Distribution | Command |
-|---|---|
-| Debian, Ubuntu | `sudo apt install texlive-latex-extra texlive-xetex texlive-luatex texlive-bibtex-extra biber git` |
-| Fedora | `sudo dnf install texlive-scheme-medium biber git` |
-| Arch | `sudo pacman -S texlive-basic texlive-latexextra texlive-xetex texlive-luatex texlive-bibtexextra biber git` |
-
-- Chinese documents also need `texlive-lang-chinese` (Debian, Ubuntu) or `texlive-langchinese`
-  (Arch).
-- The [TeX Live installer](https://tug.org/texlive/) and TinyTeX work too.
-- Optional: `zenity`, or `kdialog` on KDE, for the Browse… folder dialog and for error
-  messages from the launcher (`python3-tk` also does for the folder dialog). A Chrome,
-  Chromium, Edge or Brave browser for the window and app modes.
-
-**Start** from a terminal:
-
-```sh
-bin/prism-home                            # the Home page
-bin/prism-local ~/papers/my-paper         # one project
-```
-
-**Menu entries**, the counterpart of the Windows shortcut:
-
-```sh
-python3 launcher/make_desktop_entry.py                                   # "Prism": the Home page
-python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop
-```
-
-- The entry goes to `~/.local/share/applications`, where GNOME, KDE, Xfce and the other
-  desktops find it. `--desktop` also puts an icon on the desktop.
-- Options: `--name`, `--browser window|app|default`, and `--remove` to take an entry away.
-- The entry runs `launcher/prism_launcher.pyw` with the Python that created it.
-- With `--browser window` (the default), Prism opens in a window of its own when your default
-  browser is Chromium-based (Chrome, Chromium, Edge, Brave, Vivaldi). With Firefox as the
-  default browser, it opens as a Firefox tab.
-- Programs started from a desktop menu do not read `~/.bashrc`. prism-local still finds
-  TeX Live in `/usr/local/texlive`, `/opt/texlive` or `~/texlive`, TinyTeX, and `claude` in
-  `~/.local/bin`, `~/.npm-global/bin` or `/usr/local/bin`. Anything else must be on the
-  `PATH` set in `~/.profile`.
-- The Home list, logs and running servers are kept in `~/.local/state/prism-local` (or
-  `$XDG_STATE_HOME/prism-local`).
-- A server stopped with `kill` (SIGTERM) or by a logout cleans up as it does after its last
-  page. Stopping a build or an agent turn also stops the programs they started.
+Files changed on disk by other programs (Claude Code in a terminal, `git checkout`, another
+editor) reload by themselves, and a save never silently overwrites a newer version on disk.
 
 ## Keyboard
 
@@ -560,6 +442,73 @@ prism-local is meant for a single user on their own machine.
   the port to a network: no port forwarding, no `0.0.0.0`.
 - With an API provider, the files the model reads and your messages are sent to that
   provider's `base_url`. The key stays in the server's environment and never reaches the page.
+
+## Details: launcher, Linux, command line
+
+### The launcher
+
+The Windows shortcut and the Linux menu entry run `launcher/prism_launcher.pyw`. It opens the
+Home page in a Chrome or Edge window of its own; each project you open becomes a tab of that
+window. The Home page stops about 10 seconds after you close it; open editors keep running
+until they are closed too.
+
+A shortcut that opens one project's editor directly, skipping the Home page:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File launcher\make-shortcut.ps1 -Project D:\path\to\paper
+python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop      # Linux
+```
+
+- **Options.** `make-shortcut.ps1` takes `-Name`, `-NoDesktop`, `-Folder` (where to put the
+  shortcut) and `-Browser`; `make_desktop_entry.py` takes `--name`, `--browser`, `--desktop`
+  and `--remove`. To remove a Windows shortcut, delete its `.lnk` file.
+- **Browser modes.** `window` (the default): a Chrome or Edge window with a tab strip, holding
+  only Prism. `app`: an app window without tabs or address bar; the pop-out PDF gets its own
+  window, which suits a second monitor. `default`: a tab in your default browser. With Firefox
+  as the default browser, every mode behaves like `default`.
+- **Processes.** The launcher exits as soon as the page is open. What stays is one
+  `python.exe` for the Home page and one for each open project. A server stops about 10
+  seconds after its last page closes (reloading a page does not stop it); a build or an agent
+  turn still running is allowed to finish, for at most 10 minutes.
+- **Closed pages** are noticed at once through an event stream each page keeps open; pages
+  also send heartbeats, and one silent for 2 minutes counts as closed (after the computer
+  sleeps, pages get a fresh 2 minutes). If a server stopped while its page stayed open, the
+  page says so; click the shortcut again and it reconnects.
+- **Stable port.** Each project always gets the same port, between 8800 and 9799, so the
+  browser keeps its open tabs and chat per project. If it is taken, the next free one is used.
+- **Logs.** `%LOCALAPPDATA%\prism-local\logs\<project>-<hash>.log` (`~/.local/state/prism-local/logs`
+  on Linux), the previous run as `.log.1`. If a server cannot start, a dialog shows the log's end.
+- **Environment.** The shortcut runs in your normal user environment: TeX (`pdflatex`, `bibtex`
+  …), `git`, `gh` and `claude` must be on your user `PATH`.
+- `launcher/make_icon.py` redraws `launcher/prism.ico`.
+
+### Linux
+
+- The menu entry goes to `~/.local/share/applications`, where GNOME, KDE, Xfce and the others
+  find it, and runs the launcher with the Python that created it.
+- Programs started from a desktop menu do not read `~/.bashrc`. prism-local still finds TeX
+  Live in `/usr/local/texlive`, `/opt/texlive` or `~/texlive`, TinyTeX, and `claude` in
+  `~/.local/bin`, `~/.npm-global/bin` or `/usr/local/bin`. Anything else must be on the `PATH`
+  set in `~/.profile`.
+- `zenity`, or `kdialog` on KDE, gives the Browse… folder dialog and the launcher's error
+  messages (`python3-tk` also does for the folder dialog).
+- A server stopped with `kill` (SIGTERM) or by a logout cleans up as after its last page.
+  Stopping a build or an agent turn also stops the programs they started.
+
+### Command line
+
+```sh
+bin/prism-local [project] [options]    # one project (default: the current directory)
+bin/prism-home [options]               # the Home page
+python launcher/prism_launcher.pyw [project | --home] [--browser window|app|default|none] [--port N]
+```
+
+- `--port 8765`: the port (`0`: any free port). The Home page uses 8790.
+- `--port-tries N`: if the port is taken, try the next N−1 ports.
+- `--no-browser`: do not open a browser page.
+- `--exit-when-idle`: exit about 10 seconds after the last page is closed. Without it, stop the
+  server with Ctrl-C.
+- `--ready-file FILE`: once listening, write `{pid, port, url, root}` as JSON to FILE.
 
 ## Layout
 
