@@ -100,14 +100,23 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
 
 **Projects**
 
-- A card shows the first PDF page, the `\title`, when a source last changed, the git state
-  and whether an editor is open. Search with `/`; sort by recently opened, edited or name.
+- Home works like a file explorer: folders on the left, what the current folder holds in the
+  middle (its subfolders, then its projects), and a preview pane on the right with the
+  selected project's first PDF page, `\title`, git state, path and tags. Go back, forward and
+  up with the arrows (or Alt+←/→/↑, the mouse's side buttons); click a part of the address
+  bar to jump there.
+- Two views: **Details**, a table with *Date modified*, *Last opened*, git *Status* and tags
+  (click a column heading to sort by it, again to reverse), and **Large icons**, the first
+  page of each PDF. Folders come first; a folder's dates are those of the projects in it.
+- Click to select, Ctrl/Shift+click or Ctrl+A for several; double-click or Enter opens (a
+  folder in the list, a project in its editor). F2 renames, Delete removes, the arrow keys
+  move. Search with `/`: it looks through the current folder and every folder below it.
 - **Open** starts the project's editor in the background, on a port of its own, and opens it
   in a tab; a second click brings that tab back.
 - **+ New project** (or `n`) creates a folder from a template (math paper with amsart, article,
   or empty), optionally with a git and a private GitHub repository. **Add existing…** adds a
   folder you already have.
-- The **⋯** menu (or a right-click) pins, renames, moves to a folder, tags, shows in
+- A right-click (or the **⋯** in the preview pane) pins, renames, moves to a folder, tags, shows in
   Explorer/Finder, copies the path, or removes from the list (the files are never touched).
 - **Rename** changes the project's folder on disk too (also from the editor: click the name at
   the top left). Characters no folder may have (`: * ? " < > | / \`) become `-` in the
@@ -116,10 +125,11 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
 **Folders and tags**
 
 - **Folders** in the sidebar group projects: one per research topic, say, with a subfolder for
-  each paper, and notes shown at the top. Drag a card onto a folder to move it there, or a
-  folder onto another to nest it. Deleting a folder moves its contents up a level.
-- **All projects** is grouped the same way: pinned first, then each top-level folder with its
-  subfolders (each folds away with ▸), then the projects in no folder.
+  each paper, and notes shown at the top. Drag projects and folders (the whole selection)
+  onto a folder in the list, the sidebar or the address bar to move them there, or use
+  **Move to…**. Deleting a folder moves its contents up a level.
+- **Pinned**, **Not in a folder**, a tag and a search list projects flat, with a *Location*
+  column saying which folder each is in.
 - **Tags** (draft, submitted, a coauthor …): click one to see every project with it; rename it
   or change its color from its ⋯ menu.
 - Folders and tags exist only in this list. No file moves on disk unless you choose one
@@ -127,7 +137,7 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
 
 **GitHub**
 
-- **One project**: a card without a repository has a **+ GitHub** chip (also in its ⋯ menu,
+- **One project**: a project without a repository has a **+ GitHub** chip (also in its ⋯ menu,
   and in the editor's GitHub button, which then says *Not on GitHub*). It runs `git init` if
   needed, writes a `.gitignore` (build output, LaTeX's auxiliary files, and `conversations/`
   with saved AI chats unless you untick it), commits everything except files over 50 MB,
@@ -170,7 +180,7 @@ In a project with a repository (its own, or its folder's shared one):
   the project opens, then every five minutes. Histories that diverged are reported, never
   merged for you;
 - when the Home page starts, it checks GitHub for every project in the background (a fetch:
-  no file changes) and marks the cards with new commits *↓ N new on GitHub*; opening the
+  no file changes) and marks the projects with new commits *↓ N new on GitHub*; opening the
   project brings them in;
 - the GitHub button at the top says where things stand, and has *Save to GitHub now*, *Get
   changes from GitHub* and a switch;

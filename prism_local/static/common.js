@@ -56,6 +56,14 @@ const ICONS = {
   right: '<path d="m10 7 5 5-5 5"/>',
   folder: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/>',
   tag: '<path d="M4.5 4.5h7l8 8-7 7-8-8z"/><circle cx="8.5" cy="8.5" r="1.3" fill="currentColor" stroke="none"/>',
+  doc: '<path d="M6.5 3.5h7.5l4 4v13h-11.5z"/><path d="M14 3.5v4h4M9.5 12.5h5M9.5 16h5"/>',
+  grid: '<rect x="4" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="4" width="6.5" height="6.5" rx="1.5"/><rect x="4" y="13.5" width="6.5" height="6.5" rx="1.5"/><rect x="13.5" y="13.5" width="6.5" height="6.5" rx="1.5"/>',
+  panel: '<rect x="3.5" y="5" width="17" height="14" rx="2"/><path d="M14.5 5v14"/>',
+  arrowup: '<path d="M12 19V5M6.5 10.5 12 5l5.5 5.5"/>',
+  arrowdown: '<path d="M12 5v14M6.5 13.5 12 19l5.5-5.5"/>',
+  edit: '<path d="M5 19h3.5L19 8.5 15.5 5 5 15.5z"/><path d="m13.5 7 3.5 3.5"/>',
+  move: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M9 13.5h6M12.5 11l2.5 2.5-2.5 2.5"/>',
+  trash: '<path d="M5 7h14M10 7V5h4v2M7 7l1 12.5h8L17 7"/>',
   inbox: '<path d="M4 13.5 6.5 5.5h11l2.5 8v5H4z"/><path d="M4 13.5h5l1 2h4l1-2h5"/>',
 };
 function icon(name, cls = "") {

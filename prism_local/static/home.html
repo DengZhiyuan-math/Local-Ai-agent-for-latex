@@ -10,12 +10,6 @@
 <body class="home">
 <header id="home-top">
   <div class="brand"><span class="logo">∂</span> Prism <span class="sub">Projects</span></div>
-  <input id="search" type="search" placeholder="Search projects…  ( / )" autocomplete="off" spellcheck="false">
-  <select id="sort" title="Sort order">
-    <option value="opened">Recently opened</option>
-    <option value="edited">Recently edited</option>
-    <option value="name">Name</option>
-  </select>
   <div class="actions right">
     <button id="btn-add" title="Add an existing LaTeX folder on disk to this list">Add existing…</button>
     <button id="btn-new" class="primary" title="Create a new LaTeX project from a template">+ New project</button>
@@ -27,11 +21,43 @@
 <div id="home-layout">
 <aside id="side" aria-label="Folders and tags"></aside>
 <main id="home-main">
-  <div id="crumbs" class="crumbs" hidden></div>
+  <div id="navbar">
+    <button id="nav-back" class="icon ghost flip" title="Back (Alt+Left)" aria-label="Back" data-icon="arrow"></button>
+    <button id="nav-fwd" class="icon ghost" title="Forward (Alt+Right)" aria-label="Forward" data-icon="arrow"></button>
+    <button id="nav-up" class="icon ghost" title="Up to the folder above (Alt+Up)" aria-label="Up" data-icon="arrowup"></button>
+    <nav id="crumbs" class="crumbs" aria-label="Location"></nav>
+    <input id="search" type="search" placeholder="Search projects" autocomplete="off" spellcheck="false" title="Search here and in every folder below ( / )">
+  </div>
+  <div id="cmdbar">
+    <button id="cmd-new-folder" class="ghost" title="New folder here (Ctrl+Shift+N)" data-icon="folder"><span class="lbl">New folder</span></button>
+    <span class="vsep"></span>
+    <button id="cmd-open" class="ghost" title="Open (Enter)" data-icon="popout"><span class="lbl">Open</span></button>
+    <button id="cmd-rename" class="ghost" title="Rename (F2)" data-icon="edit"><span class="lbl">Rename</span></button>
+    <button id="cmd-move" class="ghost" title="Move to folder…" data-icon="move"><span class="lbl">Move to…</span></button>
+    <button id="cmd-remove" class="ghost" title="Remove (Delete)" data-icon="trash"><span class="lbl">Remove</span></button>
+    <span id="loc-sync"></span>
+    <button id="loc-menu" class="icon ghost" title="This folder: rename, move, notes, GitHub sync" aria-label="Folder actions" hidden data-icon="more"></button>
+    <span class="cmd-right">
+    <label class="sortby"><span>Sort by</span>
+      <select id="sort" title="Sort by">
+        <option value="name">Name</option>
+        <option value="edited">Date modified</option>
+        <option value="opened">Last opened</option>
+        <option value="where" hidden>Location</option>
+      </select></label>
+    <button id="sort-dir" class="icon ghost" aria-label="Sort direction"></button>
+    <span class="vsep"></span>
+    <span class="seg" role="group" aria-label="View">
+      <button id="mode-details" class="icon ghost" title="Details" aria-label="Details" data-icon="list"></button>
+      <button id="mode-icons" class="icon ghost" title="Large icons" aria-label="Large icons" data-icon="grid"></button>
+    </span>
+    <button id="btn-preview" class="icon ghost" title="Preview pane" aria-label="Preview pane" data-icon="panel"></button>
+    </span>
+  </div>
   <p id="folder-note" class="folder-note" hidden></p>
-  <div id="summary" class="summary"></div>
-  <div id="sections"></div>
-  <div id="no-match" class="empty-note" hidden>No project matches your search.</div>
+  <div id="view-wrap">
+  <div id="view" class="details" role="listbox" aria-multiselectable="true" aria-label="Items" tabindex="0"></div>
+  <div id="no-match" class="empty-note" hidden>Nothing here matches your search.</div>
   <div id="empty-view" class="empty-note" hidden></div>
   <div id="welcome" class="welcome" hidden>
     <div class="logo big">∂</div>
@@ -43,7 +69,10 @@
       <button data-act="add">Add existing folder…</button>
     </div>
   </div>
+  </div>
+  <footer id="statusbar"><span id="status-left"></span><span id="status-right"></span></footer>
 </main>
+<aside id="preview" aria-label="Preview"></aside>
 </div>
 
 <div id="menu" class="menu" role="menu" hidden></div>
