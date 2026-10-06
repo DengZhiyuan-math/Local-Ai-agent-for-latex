@@ -154,7 +154,8 @@ function initials(name) {
 // The project's folder, when the view does not already say it, and its tags.
 function orgHTML(p) {
   const fid = folderOf(p);
-  const showFolder = fid && !(H.view.kind === "folder" && fid === H.view.id);
+  // All projects and a folder view already say where a project is, in their headings.
+  const showFolder = fid && H.view.kind !== "all" && !(H.view.kind === "folder" && fid === H.view.id);
   const where = showFolder
     ? `<button class="where" data-act="folder" data-fid="${fid}" title="Show this folder">${icon("folder")}<span>${esc(folderPath(fid).map((f) => f.name).join(" › "))}</span></button>` : "";
   const tags = (p.tags || []).map(tagChip).join("");
@@ -254,17 +255,44 @@ function viewSections(q) {
     }
     return out;
   }
-  const all = pick(() => true), pinned = all.filter((p) => p.pinned);
-  return [{ title: "Pinned", list: pinned },
-          { title: pinned.length ? "Other projects" : "All projects", list: all.filter((p) => !p.pinned) }];
+  // All projects, grouped like the sidebar: pinned first, then each top-level folder (its
+  // subfolders as subsections), then the projects in no folder. A group can be folded.
+  const all = pick(() => true), rest = all.filter((p) => !p.pinned);
+  const out = [{ title: "Pinned", list: all.filter((p) => p.pinned), group: "pinned", total: all.filter((p) => p.pinned).length }];
+  for (const top of childFolders(null)) {
+    out.push({ title: top.name, fid: top.id, list: rest.filter((p) => folderOf(p) === top.id), group: top.id,
+               total: rest.filter((p) => inFolder(p, top.id)).length });
+    for (const { f: sub } of folderTree(top.id)) {
+      out.push({ title: folderPath(sub.id).slice(1).map((x) => x.name).join(" › "), fid: sub.id, sub: true,
+                 list: rest.filter((p) => folderOf(p) === sub.id), group: top.id });
+    }
+  }
+  out.push({ title: "Not in a folder", list: rest.filter((p) => !folderOf(p)), group: "unfiled", drop: "",
+             total: rest.filter((p) => !folderOf(p)).length });
+  return out;
 }
-function sectionHTML(s, noHead) {
-  const head = noHead ? ""
-    : s.fid && !s.own ? `<h2><button class="sec-link" data-act="folder" data-fid="${s.fid}">${icon("folder")}${esc(s.title)}</button>
-                 <span class="n">${s.list.length || ""}</span></h2>`
-    : `<h2>${esc(s.title)}</h2>`;
-  const empty = s.fid && !s.list.length ? `<div class="drop-hint">No projects yet: drag some here</div>` : "";
-  return `<section ${s.fid ? `data-drop="${s.fid}"` : ""}>${head}<div class="grid">${s.list.map(cardHTML).join("")}</div>${empty}</section>`;
+const closedGroups = new Set(store.get("home.closedGroups", []));
+function toggleGroup(g) {
+  if (closedGroups.has(g)) closedGroups.delete(g); else closedGroups.add(g);
+  store.set("home.closedGroups", [...closedGroups]); render();
+}
+function sectionHTML(s, noHead, q = "") {
+  const link = s.fid ? `<button class="sec-link" data-act="folder" data-fid="${s.fid}" title="Open this folder">${icon("folder")}${esc(s.title)}</button>`
+    : s.group === "unfiled" ? `<button class="sec-link" data-act="view" data-view="unfiled">${icon("inbox")}${esc(s.title)}</button>`
+    : esc(s.title);
+  let head;
+  if (noHead) head = "";
+  else if (s.group && !s.sub) {          // a group of the All projects view: it folds
+    const open = !closedGroups.has(s.group) || !!q;
+    head = `<h2 class="group-head"><button class="twisty ${open ? "open" : ""}" data-act="group" data-group="${esc(s.group)}"
+              aria-label="${open ? "Fold" : "Unfold"}" aria-expanded="${open}">${icon("right")}</button>${link}<span class="n">${s.total || ""}</span></h2>`;
+  } else if (s.sub) head = `<h3 class="sub-head">${link}<span class="n">${s.list.length || ""}</span></h3>`;
+  else if (s.fid && !s.own) head = `<h2>${link}<span class="n">${s.list.length || ""}</span></h2>`;
+  else head = `<h2>${esc(s.title)}</h2>`;
+  const empty = s.fid && !s.list.length && !s.group ? `<div class="drop-hint">No projects yet: drag some here</div>` : "";
+  const grid = s.list.length || !s.group ? `<div class="grid">${s.list.map(cardHTML).join("")}</div>` : "";
+  const drop = s.fid ? s.fid : s.drop !== undefined ? s.drop : null;
+  return `<section class="${s.group && !s.sub ? "group" : ""} ${s.sub ? "sub" : ""}" ${drop !== null ? `data-drop="${drop}"` : ""}>${head}${grid}${empty}</section>`;
 }
 function renderHead() {
   const v = H.view, crumbs = $("#crumbs"), note = $("#folder-note");
@@ -289,10 +317,16 @@ function render() {
   renderSide(); renderHead();
   const q = $("#search").value.trim(), v = H.view;
   const secs = viewSections(q);
-  // Empty sections go, except a folder's subfolders: they stay as drop targets.
-  const visible = secs.filter((s) => s.list.length || (s.fid && !s.own && !q));
+  // Empty sections go, except a folder's subfolders: they stay as drop targets. In All
+  // projects a group shows while it has projects anywhere; folded, only its heading.
+  const visible = v.kind === "all"
+    ? secs.filter((s) => (s.sub ? s.list.length && (!closedGroups.has(s.group) || q) : s.total))
+    : secs.filter((s) => s.list.length || (s.fid && !s.own && !q));
   const shown = new Set(secs.flatMap((s) => s.list.map((p) => p.id))).size;
-  $("#sections").innerHTML = visible.map((s) => sectionHTML(s, visible.length === 1 && (s.own || v.kind !== "folder"))).join("");
+  $("#sections").innerHTML = visible.map((s) => {
+    const folded = v.kind === "all" && !s.sub && closedGroups.has(s.group) && !q;
+    return sectionHTML(folded ? { ...s, list: [] } : s, visible.length === 1 && (s.own || v.kind === "pinned" || v.kind === "unfiled" || v.kind === "tag"), q);
+  }).join("");
   // Dropping anywhere else in a folder's view moves the project into that folder.
   if (v.kind === "folder") $("#home-main").dataset.drop = v.id; else delete $("#home-main").dataset.drop;
   $("#welcome").hidden = !H.loaded || H.projects.length > 0;
@@ -471,6 +505,7 @@ document.addEventListener("click", (e) => {
     case "folder-menu": e.stopPropagation(); return showMenu(act, folderMenu(d.fid));
     case "tag-menu": e.stopPropagation(); return showMenu(act, tagMenu(d.tag));
     case "sync": e.stopPropagation(); return openSync(d.fid);
+    case "group": e.stopPropagation(); return toggleGroup(d.group);
   }
 });
 // The sidebar's rows are not buttons (they hold buttons): Enter and Space work on them too.

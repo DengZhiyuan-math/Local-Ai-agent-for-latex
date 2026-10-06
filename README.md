@@ -134,7 +134,9 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   for each paper or sub-project, and notes shown at the top of the folder. A folder shows its
   own projects and those of its subfolders. Drag a card onto a folder to move it there, or a
   folder onto another to nest it; deleting a folder moves its contents up a level. Folders
-  exist only in this list: no files move on disk.
+  exist only in this list: no files move on disk. **All projects** is grouped the same way:
+  pinned projects first, then a section per top-level folder (its subfolders inside it, each
+  section folding away with ▸), then the projects in no folder.
 - **GitHub sync…** in a folder's ⋯ menu chooses how the folder's projects (and its subfolders')
   are kept in git and on GitHub:
   - *One repository for the whole folder*: the projects are gathered in one folder on disk,
