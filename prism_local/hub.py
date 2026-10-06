@@ -5,7 +5,8 @@
                                [--port-tries N] [--ready-file F]
 
 Lists the projects in the shared project list (registry.py), with title, PDF
-thumbnail, git state and whether an editor is running. From here you can add an
+thumbnail, git state and whether an editor is running, grouped in folders and tagged
+(folders and tags exist only in the list). From here you can add an
 existing folder, create a new project from a template, and open a project: each
 project still runs in its own prism-local server (server.py), started through
 the launcher, so it keeps its stable port and per-project browser state.
@@ -19,6 +20,7 @@ import argparse
 import json
 import os
 import re
+import secrets
 import shutil
 import subprocess
 import sys
@@ -100,6 +102,7 @@ def project_info(entry: dict) -> dict:
     d = {"id": registry.project_key(root), "path": str(root),
          "name": entry.get("name") or root.name, "folder": root.name,
          "custom_name": bool(entry.get("name")), "pinned": bool(entry.get("pinned")),
+         "folder_id": entry.get("folder_id"), "tags": list(entry.get("tags") or []),
          "opened": entry.get("opened"), "added": entry.get("added"),
          "exists": root.is_dir(), "running": None}
     if not d["exists"]:
@@ -122,7 +125,8 @@ def list_projects() -> dict:
     entries = data["projects"]
     with ThreadPoolExecutor(max_workers=8) as ex:
         projects = list(ex.map(project_info, entries))
-    return {"projects": projects, "default_parent": default_parent(data),
+    return {"projects": projects, "folders": data.get("folders", []),
+            "tags": data.get("tags", {}), "default_parent": default_parent(data),
             "home": str(Path.home())}
 
 
@@ -185,18 +189,154 @@ def entry_for(pid: str) -> dict:
 
 # ---------------------------------------------------------------- actions
 
-def add_project(path: str) -> dict:
+def add_project(path: str, folder_id: str = "") -> dict:
     p = Path(os.path.expandvars(os.path.expanduser(path.strip().strip('"')))).resolve()
     if not p.is_dir():
         raise ValueError(f"not a folder: {p}")
     has_tex = any(p.glob("*.tex"))
-    registry.update_projects(lambda data: _add(data, p))
+    registry.update_projects(lambda data: _add(data, p, folder_id))
     return {"id": registry.project_key(p), "path": str(p), "has_tex": has_tex}
 
 
-def _add(data: dict, p: Path) -> None:
-    if registry.find(data, p) is None:
-        data["projects"].append({"path": str(p), "added": time.time()})
+def _add(data: dict, p: Path, folder_id: str = "") -> None:
+    entry = registry.find(data, p)
+    if entry is None:
+        entry = {"path": str(p), "added": time.time()}
+        data["projects"].append(entry)
+    if folder_id:
+        entry["folder_id"] = _folder(data, folder_id)["id"]
+
+
+# ---------------------------------------------------------------- folders and tags
+#
+# Folders only organize the list on the Home page (a research topic and its papers,
+# say); nothing on disk moves. projects.json keeps
+#     "folders": [{"id", "name", "parent", "note"}]     parent: a folder id or None
+#     "tags":    {"<name>": {"color": "#rrggbb"}}       tags that have a color
+# and each project entry may have "folder_id" and "tags": ["<name>", ...].
+
+TAG_COLOR = re.compile(r"#[0-9a-fA-F]{6}")
+
+
+def _folder(data: dict, fid: str) -> dict:
+    for f in data.get("folders", []):
+        if f["id"] == fid:
+            return f
+    raise ValueError("unknown folder")
+
+
+def _folder_name(body: dict) -> str:
+    name = str(body.get("name") or "").strip()[:120]
+    if not name:
+        raise ValueError("the folder needs a name")
+    return name
+
+
+def _set_parent(data: dict, f: dict, parent) -> None:
+    """Put folder `f` inside `parent` (a folder id, or empty for the top level)."""
+    if not parent:
+        f["parent"] = None
+        return
+    up = _folder(data, str(parent))
+    while up is not None:
+        if up["id"] == f["id"]:
+            raise ValueError("a folder cannot go inside itself")
+        up = _folder(data, up["parent"]) if up.get("parent") else None
+    f["parent"] = str(parent)
+
+
+def create_folder(body: dict) -> dict:
+    def fn(data):
+        f = {"id": secrets.token_hex(4), "name": _folder_name(body), "parent": None,
+             "note": str(body.get("note") or "").strip()[:2000]}
+        _set_parent(data, f, body.get("parent"))
+        data.setdefault("folders", []).append(f)
+        return dict(f)
+    return registry.update_projects(fn)
+
+
+def change_folder(body: dict) -> dict:
+    def fn(data):
+        f = _folder(data, str(body["id"]))
+        if "name" in body:
+            f["name"] = _folder_name(body)
+        if "note" in body:
+            f["note"] = str(body["note"] or "").strip()[:2000]
+        if "parent" in body:
+            _set_parent(data, f, body["parent"])
+        return dict(f)
+    return registry.update_projects(fn)
+
+
+def remove_folder(fid: str) -> dict:
+    """Delete a folder. Its projects and subfolders move up into its parent."""
+    def fn(data):
+        up = _folder(data, fid).get("parent")
+        data["folders"] = [f for f in data["folders"] if f["id"] != fid]
+        for f in data["folders"]:
+            if f.get("parent") == fid:
+                f["parent"] = up
+        for e in data["projects"]:
+            if e.get("folder_id") == fid:
+                if up:
+                    e["folder_id"] = up
+                else:
+                    del e["folder_id"]
+        return {"ok": True}
+    return registry.update_projects(fn)
+
+
+def clean_tags(tags) -> list[str]:
+    """Tag names trimmed, without duplicates (ignoring case), in the order given."""
+    if not isinstance(tags, list):
+        raise ValueError("tags must be a list")
+    out, seen = [], set()
+    for t in tags:
+        t = re.sub(r"\s+", " ", str(t)).strip()[:40]
+        if t and t.lower() not in seen:
+            seen.add(t.lower())
+            out.append(t)
+    return out
+
+
+def change_tag(body: dict) -> dict:
+    """Set a tag's color, or rename it on every project (merging into a tag of that name)."""
+    name = str(body["name"])
+
+    def fn(data):
+        colors = data.setdefault("tags", {})
+        if "color" in body:
+            color = str(body["color"] or "")
+            if color and not TAG_COLOR.fullmatch(color):
+                raise ValueError(f"not a color: {color}")
+            if color:
+                colors[name] = {**colors.get(name, {}), "color": color}
+            else:
+                colors.pop(name, None)
+        if "new_name" in body:
+            new = (clean_tags([body["new_name"]]) or [""])[0]
+            if not new:
+                raise ValueError("the tag needs a name")
+            for e in data["projects"]:
+                if name in e.get("tags", []):
+                    e["tags"] = clean_tags([new if t == name else t for t in e["tags"]])
+            if name in colors and new != name:
+                colors[new] = {**colors.pop(name), **colors.get(new, {})}
+        return {"ok": True}
+    return registry.update_projects(fn)
+
+
+def remove_tag(name: str) -> dict:
+    """Take a tag off every project."""
+    def fn(data):
+        for e in data["projects"]:
+            if name in e.get("tags", []):
+                e["tags"] = [t for t in e["tags"] if t != name]
+                if not e["tags"]:
+                    del e["tags"]
+        data.get("tags", {}).pop(name, None)
+        return {"ok": True}
+    return registry.update_projects(fn)
 
 
 # ---------------------------------------------------------------- settings
@@ -435,7 +575,7 @@ def create_project(body: dict) -> dict:
                                     str(body.get("github_name") or ""))
 
     def fn(data):
-        _add(data, root)
+        _add(data, root, str(body.get("folder_id") or ""))
         data["last_parent"] = str(parent.resolve())
     registry.update_projects(fn)
     return {"id": registry.project_key(root), "path": str(root), "git_note": git_note,
@@ -448,6 +588,15 @@ def change_project(pid: str, body: dict) -> dict:
             if registry.project_key(Path(e["path"])) == pid:
                 if "pinned" in body:
                     e["pinned"] = bool(body["pinned"])
+                if "folder_id" in body:
+                    if body["folder_id"]:
+                        e["folder_id"] = _folder(data, str(body["folder_id"]))["id"]
+                    else:
+                        e.pop("folder_id", None)
+                if "tags" in body:
+                    e["tags"] = clean_tags(body["tags"])
+                    if not e["tags"]:
+                        del e["tags"]
                 if "name" in body:
                     name = str(body["name"] or "").strip()[:120]
                     if name and name != Path(e["path"]).name:
@@ -586,13 +735,23 @@ class Handler(httpbase.Handler):
                 return self._json({"settings": save_settings(body), "github": gh_status(),
                                    "claude": claude_status()})
             if path == "/api/projects/add":
-                return self._json(add_project(str(body["path"])))
+                return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
             if path == "/api/projects/create":
                 return self._json(create_project(body))
             if path == "/api/projects/update":
                 return self._json(change_project(body["id"], body))
             if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
+            if path == "/api/folders/create":
+                return self._json(create_folder(body))
+            if path == "/api/folders/update":
+                return self._json(change_folder(body))
+            if path == "/api/folders/remove":
+                return self._json(remove_folder(str(body["id"])))
+            if path == "/api/tags/update":
+                return self._json(change_tag(body))
+            if path == "/api/tags/remove":
+                return self._json(remove_tag(str(body["name"])))
             if path == "/api/projects/open":
                 r = open_project(body["id"])
                 return self._json(r, 502 if "error" in r else 200)

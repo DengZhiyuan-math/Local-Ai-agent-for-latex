@@ -22,7 +22,8 @@ A local, Overleaf/Prism-style studio for LaTeX projects on your own machine:
   usage limits, and a ring by Send shows how full the conversation's context window is.
 - **Home page**: all your projects in one place, with PDF thumbnails, titles, git state and
   which ones are open. Create a project from a template, add an existing folder, pin, rename
-  or open any project in one click. The ⌂ button in the editor brings you back.
+  or open any project in one click. Group projects in folders (a research topic with its
+  papers as subfolders) and tag them. The ⌂ button in the editor brings you back.
 - **Autosave**: edits are saved a moment after you stop typing, as in Overleaf. There is no
   Save button. Auto-compile (in the Compile menu) builds shortly after that.
 - **History and sync with GitHub**: in a project with its own repository, your changes are
@@ -123,9 +124,17 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
 - The git chip shows the project's own repository, with a link to it on GitHub. A folder
   inside some other repository (such as `examples/minimal`, inside prism-local's) has none of
   its own, and the chip says so.
-- **Add folder…** adds an existing LaTeX folder. **Browse…** opens a native folder dialog (tkinter).
-- The **⋯** menu pins a project to the top, renames it in the list, shows it in Explorer/Finder,
-  copies its path, or removes it from the list. Removing never touches the files.
+- **Add existing…** adds an existing LaTeX folder. **Browse…** opens a native folder dialog (tkinter).
+- The **⋯** menu (or a right-click) pins a project to the top, renames it in the list, moves it
+  to a folder, edits its tags, shows it in Explorer/Finder, copies its path, or removes it from
+  the list. Removing never touches the files.
+- **Folders** in the sidebar organize the list: one per research topic, say, with a subfolder
+  for each paper or sub-project, and notes shown at the top of the folder. A folder shows its
+  own projects and those of its subfolders. Drag a card onto a folder to move it there, or a
+  folder onto another to nest it; deleting a folder moves its contents up a level. Folders
+  exist only in this list: no files move on disk.
+- **Tags** (draft, submitted, a coauthor…) can be given to any project; click one to see every
+  project with it. Rename a tag or change its color from its ⋯ menu in the sidebar.
 - Every project you open with prism-local, by any route, is added to the list automatically.
 - The ⌂ button in the editor opens the Home page, starting it if needed.
 

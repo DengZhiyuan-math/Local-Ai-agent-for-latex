@@ -5,7 +5,8 @@
 pdfjsLib.GlobalWorkerOptions.workerSrc = "/static/vendor/pdf.worker.js";
 window.name = "prism-home";        // lets the editor's ⌂ button find and reuse this tab
 
-const H = { projects: [], defaultParent: "", git: {}, busy: new Set(), loaded: false };
+const H = { projects: [], folders: [], tagColors: {}, defaultParent: "", git: {}, busy: new Set(), loaded: false,
+            view: store.get("home.view", { kind: "all" }), collapsed: new Set(store.get("home.collapsed", [])) };
 const thumbs = new Map();          // `${id}:${pdf_mtime}` -> canvas (or null while rendering)
 
 /* ------------------------------------------------------------------ helpers */
@@ -41,9 +42,10 @@ async function load() {
   if (!r || r._status !== 200) return;
   delete r._status;
   const sig = JSON.stringify(r);
-  if (sig === H.sig) return;          // unchanged: keep the DOM (hover, focus) as it is
+  if (sig === H.sig || H.dragging) return;   // unchanged: keep the DOM (hover, focus) as it is
   H.sig = sig;
-  H.projects = r.projects; H.defaultParent = r.default_parent; H.loaded = true;
+  H.projects = r.projects; H.folders = r.folders || []; H.tagColors = r.tags || {};
+  H.defaultParent = r.default_parent; H.loaded = true;
   render();
 }
 async function loadGit(p) {
@@ -52,6 +54,53 @@ async function loadGit(p) {
   if (r && r._status === 200) { H.git[p.id] = r.git; const el = document.querySelector(`.card-p[data-id="${p.id}"] .gitchip`); if (el) el.outerHTML = gitChip(p.id); }
 }
 function loadAllGit() { H.projects.forEach(loadGit); }
+
+/* ------------------------------------------------------------------ folders and tags
+   Folders (a research topic, its sub-projects, …) and tags only organize this list;
+   hub.py keeps them in projects.json, and no file moves on disk. */
+const folderById = (id) => H.folders.find((f) => f.id === id);
+const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+const childFolders = (id) => H.folders.filter((f) => (f.parent || null) === (id || null)).sort(byName);
+// Every folder below `id` (null: all of them), depth first, with its depth.
+function folderTree(id = null, depth = 0, out = []) {
+  for (const f of childFolders(id)) { out.push({ f, depth }); folderTree(f.id, depth + 1, out); }
+  return out;
+}
+// A project's folder; one whose folder was deleted elsewhere counts as not in a folder.
+const folderOf = (p) => (p.folder_id && folderById(p.folder_id) ? p.folder_id : null);
+function folderPath(id) {
+  const out = [];
+  for (let f = folderById(id); f && out.length < 50; f = f.parent && folderById(f.parent)) out.unshift(f);
+  return out;
+}
+const isInside = (fid, ancestor) => folderPath(fid).some((f) => f.id === ancestor);
+const inFolder = (p, fid) => { const f = folderOf(p); return !!f && isInside(f, fid); };
+function allTags() {
+  const set = new Map();
+  for (const t of Object.keys(H.tagColors)) set.set(t, 0);
+  for (const p of H.projects) for (const t of p.tags || []) set.set(t, (set.get(t) || 0) + 1);
+  return [...set].map(([name, n]) => ({ name, n })).sort(byName);
+}
+const TAG_PALETTE = ["#2f6db3", "#2e8540", "#b07800", "#c0392b", "#7d4fb3", "#00897b", "#c2185b", "#6b7280"];
+function tagColor(name) {
+  const c = H.tagColors[name] && H.tagColors[name].color;
+  if (c) return c;
+  let h = 0;
+  for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
+  return TAG_PALETTE[h % TAG_PALETTE.length];
+}
+const tagChip = (t) => `<button class="tagchip" data-act="tag" data-tag="${esc(t)}" style="--tag:${tagColor(t)}" title="Show projects tagged ${esc(t)}">${esc(t)}</button>`;
+function folderOptions(selected, { none = "— Not in a folder —", exclude = null } = {}) {
+  return `<option value="">${esc(none)}</option>` + folderTree()
+    .filter(({ f }) => !exclude || !isInside(f.id, exclude))
+    .map(({ f, depth }) => `<option value="${f.id}" ${f.id === selected ? "selected" : ""}>${"   ".repeat(depth)}${esc(f.name)}</option>`)
+    .join("");
+}
+const currentFolder = () => (H.view.kind === "folder" ? H.view.id : "");
+function setView(view) {
+  H.view = view; store.set("home.view", view);
+  render(); window.scrollTo(0, 0);
+}
 
 /* ------------------------------------------------------------------ render */
 function sorted(list) {
@@ -65,7 +114,8 @@ function sorted(list) {
 }
 function matches(p, q) {
   if (!q) return true;
-  const hay = [p.name, p.folder, p.title || "", p.path].join("\n").toLowerCase();
+  const hay = [p.name, p.folder, p.title || "", p.path, ...(p.tags || []),
+               ...folderPath(folderOf(p)).map((f) => f.name)].join("\n").toLowerCase();
   return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
 }
 function gitChip(id) {
@@ -80,14 +130,23 @@ function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);
   return esc(((w[0] || "?")[0] + (w[1] ? w[1][0] : "")).toUpperCase());
 }
+// The project's folder, when the view does not already say it, and its tags.
+function orgHTML(p) {
+  const fid = folderOf(p);
+  const showFolder = fid && !(H.view.kind === "folder" && fid === H.view.id);
+  const where = showFolder
+    ? `<button class="where" data-act="folder" data-fid="${fid}" title="Show this folder">${icon("folder")}<span>${esc(folderPath(fid).map((f) => f.name).join(" › "))}</span></button>` : "";
+  const tags = (p.tags || []).map(tagChip).join("");
+  return where || tags ? `<div class="org">${where}${tags}</div>` : "";
+}
 function cardHTML(p) {
   const busy = H.busy.has(p.id);
   if (!p.exists) {
-    return `<div class="card-p missing" data-id="${p.id}">
+    return `<div class="card-p missing" data-id="${p.id}" draggable="true">
       <div class="thumb"><div class="ph"><div class="ini">!</div><small>Folder not found</small></div></div>
       <div class="body"><div class="name" title="${esc(p.name)}">${esc(p.name)}</div>
         <div class="path" title="${esc(p.path)}"><bdi>${esc(p.path)}</bdi></div>
-        <div class="meta"><span class="chip err">moved or deleted</span></div></div>
+        <div class="meta"><span class="chip err">moved or deleted</span></div>${orgHTML(p)}</div>
       <div class="foot"><button class="open" data-act="remove">Remove from list</button>
         <button class="more icon" data-act="menu" title="More" aria-label="More">${icon("more")}</button></div></div>`;
   }
@@ -97,7 +156,7 @@ function cardHTML(p) {
     p.files ? `<span>${p.files} file${p.files === 1 ? "" : "s"}</span>` : `<span>no .tex files</span>`,
   ].join("");
   const run = p.running ? `<span class="badge-run" title="${p.running.pages} page(s) open at ${esc(p.running.url)}">Open</span>` : "";
-  return `<div class="card-p" data-id="${p.id}">
+  return `<div class="card-p" data-id="${p.id}" draggable="true">
     <div class="thumb" data-act="open" title="Open ${esc(p.name)}">
       <div class="ph"><div class="ini">${initials(p.name)}</div><small>${p.pdf_mtime ? "" : "No PDF yet"}</small></div>
       ${run}
@@ -108,6 +167,7 @@ function cardHTML(p) {
       ${title}
       <div class="path" title="${esc(p.path)}"><bdi>${esc(p.path)}</bdi></div>
       <div class="meta">${meta}${gitChip(p.id)}</div>
+      ${orgHTML(p)}
     </div>
     <div class="foot">
       <button class="open ${p.running ? "" : "primary"}" data-act="open" ${busy ? "disabled" : ""}>${busy ? "Starting…" : p.running ? "Show editor" : "Open"}</button>
@@ -115,21 +175,118 @@ function cardHTML(p) {
     </div>
   </div>`;
 }
+const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
+
+function sideRow({ act, attrs = "", ico, label, n, active, cls = "", depth = 0, twisty = "", more = "", drop = null, drag = "" }) {
+  return `<div class="side-row ${cls} ${active ? "active" : ""}" role="button" tabindex="0" data-act="${act}" ${attrs}
+      style="--depth:${depth}" ${drop !== null ? `data-drop="${drop}"` : ""} ${drag}>
+    ${twisty}${ico}<span class="label">${label}</span>
+    <span class="n">${n || ""}</span>${more}</div>`;
+}
+function renderSide() {
+  const v = H.view, count = (f) => H.projects.filter(f).length;
+  const views = [
+    sideRow({ act: "view", attrs: `data-view="all"`, ico: icon("list"), label: "All projects", n: H.projects.length, active: v.kind === "all" }),
+    sideRow({ act: "view", attrs: `data-view="pinned"`, ico: icon("star"), label: "Pinned", n: count((p) => p.pinned), active: v.kind === "pinned" }),
+    sideRow({ act: "view", attrs: `data-view="unfiled"`, ico: icon("inbox"), label: "Not in a folder", n: count((p) => !folderOf(p)), active: v.kind === "unfiled", drop: "" }),
+  ].join("");
+  const hidden = new Set();
+  const folders = folderTree().map(({ f, depth }) => {
+    if (f.parent && (hidden.has(f.parent) || H.collapsed.has(f.parent))) { hidden.add(f.id); return ""; }
+    const kids = childFolders(f.id).length, open = !H.collapsed.has(f.id);
+    const twisty = kids
+      ? `<button class="twisty ${open ? "open" : ""}" data-act="twisty" data-fid="${f.id}" tabindex="-1" aria-label="${open ? "Collapse" : "Expand"}">${icon("right")}</button>`
+      : `<span class="twisty"></span>`;
+    return sideRow({
+      act: "folder", attrs: `data-fid="${f.id}" title="${esc(f.note || f.name)}"`, cls: "side-folder", depth, twisty,
+      ico: icon("folder"), label: esc(f.name), n: count((p) => inFolder(p, f.id)),
+      active: v.kind === "folder" && v.id === f.id, drop: f.id, drag: `draggable="true"`,
+      more: `<button class="more" data-act="folder-menu" data-fid="${f.id}" tabindex="-1" aria-label="Folder actions">${icon("more")}</button>`,
+    });
+  }).join("");
+  const tags = allTags().map((t) => sideRow({
+    act: "tag", attrs: `data-tag="${esc(t.name)}"`, cls: "side-tag",
+    ico: `<span class="dot" style="--tag:${tagColor(t.name)}"></span>`, label: esc(t.name), n: t.n,
+    active: v.kind === "tag" && v.id === t.name,
+    more: `<button class="more" data-act="tag-menu" data-tag="${esc(t.name)}" tabindex="-1" aria-label="Tag actions">${icon("more")}</button>`,
+  })).join("");
+  $("#side").innerHTML = `<nav class="side-views">${views}</nav>
+    <div class="side-head" data-drop="" title="Drop a folder here to move it to the top level"><span>Folders</span>
+      <button class="tiny icon ghost" data-act="new-folder" title="New folder" aria-label="New folder">${icon("plus")}</button></div>
+    <div class="side-list">${folders || `<p class="side-empty">Group projects by topic: a folder can hold projects and subfolders.</p>`}</div>
+    <div class="side-head"><span>Tags</span></div>
+    <div class="side-list">${tags || `<p class="side-empty">Add tags from a project's ⋯ menu.</p>`}</div>`;
+}
+
+// What the current view shows: [{title, fid?, list}] sections, already searched and sorted.
+function viewSections(q) {
+  const v = H.view, pick = (f) => sorted(H.projects.filter((p) => f(p) && matches(p, q)));
+  if (v.kind === "pinned") return [{ title: "Pinned", list: pick((p) => p.pinned) }];
+  if (v.kind === "unfiled") return [{ title: "Not in a folder", list: pick((p) => !folderOf(p)) }];
+  if (v.kind === "tag") return [{ title: `Tagged “${v.id}”`, list: pick((p) => (p.tags || []).includes(v.id)) }];
+  if (v.kind === "folder") {
+    const f = folderById(v.id);
+    const out = [{ title: `In ${f.name}`, fid: f.id, list: pick((p) => folderOf(p) === f.id), own: true }];
+    for (const { f: sub } of folderTree(f.id)) {
+      out.push({ title: folderPath(sub.id).slice(folderPath(f.id).length).map((x) => x.name).join(" › "),
+                 fid: sub.id, list: pick((p) => folderOf(p) === sub.id) });
+    }
+    return out;
+  }
+  const all = pick(() => true), pinned = all.filter((p) => p.pinned);
+  return [{ title: "Pinned", list: pinned },
+          { title: pinned.length ? "Other projects" : "All projects", list: all.filter((p) => !p.pinned) }];
+}
+function sectionHTML(s, noHead) {
+  const head = noHead ? ""
+    : s.fid && !s.own ? `<h2><button class="sec-link" data-act="folder" data-fid="${s.fid}">${icon("folder")}${esc(s.title)}</button>
+                 <span class="n">${s.list.length || ""}</span></h2>`
+    : `<h2>${esc(s.title)}</h2>`;
+  const empty = s.fid && !s.list.length ? `<div class="drop-hint">No projects yet: drag some here</div>` : "";
+  return `<section ${s.fid ? `data-drop="${s.fid}"` : ""}>${head}<div class="grid">${s.list.map(cardHTML).join("")}</div>${empty}</section>`;
+}
+function renderHead() {
+  const v = H.view, crumbs = $("#crumbs"), note = $("#folder-note");
+  crumbs.hidden = v.kind !== "folder"; note.hidden = true;
+  if (v.kind !== "folder") return;
+  const path = folderPath(v.id), f = path[path.length - 1];
+  crumbs.innerHTML = `<button class="crumb" data-act="view" data-view="all">All projects</button>` +
+    path.map((x, i) => `<span class="sep">›</span>` + (i === path.length - 1
+      ? `<h1 class="crumb here">${esc(x.name)}</h1>`
+      : `<button class="crumb" data-act="folder" data-fid="${x.id}">${esc(x.name)}</button>`)).join("") +
+    `<span class="crumb-actions">
+       <button class="tiny" data-act="new-folder" data-parent="${f.id}" title="New folder inside ${esc(f.name)}">${icon("plus")}Subfolder</button>
+       <button class="tiny icon" data-act="folder-menu" data-fid="${f.id}" title="Folder actions" aria-label="Folder actions">${icon("more")}</button>
+     </span>`;
+  note.textContent = f.note || ""; note.hidden = !f.note;
+}
 function render() {
-  const q = $("#search").value.trim();
-  const shown = sorted(H.projects.filter((p) => matches(p, q)));
-  const pinned = shown.filter((p) => p.pinned), rest = shown.filter((p) => !p.pinned);
+  if ((H.view.kind === "folder" && !folderById(H.view.id)) ||
+      (H.view.kind === "tag" && !allTags().some((t) => t.name === H.view.id)) ||
+      !["all", "pinned", "unfiled", "folder", "tag"].includes(H.view.kind)) H.view = { kind: "all" };
+  renderSide(); renderHead();
+  const q = $("#search").value.trim(), v = H.view;
+  const secs = viewSections(q);
+  // Empty sections go, except a folder's subfolders: they stay as drop targets.
+  const visible = secs.filter((s) => s.list.length || (s.fid && !s.own && !q));
+  const shown = new Set(secs.flatMap((s) => s.list.map((p) => p.id))).size;
+  $("#sections").innerHTML = visible.map((s) => sectionHTML(s, visible.length === 1 && (s.own || v.kind !== "folder"))).join("");
+  // Dropping anywhere else in a folder's view moves the project into that folder.
+  if (v.kind === "folder") $("#home-main").dataset.drop = v.id; else delete $("#home-main").dataset.drop;
   $("#welcome").hidden = !H.loaded || H.projects.length > 0;
-  $("#no-match").hidden = !H.projects.length || shown.length > 0;
-  $("#sec-pinned").hidden = !pinned.length;
-  $("#sec-all").hidden = !rest.length;
-  $("#all-title").textContent = pinned.length ? "Other projects" : "All projects";
-  $("#grid-pinned").innerHTML = pinned.map(cardHTML).join("");
-  $("#grid-all").innerHTML = rest.map(cardHTML).join("");
+  $("#no-match").hidden = !H.projects.length || !q || shown > 0;
+  const empty = $("#empty-view");
+  empty.hidden = !H.projects.length || !!q || visible.length > 0;
+  empty.innerHTML = {
+    folder: "This folder has no projects yet. Drag projects here from the list on the left or from <b>All projects</b>, or create one with <b>+ New project</b>.",
+    pinned: "No pinned projects. Pin one with the ☆ on its card.",
+    unfiled: "Every project is in a folder.",
+  }[v.kind] || "";
   const running = H.projects.filter((p) => p.running).length;
-  $("#summary").textContent = H.projects.length
-    ? `${H.projects.length} project${H.projects.length === 1 ? "" : "s"}` + (running ? ` · ${running} open` : "")
-    : "";
+  $("#summary").textContent = !H.projects.length ? ""
+    : v.kind === "all" ? plural(H.projects.length, "project") + (running ? ` · ${running} open` : "")
+    : v.kind === "folder" ? plural(shown, "project") + (childFolders(v.id).length ? ` · ${plural(folderTree(v.id).length, "subfolder")}` : "")
+    : plural(shown, "project");
   document.querySelectorAll(".card-p[data-id]").forEach(attachThumb);
 }
 
@@ -231,57 +388,185 @@ async function copyPath(id) {
   try { await navigator.clipboard.writeText(p.path); toast("Path copied"); } catch { toast(p.path); }
 }
 
-/* card clicks */
+/* folders, tags: moving and editing */
+async function post(path, body, what) {
+  const r = await api(path, body);
+  if (r._status !== 200) { toast(r.error || `Could not ${what}`, true); }
+  H.sig = null; await load();
+  return r;
+}
+async function moveProject(id, fid) {
+  const p = byId(id);
+  if (!p || (folderOf(p) || "") === (fid || "")) return;
+  p.folder_id = fid || null; render();
+  const r = await post("/api/projects/update", { id, folder_id: fid || "" }, "move the project");
+  if (r._status === 200) toast(fid ? `Moved ${p.name} to ${folderById(fid) ? folderById(fid).name : "the folder"}` : `${p.name} is no longer in a folder`);
+}
+async function moveFolder(fid, parent) {
+  const f = folderById(fid);
+  if (!f || (f.parent || "") === (parent || "") || fid === parent) return;
+  await post("/api/folders/update", { id: fid, parent: parent || "" }, "move the folder");
+}
+async function removeFolder(fid) {
+  const f = folderById(fid); if (!f) return;
+  const n = H.projects.filter((p) => folderOf(p) === fid).length, subs = childFolders(fid).length;
+  const up = f.parent ? `“${folderById(f.parent).name}”` : "the top level";
+  const what = [n && plural(n, "project"), subs && plural(subs, "subfolder")].filter(Boolean).join(" and ");
+  if (!confirm(`Delete the folder “${f.name}”?` + (what ? `\n\nIts ${what} move to ${up}.` : "") +
+               "\nNo project files are touched.")) return;
+  if (H.view.kind === "folder" && isInside(H.view.id, fid)) setView(f.parent ? { kind: "folder", id: f.parent } : { kind: "all" });
+  await post("/api/folders/remove", { id: fid }, "delete the folder");
+}
+async function removeTag(name) {
+  const n = H.projects.filter((p) => (p.tags || []).includes(name)).length;
+  if (!confirm(`Remove the tag “${name}”` + (n ? ` from ${plural(n, "project")}?` : "?"))) return;
+  await post("/api/tags/remove", { name }, "remove the tag");
+}
+function toggleFolder(fid) {
+  if (H.collapsed.has(fid)) H.collapsed.delete(fid); else H.collapsed.add(fid);
+  store.set("home.collapsed", [...H.collapsed]); renderSide();
+}
+
+/* clicks */
 document.addEventListener("click", (e) => {
   const act = e.target.closest("[data-act]");
   if (!e.target.closest("#menu")) closeMenu();
   if (!act) return;
   const card = act.closest(".card-p");
-  const id = card && card.dataset.id;
-  switch (act.dataset.act) {
+  const id = card && card.dataset.id, d = act.dataset;
+  switch (d.act) {
     case "open": return openProject(id);
     case "pin": e.stopPropagation(); return setPinned(id, !byId(id).pinned);
     case "remove": return removeProject(id);
-    case "menu": e.stopPropagation(); return showMenu(id, act);
+    case "menu": e.stopPropagation(); return showMenu(act, projectMenu(id));
     case "new": return openNew();
     case "add": return openAdd();
+    case "view": return setView({ kind: d.view });
+    case "folder": return setView({ kind: "folder", id: d.fid });
+    case "tag": e.stopPropagation(); return setView({ kind: "tag", id: d.tag });
+    case "twisty": e.stopPropagation(); return toggleFolder(d.fid);
+    case "new-folder": e.stopPropagation(); return openFolder(null, d.parent || currentFolder());
+    case "folder-menu": e.stopPropagation(); return showMenu(act, folderMenu(d.fid));
+    case "tag-menu": e.stopPropagation(); return showMenu(act, tagMenu(d.tag));
   }
 });
+// The sidebar's rows are not buttons (they hold buttons): Enter and Space work on them too.
+$("#side").addEventListener("keydown", (e) => {
+  const row = e.target.closest(".side-row");
+  if (row && e.target === row && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); row.click(); }
+});
+document.addEventListener("contextmenu", (e) => {
+  const card = e.target.closest(".card-p[data-id]"), folder = e.target.closest(".side-folder[data-fid]"),
+        tag = e.target.closest(".side-tag[data-tag]");
+  const menu = card ? projectMenu(card.dataset.id) : folder ? folderMenu(folder.dataset.fid) : tag ? tagMenu(tag.dataset.tag) : null;
+  if (!menu || e.target.closest("a, input")) return;
+  e.preventDefault(); showMenu(null, menu, { x: e.clientX, y: e.clientY });
+});
 
-/* ------------------------------------------------------------------ menu */
-function showMenu(id, anchor) {
-  const p = byId(id); const m = $("#menu");
-  const items = p.exists ? [
-    ["open", p.running ? "Show editor" : "Open"],
-    ["pin", p.pinned ? "Unpin" : "Pin to top"],
-    ["rename", "Rename in list…"],
+/* ------------------------------------------------------------------ menus
+   A menu is [[label, fn, cls?], "-", …]. */
+let menuItems = [];
+function projectMenu(id) {
+  const p = byId(id);
+  const org = [["Move to folder…", () => openMove(id)], ["Tags…", () => openTags(id)]];
+  return p.exists ? [
+    [p.running ? "Show editor" : "Open", () => openProject(id)],
+    [p.pinned ? "Unpin" : "Pin to top", () => setPinned(id, !p.pinned)],
+    ["Rename in list…", () => openRename(id)],
+    "-", ...org,
     "-",
-    ["reveal", "Show in folder"],
-    ...(H.git[id] && H.git[id].github ? [["github", "Open on GitHub"]] : []),
-    ["copy", "Copy path"],
+    ["Show in folder", () => reveal(id)],
+    ...(H.git[id] && H.git[id].github ? [["Open on GitHub", () => window.open(H.git[id].github, "_blank", "noopener")]] : []),
+    ["Copy path", () => copyPath(id)],
     "-",
-    ["remove", "Remove from list…", "danger"],
-  ] : [["copy", "Copy path"], "-", ["remove", "Remove from list…", "danger"]];
-  m.innerHTML = items.map((it) => it === "-" ? "<hr>" : `<button data-m="${it[0]}" class="${it[2] || ""}" role="menuitem">${esc(it[1])}</button>`).join("");
-  m.dataset.id = id; m.hidden = false;
-  const r = anchor.getBoundingClientRect();
+    ["Remove from list…", () => removeProject(id), "danger"],
+  ] : [...org, "-", ["Copy path", () => copyPath(id)], "-", ["Remove from list…", () => removeProject(id), "danger"]];
+}
+function folderMenu(fid) {
+  const f = folderById(fid);
+  return [
+    ["Open", () => setView({ kind: "folder", id: fid })],
+    ["New project here…", () => { setView({ kind: "folder", id: fid }); openNew(); }],
+    ["New subfolder…", () => openFolder(null, fid)],
+    "-",
+    ["Rename, move, notes…", () => openFolder(fid)],
+    ...(f.parent ? [["Move to top level", () => moveFolder(fid, "")]] : []),
+    "-",
+    ["Delete folder…", () => removeFolder(fid), "danger"],
+  ];
+}
+function tagMenu(name) {
+  return [
+    ["Show projects", () => setView({ kind: "tag", id: name })],
+    ["Rename, color…", () => openTag(name)],
+    "-",
+    ["Remove tag…", () => removeTag(name), "danger"],
+  ];
+}
+function showMenu(anchor, items, at = null) {
+  const m = $("#menu");
+  menuItems = items;
+  m.innerHTML = items.map((it, i) => it === "-" ? "<hr>" : `<button data-m="${i}" class="${it[2] || ""}" role="menuitem">${esc(it[0])}</button>`).join("");
+  m.hidden = false;
   const mw = m.offsetWidth, mh = m.offsetHeight;
-  m.style.left = Math.max(8, Math.min(r.right - mw, innerWidth - mw - 8)) + "px";
-  m.style.top = (r.bottom + mh + 6 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + "px";
+  const r = anchor ? anchor.getBoundingClientRect() : { left: at.x, right: at.x + mw, top: at.y, bottom: at.y };
+  m.style.left = Math.max(8, Math.min(anchor ? r.right - mw : r.left, innerWidth - mw - 8)) + "px";
+  m.style.top = Math.max(8, r.bottom + mh + 6 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + "px";
   m.querySelector("button").focus();
 }
 function closeMenu() { $("#menu").hidden = true; }
 $("#menu").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-m]"); if (!b) return;
-  const id = $("#menu").dataset.id; closeMenu();
-  ({
-    open: () => openProject(id), pin: () => setPinned(id, !byId(id).pinned), rename: () => openRename(id),
-    reveal: () => reveal(id), copy: () => copyPath(id), remove: () => removeProject(id),
-    github: () => window.open(H.git[id].github, "_blank", "noopener"),
-  })[b.dataset.m]();
+  closeMenu(); menuItems[+b.dataset.m][1]();
 });
 window.addEventListener("scroll", closeMenu, { passive: true });
 window.addEventListener("resize", closeMenu);
+
+/* ------------------------------------------------------------------ drag and drop
+   A project card onto a folder (in the sidebar, a subfolder's section, or anywhere in a
+   folder's view) moves the project there; onto "Not in a folder" takes it out of its
+   folder. A folder onto another folder nests it; onto the "Folders" heading, to the top. */
+const DRAG_P = "application/x-prism-project", DRAG_F = "application/x-prism-folder";
+let dropOn = null;
+function markDrop(el) {
+  if (dropOn === el) return;
+  if (dropOn) dropOn.classList.remove("drop-on");
+  dropOn = el; if (el) el.classList.add("drop-on");
+}
+// The element a drag over `target` would drop on, if it accepts what is dragged.
+function dropTarget(e) {
+  const types = e.dataTransfer.types, el = e.target.closest && e.target.closest("[data-drop]");
+  if (!el) return null;
+  if (types.includes(DRAG_P)) return el;
+  if (types.includes(DRAG_F) && (el.classList.contains("side-folder") || el.classList.contains("side-head"))) return el;
+  return null;
+}
+document.addEventListener("dragstart", (e) => {
+  const card = e.target.closest && e.target.closest(".card-p[data-id]");
+  const folder = e.target.closest && e.target.closest(".side-folder[data-fid]");
+  if (card) e.dataTransfer.setData(DRAG_P, card.dataset.id);
+  else if (folder) e.dataTransfer.setData(DRAG_F, folder.dataset.fid);
+  else return;
+  e.dataTransfer.effectAllowed = "move"; H.dragging = true; closeMenu();
+});
+document.addEventListener("dragend", () => { H.dragging = false; markDrop(null); });
+document.addEventListener("dragover", (e) => {
+  const el = dropTarget(e);
+  markDrop(el);
+  if (el) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; }
+});
+document.addEventListener("drop", (e) => {
+  const el = dropTarget(e);
+  markDrop(null); H.dragging = false;
+  if (!el) return;
+  e.preventDefault();
+  const pid = e.dataTransfer.getData(DRAG_P), fid = e.dataTransfer.getData(DRAG_F);
+  if (pid) moveProject(pid, el.dataset.drop);
+  else if (fid) {
+    if (el.dataset.drop && isInside(el.dataset.drop, fid)) return toast("A folder cannot go inside itself", true);
+    moveFolder(fid, el.dataset.drop);
+  }
+});
 
 /* ------------------------------------------------------------------ dialogs */
 function dlgError(dlg, msg) { const el = dlg.querySelector(".dlg-error"); el.textContent = msg || ""; el.hidden = !msg; }
@@ -315,6 +600,7 @@ function openNew() {
   f.elements.github.checked = !!st.github_repo && ready;
   f.elements.github.disabled = !ready;
   f.elements.github_name.dataset.edited = "";
+  f.elements.folder_id.innerHTML = folderOptions(currentFolder());
   dlgError(dlg, ""); updateTarget(); updateGithubRow();
   dlg.showModal(); f.elements.name.focus();
 }
@@ -346,6 +632,7 @@ $("#form-new").addEventListener("submit", async (e) => {
     template: f.elements.template.value, git: f.elements.git.checked,
     github: f.elements.github.checked, github_name: f.elements.github_name.value.trim(),
     github_owner: (H.settings && H.settings.github_owner) || "",
+    folder_id: f.elements.folder_id.value,
   };
   store.set("home.author", body.author); store.set("home.template", body.template);
   btn.disabled = true; btn.textContent = body.github ? "Creating on GitHub…" : "Creating…"; dlgError(dlg, "");
@@ -356,17 +643,20 @@ $("#form-new").addEventListener("submit", async (e) => {
   if (r.github && r.github.error) toast(`Created ${r.path}, but the GitHub repository was not created:\n${r.github.error}`, true);
   else toast(`Created ${r.path}` + (r.github ? `\nGitHub: ${r.github.url}` : "") + (r.git_note ? `\n${r.git_note}` : ""));
   await load();
+  if (H.view.kind === "tag") await post("/api/projects/update", { id: r.id, tags: [H.view.id] }, "tag the project");
   if (f.elements.open.checked) openProject(r.id);
 });
 
 function openAdd() {
   const f = $("#form-add"), dlg = $("#dlg-add");
-  f.reset(); dlgError(dlg, ""); dlg.showModal(); f.elements.path.focus();
+  f.reset(); dlgError(dlg, "");
+  f.elements.folder_id.innerHTML = folderOptions(currentFolder());
+  dlg.showModal(); f.elements.path.focus();
 }
 $("#form-add").addEventListener("submit", async (e) => {
   e.preventDefault();
   const dlg = $("#dlg-add");
-  const r = await api("/api/projects/add", { path: e.target.elements.path.value });
+  const r = await api("/api/projects/add", { path: e.target.elements.path.value, folder_id: e.target.elements.folder_id.value });
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not add the folder");
   dlg.close();
   toast(r.has_tex ? `Added ${r.path}` : `Added ${r.path}\n(no .tex file at its top level yet)`);
@@ -387,6 +677,102 @@ $("#form-rename").addEventListener("submit", async (e) => {
   $("#dlg-rename").close();
   if (r._status !== 200) toast(r.error || "Could not rename", true);
   load();
+});
+
+/* folders: new, or rename, move and notes of an existing one */
+function openFolder(fid, parent = "") {
+  const f = $("#form-folder"), dlg = $("#dlg-folder"), cur = fid && folderById(fid);
+  f.reset(); dlgError(dlg, "");
+  f.dataset.id = fid || "";
+  dlg.querySelector("h3").textContent = cur ? "Edit folder" : parent ? `New folder in ${folderById(parent).name}` : "New folder";
+  f.elements.parent.innerHTML = folderOptions(cur ? cur.parent : parent, { none: "— Top level —", exclude: fid });
+  f.elements.name.value = cur ? cur.name : "";
+  f.elements.note.value = cur ? cur.note || "" : "";
+  dlg.showModal(); f.elements.name.focus(); f.elements.name.select();
+}
+$("#form-folder").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, dlg = $("#dlg-folder"), id = f.dataset.id;
+  const body = { name: f.elements.name.value.trim(), parent: f.elements.parent.value, note: f.elements.note.value };
+  const r = await api(id ? "/api/folders/update" : "/api/folders/create", id ? { id, ...body } : body);
+  if (r._status !== 200) return dlgError(dlg, r.error || "Could not save the folder");
+  dlg.close();
+  if (r.parent) { H.collapsed.delete(r.parent); store.set("home.collapsed", [...H.collapsed]); }
+  H.sig = null; await load();
+  if (!id) setView({ kind: "folder", id: r.id });
+});
+
+function openMove(id) {
+  const p = byId(id), f = $("#form-move"), dlg = $("#dlg-move");
+  dlgError(dlg, ""); f.dataset.id = id;
+  dlg.querySelector("h3").textContent = `Move ${p.name} to folder`;
+  f.elements.folder_id.innerHTML = folderOptions(folderOf(p));
+  dlg.showModal(); f.elements.folder_id.focus();
+}
+$("#form-move").addEventListener("submit", (e) => {
+  e.preventDefault();
+  $("#dlg-move").close();
+  moveProject(e.target.dataset.id, e.target.elements.folder_id.value);
+});
+
+/* a project's tags */
+function tagChoices(checked) {
+  const names = [...new Set([...allTags().map((t) => t.name), ...checked])];
+  $("#tag-choices").innerHTML = names.length
+    ? names.map((t) => `<label class="tagpick" style="--tag:${tagColor(t)}"><input type="checkbox" value="${esc(t)}" ${checked.includes(t) ? "checked" : ""}><span>${esc(t)}</span></label>`).join("")
+    : `<p class="hint">No tags yet: add the first one below.</p>`;
+}
+const checkedTags = () => [...document.querySelectorAll("#tag-choices input:checked")].map((i) => i.value);
+function openTags(id) {
+  const p = byId(id), f = $("#form-tags"), dlg = $("#dlg-tags");
+  f.reset(); dlgError(dlg, ""); f.dataset.id = id;
+  dlg.querySelector("h3").textContent = `Tags of ${p.name}`;
+  tagChoices(p.tags || []);
+  dlg.showModal(); f.elements.new_tag.focus();
+}
+function addTypedTag() {
+  const input = $("#form-tags").elements.new_tag, t = input.value.replace(/\s+/g, " ").trim();
+  if (!t) return false;
+  const have = checkedTags(), same = allTags().find((x) => x.name.toLowerCase() === t.toLowerCase());
+  tagChoices([...have, same ? same.name : t]);
+  input.value = ""; input.focus();
+  return true;
+}
+$("#tag-add").onclick = addTypedTag;
+$("#form-tags").elements.new_tag.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && addTypedTag()) e.preventDefault();      // an empty field submits
+});
+$("#form-tags").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  addTypedTag();
+  const id = e.target.dataset.id;
+  $("#dlg-tags").close();
+  await post("/api/projects/update", { id, tags: checkedTags() }, "save the tags");
+});
+
+/* a tag: rename (on every project) and color */
+function openTag(name) {
+  const f = $("#form-tag"), dlg = $("#dlg-tag");
+  dlgError(dlg, ""); f.dataset.name = name;
+  f.elements.name.value = name;
+  const cur = tagColor(name);
+  $("#tag-swatches").innerHTML = TAG_PALETTE.map((c) => `<label class="swatch" style="--tag:${c}" title="${c}"><input type="radio" name="color" value="${c}" ${c === cur ? "checked" : ""}><span></span></label>`).join("");
+  dlg.showModal(); f.elements.name.select();
+}
+$("#form-tag").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, dlg = $("#dlg-tag"), name = f.dataset.name;
+  const body = { name, color: f.elements.color.value };
+  const next = f.elements.name.value.replace(/\s+/g, " ").trim();
+  if (next && next !== name) body.new_name = next;
+  const r = await api("/api/tags/update", body);
+  if (r._status !== 200) return dlgError(dlg, r.error || "Could not save the tag");
+  dlg.close();
+  if (body.new_name && H.view.kind === "tag" && H.view.id === name) {
+    const merged = allTags().find((t) => t.name.toLowerCase() === next.toLowerCase());
+    H.view = { kind: "tag", id: merged ? merged.name : next }; store.set("home.view", H.view);
+  }
+  H.sig = null; load();
 });
 
 $("#btn-new").onclick = openNew;

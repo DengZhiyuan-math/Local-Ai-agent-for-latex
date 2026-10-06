@@ -17,24 +17,22 @@
     <option value="name">Name</option>
   </select>
   <div class="actions right">
-    <button id="btn-add" title="Add an existing LaTeX folder to this list">Add folder…</button>
+    <button id="btn-add" title="Add an existing LaTeX folder on disk to this list">Add existing…</button>
     <button id="btn-new" class="primary" title="Create a new LaTeX project from a template">+ New project</button>
     <button id="btn-settings" class="icon" data-icon="settings" title="Settings" aria-label="Settings"></button>
     <button id="btn-theme" class="icon" data-icon="theme" title="Toggle light/dark" aria-label="Theme"></button>
   </div>
 </header>
 
+<div id="home-layout">
+<aside id="side" aria-label="Folders and tags"></aside>
 <main id="home-main">
+  <div id="crumbs" class="crumbs" hidden></div>
+  <p id="folder-note" class="folder-note" hidden></p>
   <div id="summary" class="summary"></div>
-  <section id="sec-pinned" hidden>
-    <h2>Pinned</h2>
-    <div class="grid" id="grid-pinned"></div>
-  </section>
-  <section id="sec-all" hidden>
-    <h2 id="all-title">All projects</h2>
-    <div class="grid" id="grid-all"></div>
-  </section>
+  <div id="sections"></div>
   <div id="no-match" class="empty-note" hidden>No project matches your search.</div>
+  <div id="empty-view" class="empty-note" hidden></div>
   <div id="welcome" class="welcome" hidden>
     <div class="logo big">∂</div>
     <h1>Your LaTeX projects, in one place</h1>
@@ -46,6 +44,7 @@
     </div>
   </div>
 </main>
+</div>
 
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="toast" role="status" hidden></div>
@@ -59,6 +58,8 @@
       <span class="row"><input name="parent" required spellcheck="false">
         <button type="button" data-browse="parent">Browse…</button></span></label>
     <div class="will-create" id="new-target"></div>
+    <label class="field"><span>Folder in this list <i>(optional)</i></span>
+      <select name="folder_id" class="folder-select"></select></label>
     <label class="field"><span>Title <i>(optional)</i></span><input name="title" autocomplete="off"></label>
     <label class="field"><span>Author <i>(optional)</i></span><input name="author" autocomplete="off"></label>
     <fieldset class="templates">
@@ -130,6 +131,8 @@
     <label class="field"><span>Folder</span>
       <span class="row"><input name="path" required placeholder="D:\papers\my-paper" spellcheck="false">
         <button type="button" data-browse="path">Browse…</button></span></label>
+    <label class="field"><span>Folder in this list <i>(optional)</i></span>
+      <select name="folder_id" class="folder-select"></select></label>
     <p class="hint">The folder is only added to this list; nothing in it is changed.</p>
     <div class="dlg-error" hidden></div>
     <div class="dlg-actions">
@@ -144,6 +147,64 @@
     <h3>Rename in list</h3>
     <label class="field"><span>Display name</span><input name="name" autocomplete="off"></label>
     <p class="hint">Only the name shown here changes. Leave it empty to use the folder name.</p>
+    <div class="dlg-actions">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-folder">
+  <form method="dialog" id="form-folder">
+    <h3>New folder</h3>
+    <label class="field"><span>Name</span>
+      <input name="name" required autocomplete="off" placeholder="a research topic, a grant, a course…"></label>
+    <label class="field"><span>Inside</span><select name="parent" class="folder-select"></select></label>
+    <label class="field"><span>Notes <i>(optional: shown at the top of the folder)</i></span>
+      <textarea name="note" rows="3"></textarea></label>
+    <p class="hint">Folders only organize this list; no files are moved on disk.</p>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-move">
+  <form method="dialog" id="form-move">
+    <h3>Move to folder</h3>
+    <label class="field"><span>Folder</span><select name="folder_id" class="folder-select"></select></label>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" class="primary">Move</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-tags">
+  <form method="dialog" id="form-tags">
+    <h3>Tags</h3>
+    <div id="tag-choices" class="tag-choices"></div>
+    <label class="field"><span>New tag</span>
+      <span class="row"><input name="new_tag" autocomplete="off" maxlength="40" placeholder="draft, submitted, with Anna…">
+        <button type="button" id="tag-add">Add</button></span></label>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-tag">
+  <form method="dialog" id="form-tag">
+    <h3>Edit tag</h3>
+    <label class="field"><span>Name</span><input name="name" required autocomplete="off" maxlength="40"></label>
+    <fieldset class="swatches"><legend>Color</legend><div id="tag-swatches"></div></fieldset>
+    <p class="hint">Renaming changes the tag on every project. A tag that already exists is merged into.</p>
+    <div class="dlg-error" hidden></div>
     <div class="dlg-actions">
       <button type="button" data-close>Cancel</button>
       <button type="submit" class="primary">Save</button>

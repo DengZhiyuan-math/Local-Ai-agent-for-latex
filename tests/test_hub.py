@@ -138,6 +138,60 @@ class Create(TempState):
         self.assertGreater(g["changes"], 0)
 
 
+class FoldersAndTags(TempState):
+    def setUp(self):
+        super().setUp()
+        self.pid = hub.add_project(str(PROJECT))["id"]
+
+    def entry(self):
+        return registry.load_projects()["projects"][0]
+
+    def test_topic_with_subprojects(self):
+        topic = hub.create_folder({"name": " Dynamics ", "note": "the grant"})
+        sub = hub.create_folder({"name": "Paper 1", "parent": topic["id"]})
+        self.assertEqual((topic["name"], sub["parent"]), ("Dynamics", topic["id"]))
+        hub.change_project(self.pid, {"folder_id": sub["id"]})
+        listed = hub.list_projects()
+        self.assertEqual(listed["projects"][0]["folder_id"], sub["id"])
+        self.assertEqual({f["id"] for f in listed["folders"]}, {topic["id"], sub["id"]})
+        with self.assertRaises(ValueError):            # no cycles
+            hub.change_folder({"id": topic["id"], "parent": sub["id"]})
+        with self.assertRaises(ValueError):
+            hub.change_project(self.pid, {"folder_id": "nope"})
+        with self.assertRaises(ValueError):
+            hub.create_folder({"name": "  "})
+        # Deleting a folder moves its projects and subfolders up, never deletes them.
+        hub.remove_folder(sub["id"])
+        self.assertEqual(self.entry()["folder_id"], topic["id"])
+        inner = hub.create_folder({"name": "Inner", "parent": topic["id"]})
+        hub.remove_folder(topic["id"])
+        self.assertNotIn("folder_id", self.entry())
+        self.assertIsNone(registry.load_projects()["folders"][0]["parent"])
+        self.assertEqual(registry.load_projects()["folders"][0]["id"], inner["id"])
+
+    def test_add_and_create_into_a_folder(self):
+        f = hub.create_folder({"name": "Topic"})
+        hub.add_project(str(PROJECT), f["id"])
+        self.assertEqual(self.entry()["folder_id"], f["id"])
+        r = hub.create_project({"name": "p2", "parent": str(self.tmp), "template": "empty",
+                                "folder_id": f["id"]})
+        e = registry.find(registry.load_projects(), Path(r["path"]))
+        self.assertEqual(e["folder_id"], f["id"])
+
+    def test_tags(self):
+        hub.change_project(self.pid, {"tags": [" draft ", "Draft", "with  Anna", ""]})
+        self.assertEqual(self.entry()["tags"], ["draft", "with Anna"])
+        hub.change_tag({"name": "draft", "color": "#2e8540"})
+        with self.assertRaises(ValueError):
+            hub.change_tag({"name": "draft", "color": "red;"})
+        hub.change_tag({"name": "draft", "new_name": "with Anna"})      # merges
+        self.assertEqual(self.entry()["tags"], ["with Anna"])
+        self.assertEqual(registry.load_projects()["tags"], {"with Anna": {"color": "#2e8540"}})
+        hub.remove_tag("with Anna")
+        self.assertNotIn("tags", self.entry())
+        self.assertEqual(hub.list_projects()["tags"], {})
+
+
 class SettingsAndGitHub(TempState):
     def test_settings_round_trip_and_checks(self):
         self.assertEqual(hub.load_settings(), hub.SETTINGS_DEFAULTS)
@@ -220,6 +274,18 @@ class HubServer(unittest.TestCase):
                                    {"id": pid, "pinned": True, "name": "Example"})[0], 200)
         p = request(self.url, "/api/projects")[1]["projects"][0]
         self.assertEqual((p["name"], p["pinned"]), ("Example", True))
+
+        status, folder = self.post("/api/folders/create", {"name": "Topic"})
+        self.assertEqual(status, 200)
+        self.post("/api/projects/update", {"id": pid, "folder_id": folder["id"], "tags": ["draft"]})
+        self.assertEqual(self.post("/api/tags/update", {"name": "draft", "color": "#c0392b"})[0], 200)
+        listed = request(self.url, "/api/projects")[1]
+        self.assertEqual((listed["projects"][0]["folder_id"], listed["projects"][0]["tags"]),
+                         (folder["id"], ["draft"]))
+        self.assertEqual(listed["tags"], {"draft": {"color": "#c0392b"}})
+        self.assertEqual(self.post("/api/folders/update", {"id": "nope", "name": "x"})[0], 400)
+        self.assertEqual(self.post("/api/folders/remove", {"id": folder["id"]})[0], 200)
+        self.assertIsNone(request(self.url, "/api/projects")[1]["projects"][0]["folder_id"])
 
         self.assertEqual(self.post("/api/projects/add", {"path": str(self.tmp / "nope")})[0], 400)
         self.assertEqual(self.post("/api/projects/remove", {"id": "unknown"})[0], 404)
