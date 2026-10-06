@@ -201,6 +201,22 @@
   </form>
 </dialog>
 
+<dialog id="dlg-publish">
+  <form method="dialog" id="form-publish">
+    <h3>Create GitHub repository</h3>
+    <label class="field"><span>Repository <i id="pub-owner"></i></span>
+      <input name="name" required spellcheck="false" autocomplete="off" pattern="[A-Za-z0-9._-]{1,100}"
+             title="Letters, digits, '.', '-' and '_'"></label>
+    <div id="pub-private"></div>
+    <p class="hint" id="pub-note"></p>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Cancel</button>
+      <button type="submit" class="primary">Create</button>
+    </div>
+  </form>
+</dialog>
+
 <dialog id="dlg-sync" class="wide">
   <form method="dialog" id="form-sync">
     <h3>GitHub sync</h3>

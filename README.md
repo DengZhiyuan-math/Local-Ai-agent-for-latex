@@ -137,6 +137,13 @@ bin/prism-home                            # opens http://127.0.0.1:8790/
   exist only in this list: no files move on disk. **All projects** is grouped the same way:
   pinned projects first, then a section per top-level folder (its subfolders inside it, each
   section folding away with ▸), then the projects in no folder.
+- **A GitHub repository for one project**: a card without one has a **+ GitHub** chip, and
+  its ⋯ menu *Create GitHub repository…*; in the editor, the GitHub button says *Not on
+  GitHub* and its menu offers the same. It initializes git if needed, writes a .gitignore
+  (build output, LaTeX's auxiliary files, and `conversations/` with saved AI chats unless you
+  untick it), commits everything except files over 50 MB, creates a private repository with
+  the GitHub CLI and pushes; from then on the editor saves and pushes changes by itself. A
+  project in a folder's shared repository publishes that repository.
 - **GitHub sync…** in a folder's ⋯ menu chooses how the folder's projects (and its subfolders')
   are kept in git and on GitHub:
   - *One repository for the whole folder*: the projects are gathered in one folder on disk,

@@ -244,6 +244,8 @@ dialog h3 { margin: 0 0 4px; font-size: 16px; }
 .chip.muted { opacity: .8; font-style: italic; }
 .chip.gh { text-decoration: none; }
 .chip.gh:hover { color: var(--accent); border-color: var(--accent); }
+button.chip.gh.add { background: none; height: auto; cursor: pointer; border-style: dashed; }
+#pub-private code { font-family: var(--mono); font-size: 11.5px; }
 .hint code { font-family: var(--mono); font-size: 11.5px; }
 dialog select, dialog textarea {
   font: inherit; font-size: 13px; color: var(--text); background: var(--cm-bg); border: 1px solid var(--border);

@@ -282,6 +282,47 @@ class FolderSync(TempState):
         self.assertEqual(self.git(repo, "status", "--porcelain"), "", "nothing left over")
         self.assertIn("练习/ex one/main.tex", self.git(repo, "ls-files"))
 
+    def test_publish_one_project(self):
+        from unittest import mock
+        root = self.projects / "ex 1"
+        (root / "conversations").mkdir()
+        (root / "conversations" / "chat.json").write_text("{}", encoding="utf-8")
+        info = hub.publish_info(root)
+        self.assertEqual((info["kind"], info["name"], info["github"]), ("none", "ex-1", None))
+        self.assertEqual([d["dir"] for d in info["private_dirs"]], ["conversations"])
+        calls = []
+        with mock.patch.object(hub, "create_github_repo",
+                               side_effect=lambda r, o, n: calls.append((r, o, n)) or {"url": "https://github.com/me/" + n}):
+            r = hub.publish_project(root, "my-ex", leave_out=["conversations"])
+        self.assertEqual(r, {"url": "https://github.com/me/my-ex", "created": True})
+        self.assertEqual(calls, [(root, "", "my-ex")])
+        self.assertEqual(hub.repo_kind(root)[0], "own")
+        ignore = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("conversations/", ignore)
+        self.assertIn("build/", ignore)
+        self.assertTrue(hub.publish_info(root)["private_dirs"][0]["ignored"])
+
+    def test_publish_in_a_shared_repository_publishes_that_repository(self):
+        from unittest import mock
+        self.assertTrue(hub.apply_sync({"id": self.top["id"], "mode": "shared"})["ok"])
+        repo = (self.projects / "Course").resolve()
+        root = repo / "练习" / "ex 1"
+        self.assertEqual(hub.publish_info(root)["kind"], "shared")
+        with mock.patch.object(hub, "create_github_repo",
+                               side_effect=lambda r, o, n: {"url": f"https://github.com/me/{n}", "seen": str(r)}):
+            r = hub.publish_project(root)
+        self.assertEqual((r["seen"], r["url"]), (str(repo), "https://github.com/me/Course"))
+
+    def test_big_files_stay_out_of_the_first_commit(self):
+        from unittest import mock
+        root = self.projects / "ex 1"
+        hub.git_init(root)
+        (root / "huge.bin").write_bytes(b"x" * 64)
+        with mock.patch.object(hub.gitsync, "MAX_FILE", 32):
+            hub.run_git(root, "add", "-A")
+            self.assertEqual(hub._unstage_big(root), ["huge.bin"])
+        self.assertNotIn("huge.bin", self.git(root, "diff", "--cached", "--name-only"))
+
     def test_separate_creates_missing_repositories(self):
         r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
         self.assertTrue(r["ok"], r["report"])

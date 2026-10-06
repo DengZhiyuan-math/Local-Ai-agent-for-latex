@@ -25,6 +25,14 @@
       <div id="sync-menu" class="dropdown" role="menu" hidden>
         <div class="dd-head">GitHub</div>
         <div class="dd-note" id="sync-detail"></div>
+        <form id="sync-publish" class="dd-publish" hidden>
+          <label class="dd-field"><span>Repository <i id="pub-owner"></i></span>
+            <input name="name" spellcheck="false" autocomplete="off" pattern="[A-Za-z0-9._-]{1,100}"
+                   title="Letters, digits, '.', '-' and '_'"></label>
+          <div id="pub-private"></div>
+          <p class="dd-note" id="pub-note"></p>
+          <button type="submit" class="primary" id="pub-go">Create private GitHub repository</button>
+        </form>
         <button type="button" class="dd-item" data-sync="commit">Save to GitHub now <small>commit &amp; push</small></button>
         <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub <small>pull</small></button>
         <button type="button" class="dd-item" data-sync="history">History of this file…</button>

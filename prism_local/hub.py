@@ -844,7 +844,8 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
     try:
         git_init(root)
         run_git(root, "add", "-A")
-        if run_git(root, "status", "--porcelain").stdout.strip():
+        _unstage_big(root)
+        if run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
             run_git(root, "commit", "-q", "-m", "Initial commit")
         r = subprocess.run([st["gh"], "repo", "create", full, "--private", "--source", ".",
                             "--remote", "origin", "--push"],
@@ -860,6 +861,66 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
     m = re.search(r"https://github\.com/\S+", r.stdout + r.stderr)
     url = m.group(0).rstrip(".") if m else f"https://github.com/{owner or st['account']}/{name}"
     return {"url": url}
+
+
+def _unstage_big(root: Path) -> list[str]:
+    """Files GitHub would refuse (gitsync.MAX_FILE and over) stay out of the commit."""
+    staged = run_git(root, "diff", "--cached", "--name-only", "-z").stdout.split("\0")
+    big = [x for x in staged if x and (root / x).is_file() and (root / x).stat().st_size > gitsync.MAX_FILE]
+    if big:
+        run_git(root, "rm", "-q", "--cached", "--", *big)
+    return big
+
+
+# Folders of a project that are better kept off GitHub unless you choose otherwise.
+PRIVATE_DIRS = {"conversations": "saved AI chat transcripts"}
+
+
+def publish_info(root: Path) -> dict:
+    """What creating a GitHub repository for the project would do, or why it cannot."""
+    kind, top = repo_kind(root)
+    info = {"kind": kind, "top": str(top) if top else None, "github": None,
+            "name": repo_name(root.name), "private_dirs": [], "gh": gh_status()}
+    if kind == "own":
+        info["github"] = github_of(root)
+    if kind == "shared":
+        info["github"] = github_of(top)
+        info["name"] = repo_name(top.name)
+    for d, what in PRIVATE_DIRS.items():
+        if (root / d).is_dir():
+            ignored = top is not None and subprocess.run(
+                ["git", "check-ignore", "-q", d + "/"], cwd=root, capture_output=True, **NO_WINDOW).returncode == 0
+            info["private_dirs"].append({"dir": d, "what": what, "ignored": ignored})
+    return info
+
+
+def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list | None = None) -> dict:
+    """Give the project a private GitHub repository: git init if needed, a .gitignore
+    (build output, LaTeX's auxiliary files, and the folders in `leave_out`), a commit of
+    everything, gh repo create, push. A project in a folder's shared repository publishes
+    that repository. Returns {"url", "created"} or {"error"}."""
+    info = publish_info(root)
+    if info["kind"] == "nested":
+        return {"error": f"This folder is inside another repository ({info['top']}), which is "
+                         "not a project's: move the project out of it first."}
+    if info["github"] and info["github"].startswith("https://github.com/"):
+        return {"url": info["github"], "created": False}
+    target = Path(info["top"]) if info["kind"] == "shared" else root
+    owner = owner or load_settings()["github_owner"]
+    try:
+        git_init(target)
+        _ensure_ignore(target)
+        if info["kind"] != "shared" and leave_out:
+            gi = target / ".gitignore"
+            have = gi.read_text(encoding="utf-8").splitlines()
+            add = [f"{d.strip('/')}/" for d in leave_out if d.strip("/") in PRIVATE_DIRS
+                   and f"{d.strip('/')}/" not in have]
+            if add:
+                gi.write_bytes(("\n".join(have + add) + "\n").encode("utf-8"))
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": f"git init failed: {e}"}
+    r = create_github_repo(target, owner, name or info["name"])
+    return {**r, "created": "url" in r}
 
 
 TEMPLATES = {
@@ -1120,6 +1181,8 @@ class Handler(httpbase.Handler):
                                    "claude": claude_status(q.get("refresh") == "1")})
             if path == "/api/folders/sync":
                 return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
+            if path == "/api/projects/publish":
+                return self._json(publish_info(Path(entry_for(q["id"])["path"])))
             if path == "/api/git":
                 return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
             if path == "/api/pdf":
@@ -1149,6 +1212,10 @@ class Handler(httpbase.Handler):
             if path == "/api/projects/rename":
                 return self._json(rename_project(body["id"], str(body.get("name") or ""),
                                                  bool(body.get("folder"))))
+            if path == "/api/projects/publish":
+                r = publish_project(Path(entry_for(body["id"])["path"]), str(body.get("name") or ""),
+                                    str(body.get("owner") or ""), list(body.get("leave_out") or []))
+                return self._json(r, 502 if "error" in r else 200)
             if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
             if path == "/api/folders/create":

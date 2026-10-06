@@ -765,6 +765,9 @@ class Handler(httpbase.Handler):
                                "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
                                "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
+        if path == "/api/git/publish":
+            import hub                  # the Home page's GitHub helpers
+            return self._json(hub.publish_info(ROOT))
         if path == "/api/git/github":
             return self._json({"github": github_url()})
         if path == "/api/git/log":
@@ -831,6 +834,17 @@ class Handler(httpbase.Handler):
             return self._err(500, f"{type(e).__name__}: {e}")
 
     def _post(self, path, body):
+        if path == "/api/git/publish":
+            if BUILD_LOCK.locked() or AGENT.busy():
+                return self._err(409, "wait until the build or the agent's turn has finished")
+            import hub
+            with GITSYNC.lock:
+                r = hub.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
+                                        list(body.get("leave_out") or []))
+                GITSYNC._checked = None         # a repository may exist now: look again
+                if GITSYNC.check_repo():
+                    GITSYNC._safe(GITSYNC._remote_state)
+            return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
         if path == "/api/file":

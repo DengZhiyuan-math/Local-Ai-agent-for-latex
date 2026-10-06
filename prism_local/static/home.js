@@ -140,10 +140,13 @@ function matches(p, q) {
 }
 function gitChip(id) {
   const g = H.git[id];
+  // null: looked, and no repository; undefined: not looked yet.
+  if (g === null) return `<span class="gitchip"><button class="chip gh add" data-act="publish" title="Create a private GitHub repository for this project">+ GitHub</button></span>`;
   if (!g) return `<span class="gitchip"></span>`;
   if (g.nested) return `<span class="gitchip chip muted" title="No repository of its own: this folder is inside ${esc(g.toplevel_path)}">inside ${esc(g.toplevel)} repo</span>`;
   const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : "", g.behind ? `↓${g.behind}` : ""].filter(Boolean).join(" · ");
-  const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>` : "";
+  const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>`
+    : ` <button class="chip gh add" data-act="publish" title="Create a private GitHub repository for ${g.shared ? "the repository it is in" : "this project"}">+ GitHub</button>`;
   const where = g.shared ? `, in the repository shared by its folder (${g.toplevel_path})` : "";
   return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${gh}</span>`;
 }
@@ -505,6 +508,7 @@ document.addEventListener("click", (e) => {
     case "folder-menu": e.stopPropagation(); return showMenu(act, folderMenu(d.fid));
     case "tag-menu": e.stopPropagation(); return showMenu(act, tagMenu(d.tag));
     case "sync": e.stopPropagation(); return openSync(d.fid);
+    case "publish": e.stopPropagation(); return openPublish(id);
     case "group": e.stopPropagation(); return toggleGroup(d.group);
   }
 });
@@ -532,6 +536,7 @@ function projectMenu(id) {
     [p.pinned ? "Unpin" : "Pin to top", () => setPinned(id, !p.pinned)],
     ["Rename…", () => openRename(id)],
     "-", ...org,
+    ...(H.git[id] && H.git[id].github ? [] : H.git[id] && H.git[id].nested ? [] : [["Create GitHub repository…", () => openPublish(id)]]),
     "-",
     ["Show in folder", () => reveal(id)],
     ...(H.git[id] && H.git[id].github ? [["Open on GitHub", () => window.open(H.git[id].github, "_blank", "noopener")]] : []),
@@ -940,6 +945,41 @@ Nothing is deleted. Editors of these projects open at the new place afterwards.`
   rep.innerHTML = [r.ok ? "Done." : "Stopped:", ...r.report].map((x) => `<li>${esc(x)}</li>`).join("");
   H.sig = null; await load(); loadAllGit();
   await loadSyncPlan();
+});
+
+/* a GitHub repository for one project (hub.publish_project) */
+async function openPublish(id) {
+  const p = byId(id), f = $("#form-publish"), dlg = $("#dlg-publish"), btn = f.querySelector("button[type=submit]");
+  f.reset(); dlgError(dlg, ""); f.dataset.id = id;
+  dlg.querySelector("h3").textContent = `GitHub repository for ${p.name}`;
+  $("#pub-private").innerHTML = ""; $("#pub-note").textContent = "Checking…"; btn.disabled = true;
+  dlg.showModal();
+  const r = await api("/api/projects/publish?id=" + encodeURIComponent(id));
+  if (r._status !== 200) return dlgError(dlg, r.error || "Could not check the project");
+  const gh = r.gh || {};
+  f.elements.name.value = r.name;
+  $("#pub-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
+  $("#pub-private").innerHTML = (r.private_dirs || []).filter((d) => !d.ignored).map((d) =>
+    `<label class="check"><input type="checkbox" name="leave_out" value="${esc(d.dir)}" checked> Keep <code>${esc(d.dir)}/</code> (${esc(d.what)}) off GitHub</label>`).join("");
+  if (r.github) { $("#pub-note").innerHTML = `Already on GitHub: <a href="${esc(r.github)}" target="_blank" rel="noopener">${esc(r.github)}</a>`; return; }
+  $("#pub-note").textContent = r.kind === "nested" ? `This folder is inside another repository (${r.top}); move the project out of it first.`
+    : !gh.logged_in ? (gh.error || "The GitHub CLI is not logged in.") + " See Settings (top right)."
+    : r.kind === "shared" ? `It is part of the repository in ${r.top}: that whole repository goes to GitHub.`
+    : (r.kind === "none" ? "A git repository is created first. " : "") + "Build output and LaTeX's auxiliary files stay out (.gitignore). Its editor then saves and pushes changes automatically.";
+  btn.disabled = r.kind === "nested" || !gh.logged_in;
+}
+$("#form-publish").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, dlg = $("#dlg-publish"), btn = f.querySelector("button[type=submit]");
+  btn.disabled = true; btn.textContent = "Creating…"; dlgError(dlg, "");
+  const r = await api("/api/projects/publish", { id: f.dataset.id, name: f.elements.name.value.trim(),
+    owner: (H.settings && H.settings.github_owner) || "",
+    leave_out: [...f.querySelectorAll('input[name="leave_out"]:checked')].map((i) => i.value) });
+  btn.disabled = false; btn.textContent = "Create";
+  if (r._status !== 200) return dlgError(dlg, r.error || "Could not create the repository");
+  dlg.close();
+  toast(r.created ? `Created ${r.url}` : `Already on GitHub: ${r.url}`);
+  const p = byId(f.dataset.id); if (p) loadGit(p);
 });
 
 /* a project's tags */

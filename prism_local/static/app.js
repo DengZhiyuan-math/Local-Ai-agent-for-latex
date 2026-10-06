@@ -394,12 +394,15 @@ function ago(t) {
 }
 function renderSync(st) {
   S.sync = st;
-  $("#sync-box").hidden = !st.own;
-  if (!st.own) return;
+  $("#sync-box").hidden = false;
   const b = $("#btn-sync"), label = $("#sync-label");
+  // Without a repository, or one that is not on GitHub, the menu offers to create one.
+  $("#sync-publish").hidden = st.own && st.remote;
+  for (const el of document.querySelectorAll('#sync-menu [data-sync], #sync-menu label.dd-item')) el.hidden = !st.own;
   let text, cls = "", detail;
   const when = st.last_push || (st.last_commit && st.last_commit.at);
-  if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
+  if (!st.own) { text = "Not on GitHub"; cls = "off"; detail = "This project has no git repository yet. Create a private GitHub repository for it below: it is then saved and synced automatically."; }
+  else if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
   else if (st.error) { text = "Not synced"; cls = "warn"; detail = st.error; }
   else if (st.state !== "idle") { text = { committing: "Saving…", pushing: "Pushing…", pulling: "Pulling…" }[st.state] || "Syncing…"; cls = "busy"; detail = "Working with git…"; }
   else if (st.pending) {
@@ -408,7 +411,7 @@ function renderSync(st) {
     detail = `Your latest edits are saved on disk, not yet in GitHub. They are committed ${n <= 0 ? "now" : `in about ${n} min`} (or once you stop editing for 2 min).`;
   }
   else if (st.ahead && st.remote) { text = `${st.ahead} to push`; cls = "pending"; detail = `${st.ahead} commit${st.ahead > 1 ? "s" : ""} not on GitHub yet.`; }
-  else if (!st.remote) { text = "Saved locally"; cls = "off"; detail = "Committed in the project's repository. It has no GitHub remote, so nothing is pushed."; }
+  else if (!st.remote) { text = "Not on GitHub"; cls = "off"; detail = "Committed in the project's repository, which has no GitHub remote yet: nothing is pushed. Create one below."; }
   else { text = "Saved to GitHub"; cls = "ok"; detail = `Everything is on GitHub (${esc(st.upstream || "origin")})${when ? ", " + ago(when) : ""}.`; }
   label.textContent = text;
   b.className = "ghost sync-" + cls;
@@ -421,6 +424,7 @@ function renderSync(st) {
 function syncMenu(open) { $("#sync-menu").hidden = !open; $("#btn-sync").setAttribute("aria-expanded", String(open)); }
 $("#btn-sync").onclick = async (e) => {
   e.stopPropagation(); syncMenu($("#sync-menu").hidden);
+  if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) loadPublish();
   if (!$("#sync-menu").hidden && !S.githubUrl) {
     const r = await api("/api/git/github").catch(() => ({}));
     S.githubUrl = r.github || "";
@@ -436,6 +440,47 @@ $("#sync-menu").addEventListener("click", async (e) => {
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
   const r = await api("/api/git/sync", { action: b.dataset.sync }).catch(() => null);
   if (r) renderSync(r);
+  await poll();
+});
+// Create a private GitHub repository for the project (hub.publish_project, through this server).
+async function loadPublish() {
+  const f = $("#sync-publish"), go = $("#pub-go"), note = $("#pub-note");
+  if (f.dataset.loaded) return;
+  note.textContent = "Checking…"; go.disabled = true;
+  const r = await api("/api/git/publish").catch(() => null);
+  if (!r || r._status !== 200) { note.textContent = "Could not check: " + ((r && r.error) || "server not reachable"); return; }
+  f.dataset.loaded = "1";
+  if (!f.elements.name.value) f.elements.name.value = r.name;
+  const gh = r.gh || {};
+  $("#pub-owner").textContent = `github.com/${gh.account || "…"}/ · private`;
+  $("#pub-private").innerHTML = (r.private_dirs || []).filter((d) => !d.ignored).map((d) =>
+    `<label class="dd-check"><input type="checkbox" name="leave_out" value="${esc(d.dir)}" checked> Keep <code>${esc(d.dir)}/</code> (${esc(d.what)}) off GitHub</label>`).join("");
+  const why = r.kind === "nested" ? `This folder is inside another repository (${r.top}), so it cannot have one of its own. Move the project out of it first.`
+    : !gh.logged_in ? (gh.error || "The GitHub CLI is not logged in.") + " Then reopen this menu."
+    : r.kind === "shared" ? `This project is part of the repository in ${r.top}: that whole repository goes to GitHub.`
+    : "Build output and LaTeX's auxiliary files stay out (.gitignore). From then on, changes are saved and pushed automatically.";
+  note.textContent = why;
+  go.disabled = r.kind === "nested" || !gh.logged_in;
+}
+$("#sync-publish").addEventListener("click", (e) => e.stopPropagation());
+$("#sync-publish").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target, go = $("#pub-go");
+  if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
+  if (!(await saveAll())) return toast("Resolve the save conflict first.");
+  go.disabled = true; go.textContent = "Creating…";
+  const r = await api("/api/git/publish", {
+    name: f.elements.name.value.trim(),
+    leave_out: [...f.querySelectorAll('input[name="leave_out"]:checked')].map((i) => i.value),
+  }).catch(() => ({ error: "server not reachable" }));
+  go.disabled = false; go.textContent = "Create private GitHub repository";
+  if (r._status === 404) return toast("This editor runs an older version: click “Update: restart” at the top, then try again.");
+  if (r.error) { $("#pub-note").textContent = r.error; return; }
+  delete f.dataset.loaded;
+  S.githubUrl = r.url; $("#sync-github").href = r.url; $("#sync-github").hidden = false;
+  if (r.sync) renderSync(r.sync);
+  syncMenu(false);
+  toast(r.created ? `Created ${r.url}; this project now syncs with it.` : `Already on GitHub: ${r.url}`);
   await poll();
 });
 $("#sync-auto").onchange = async (e) => { const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" }); renderSync(r); };
