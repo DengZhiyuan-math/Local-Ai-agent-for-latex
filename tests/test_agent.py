@@ -356,6 +356,72 @@ class CodexBackend(unittest.TestCase):
         self.assertEqual(st["usage"], {"in": 10, "out": 3})
 
 
+class DeepCodeBackend(unittest.TestCase):
+    """Deep Code against a stand-in (tests/fake_deepcode.py) that keeps its sessions as the
+    real CLI does; ~ is a temporary folder."""
+
+    def setUp(self):
+        from unittest import mock
+        self.home = tmpdir()
+        env = {"HOME": str(self.home), "USERPROFILE": str(self.home), "DEEPSEEK_API_KEY": "sk-test"}
+        patcher = mock.patch.dict(os.environ, env)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        os.environ.pop("DEEPCODE_API_KEY", None)
+        self.root = tmpdir()
+        (self.root / "main.tex").write_text("original\n", encoding="utf-8")
+        from backend_deepcode import DeepCode
+        fake = Path(__file__).resolve().parent / "fake_deepcode.py"
+        self.m = manager(self.root, lambda: ["main.tex"], deepcode=DeepCode("deepcode", {"bin": str(fake)}))
+
+    def call(self):
+        return json.loads((self.root / "call.json").read_text(encoding="utf-8"))
+
+    def test_project_code_is_deep_codes(self):
+        from backend_deepcode import project_code
+        # Values from Deep Code's own getProjectCode (cli.js 0.4.3), run in node.
+        self.assertEqual(project_code(Path(r"C:\Users\me\paper")), "C-Users-me-paper")
+        if os.name == "nt":
+            self.assertEqual(
+                project_code(Path(r"D:\DynNum\paper\Sectorial Lattice Counting via the Non-Spherical Average")),
+                "Sectorial-Lattice-Counting-via-the-Non-Spherica-fa3f3bd2796a1a84")
+
+    def test_turns_resume_and_tools(self):
+        done = wait_done(self.m.jobs[self.m.start("EDIT the intro", None, "edit")["job"]])
+        evs = self.m.jobs[done["turn"]].events
+        sid = next(e["session_id"] for e in evs if e["t"] == "init")
+        self.assertEqual(done["session_id"], sid)
+        self.assertIn({"t": "tool", "id": "call_1", "name": "write_file", "summary": "main.tex"}, evs)
+        self.assertIn({"t": "text", "text": "Changed main.tex."}, evs)
+        self.assertEqual([c["path"] for c in done["changed"]], ["main.tex"])
+        c = self.call()
+        self.assertIn("--exec", c["args"])
+        self.assertIn("EDIT the intro", c["message"])
+        self.assertIn("[Instructions from the editor]", c["message"], "the first message carries them")
+        self.assertEqual(c["key"], "sk-test", "DEEPSEEK_API_KEY is passed on")
+        # The next message continues that session.
+        done = wait_done(self.m.jobs[self.m.start("and the abstract", sid, "edit", model="deepseek-v4-pro",
+                                                  effort="max")["job"]])
+        c = self.call()
+        self.assertEqual(c["args"][-2:], ["--resume", sid])
+        self.assertNotIn("[Instructions from the editor]", c["message"])
+        self.assertEqual((c["model"], c["effort"]), ("deepseek-v4-pro", "max"))
+        self.assertEqual(done["session_id"], sid)
+
+    def test_ask_is_read_only(self):
+        done = wait_done(self.m.jobs[self.m.start("EDIT nothing, just explain", None, "ask")["job"]])
+        self.assertEqual(done["reverted"], ["main.tex"])
+        self.assertEqual(done["changed"], [])
+        self.assertEqual((self.root / "main.tex").read_text(encoding="utf-8"), "original\n")
+        self.assertIn("[Ask mode]", self.call()["message"])
+
+    def test_unavailable_says_how_to_install(self):
+        from backend_deepcode import DeepCode
+        from unittest import mock
+        with mock.patch("backend_deepcode.deepcode_bin", return_value=None):
+            self.assertIn("npm install -g @vegamo/deepcode-cli", DeepCode("deepcode").unavailable())
+
+
 class RevertOutsideScope(unittest.TestCase):
     """A backend that cannot enforce the scope has its writes outside it undone."""
 

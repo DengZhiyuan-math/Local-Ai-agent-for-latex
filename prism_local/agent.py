@@ -148,11 +148,13 @@ class AgentManager:
         finally:
             time.sleep(0.2)
             job.after = self._snapshot()
+            # Ask is read-only: a backend without a read-only mode may change nothing.
+            read_only = job.mode == "ask" and not backend.read_only_ask
             out_of_scope = [rel for rel in sorted(set(job.before) | set(job.after))
-                            if job.scope and rel not in job.scope
+                            if (read_only or (job.scope and rel not in job.scope))
                             and job.before.get(rel) != job.after.get(rel)]
             reverted = []
-            if out_of_scope and not backend.enforces_scope:
+            if out_of_scope and (read_only or not backend.enforces_scope):
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = self._restore(job, out_of_scope)

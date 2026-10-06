@@ -11,8 +11,8 @@ your papers, each kept in git and on GitHub.
   source lines.
 - **PDF preview with SyncTeX**: double-click the PDF to jump to the source, ⌘J / Ctrl-J to jump
   back. Links, search and bookmarks work; the PDF can pop out into its own tab.
-- **✦ Agent panel**: Claude Code, Codex, or an API model (DeepSeek, OpenAI, Qwen, Kimi, a local
-  Ollama …) edits the project. Every turn ends with a diff and **Undo this turn**.
+- **✦ Agent panel**: Claude Code, Codex, DeepSeek's Deep Code, or an API model (DeepSeek,
+  OpenAI, Qwen, Kimi, a local Ollama …) edits the project. Every turn ends with a diff and **Undo this turn**.
 - **Home page**: every project with a PDF thumbnail, organized in folders (a research topic
   and its papers) and tags.
 - **History and GitHub**: changes are committed and pushed by themselves; the History tab shows
@@ -80,7 +80,9 @@ The Home page opens. Create a project (**+ New project**) or add a folder you al
 - **Claude Code** for the agent panel: install it
   (`irm https://claude.ai/install.ps1 | iex` on Windows,
   `curl -fsSL https://claude.ai/install.sh | bash` elsewhere) and run `claude` once to log in.
-  [Codex](https://github.com/openai/codex) or an API key work too; see
+  [Codex](https://github.com/openai/codex), DeepSeek's
+  [Deep Code](https://github.com/lessweb/deepcode-cli) (`npm install -g @vegamo/deepcode-cli`)
+  or an API key work too; see
   [Choosing the AI](#choosing-the-ai-claude-code-codex-deepseek-and-other-apis).
 
 ### Update
@@ -357,6 +359,7 @@ Providers that are not set up are greyed out; hover one to see what it needs.
 |---|---|---|
 | `claude` | Claude Code CLI | `claude` on `PATH`, or `CLAUDE_BIN` |
 | `codex` | Codex CLI | `codex` on `PATH`, or `CODEX_BIN`; `codex login` |
+| `deepcode` | Deep Code CLI (DeepSeek) | `npm install -g @vegamo/deepcode-cli`; `DEEPSEEK_API_KEY`, or its own `~/.deepcode/settings.json` |
 | `deepseek` | API | `DEEPSEEK_API_KEY` |
 | `openai` | API | `OPENAI_API_KEY` |
 | `openrouter` | API | `OPENROUTER_API_KEY` |
@@ -376,6 +379,17 @@ setx DEEPSEEK_API_KEY "sk-..."
 conversation. Codex reads your `AGENTS.md`. `/effort` sets `model_reasoning_effort`
 (`minimal` … `xhigh`). Codex cannot be limited to single files, so with @-mentions prism-local
 **undoes any change it made outside the mentioned files** when the turn ends, and says so.
+
+**Deep Code (DeepSeek's terminal agent).** [Deep Code](https://github.com/lessweb/deepcode-cli)
+is the CLI that DeepSeek's documentation lists for agents. Each message runs
+`deepcode --exec` in the project, with the message on stdin, and `--resume` continues the
+conversation. Its own settings apply (`~/.deepcode/settings.json`: model, API key,
+permissions); prism-local passes `DEEPSEEK_API_KEY` on when Deep Code has no key of its own,
+and `/model` (`deepseek-v4-pro`, `deepseek-flash`) and `/effort` (`low`, `high`, `max`).
+Deep Code prints only its final reply, so the panel shows the tools it used once the turn
+ends. It cannot be limited to files or made read-only, so prism-local undoes its changes
+outside the @-mentioned files, and every change of an Ask turn. It has no compile tool:
+compile in the editor.
 
 **API providers (DeepSeek and others).** There is no agent CLI, so prism-local runs the agent
 loop itself over the OpenAI chat-completions API with function calling. The model gets five
@@ -527,7 +541,7 @@ prism_local/registry.py    shared state: project list, running instances, ports
 prism_local/presence.py    which pages are open, for --exit-when-idle
 prism_local/agent.py       agent turns for every provider: scope, per-turn diffs and undo
 prism_local/backends.py    the backend interface, presets and ~/.prism-local/agents.json
-prism_local/backend_*.py   Claude Code, Codex CLI and OpenAI-compatible API backends
+prism_local/backend_*.py   Claude Code, Codex CLI, Deep Code CLI and OpenAI-compatible API backends
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, app.css)

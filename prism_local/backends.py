@@ -9,6 +9,7 @@ Three kinds ship with prism-local:
 
 - ``claude`` (backend_claude.py): the local Claude Code CLI.
 - ``codex`` (backend_codex.py): the local OpenAI Codex CLI (``codex exec --json``).
+- ``deepcode`` (backend_deepcode.py): Deep Code, DeepSeek's terminal agent (``deepcode --exec``).
 - ``openai`` (backend_openai.py): any OpenAI-compatible chat-completions API with an
   API key: DeepSeek, OpenAI, OpenRouter, Qwen, Moonshot, a local Ollama or vLLM.
   prism-local runs the agent loop itself with a small set of file tools.
@@ -137,6 +138,9 @@ class Backend:
     # False: the backend cannot stop writes outside the @-mentioned files, so the
     # manager reverts such writes after the turn.
     enforces_scope = True
+    # False: the backend has no read-only mode, so the manager reverts every write of an
+    # Ask turn.
+    read_only_ask = True
     skills = False                    # offers skills / slash commands (/api/agent/commands)
     usage_limits = False              # reports subscription usage limits (/api/agent/usage)
 
@@ -292,11 +296,13 @@ def load_backends(path: Path | None = None) -> tuple[dict[str, Backend], str, st
     """
     from backend_claude import ClaudeCode
     from backend_codex import Codex
+    from backend_deepcode import DeepCode
     from backend_openai import OpenAICompat
-    kinds = {"claude": ClaudeCode, "codex": Codex, "openai": OpenAICompat}
+    kinds = {"claude": ClaudeCode, "codex": Codex, "deepcode": DeepCode, "openai": OpenAICompat}
 
     data, err = read_config(path)
-    specs: dict[str, dict] = {"claude": {"type": "claude"}, "codex": {"type": "codex"}}
+    specs: dict[str, dict] = {"claude": {"type": "claude"}, "codex": {"type": "codex"},
+                              "deepcode": {"type": "deepcode"}}
     specs.update({k: dict(v) for k, v in PRESETS.items()})
     user = data.get("providers") or {}
     if not isinstance(user, dict):
