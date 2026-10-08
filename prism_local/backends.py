@@ -2,7 +2,7 @@
 
 A backend runs one chat turn in the project directory and reports what happens as
 events. The agent manager (agent.py) does everything that does not depend on the
-backend: it checks the request, snapshots the editable files, computes the per-file
+backend: it checks the request, snapshots project files, computes the per-file
 diffs afterwards and undoes turns.
 
 Three kinds ship with prism-local:
@@ -52,6 +52,7 @@ from pathlib import Path
 from typing import Callable
 
 from proc import NO_WINDOW, TREE, kill_tree  # noqa: F401 — re-exported
+from fsutil import project_path
 
 
 FILE_TOOL_RULE = """\
@@ -90,12 +91,13 @@ and the compiled PDF.
 
 
 def agent_env(base: dict | None = None) -> dict:
-    """The environment of an agent and of every command it starts: git may not reach any
-    remote (GIT_ALLOW_PROTOCOL names no protocol, so push, fetch and clone fail, --force and
-    --no-verify included) and the GitHub CLI has no login. prism-local itself syncs with
-    GitHub; an agent never needs to, and so can never rewrite or delete co-authors' work
-    there, whatever it is told or does."""
-    env = dict(os.environ if base is None else base)
+    """Remove inherited GitHub credentials and block normal git transports.
+
+    This is a supplemental guard. A child can override environment variables;
+    filesystem and network permissions must come from the backend runtime.
+    """
+    from gitenv import git_env
+    env = git_env(base)
     env["GIT_ALLOW_PROTOCOL"] = "prism-local-agents-do-not-reach-remotes"
     env["GIT_TERMINAL_PROMPT"] = "0"
     for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
@@ -111,6 +113,11 @@ def find_bin(env: str, name: str, extra: tuple[str, ...] = ()) -> str | None:
     """A CLI from the environment variable `env`, else PATH, else a few usual places."""
     return os.environ.get(env) or shutil.which(name) \
         or next((p for p in extra if Path(p).exists()), None)
+
+
+def executable(path: str | None) -> bool:
+    return bool(path and (shutil.which(path) or
+                (Path(path).is_file() and (os.name == "nt" or os.access(path, os.X_OK)))))
 
 
 class Job:
@@ -136,8 +143,10 @@ class Job:
         self.root = Path(".")
         self.files: Callable[[], list[str]] = lambda: []    # editable files
         self.writable: Callable[[str], bool] = lambda rel: False
-        self.before: dict[str, bytes | None] = {}     # file contents around the turn
-        self.after: dict[str, bytes | None] = {}
+        self.before: dict = {}     # file contents and metadata around the turn
+        self.after: dict = {}
+        self.snapshot_issues: set[str] = set()
+        self.attachments: list[str] = []
 
     def emit(self, ev: dict) -> None:
         with self.cond:
@@ -168,6 +177,7 @@ class Backend:
     read_only_ask = True
     skills = False                    # offers skills / slash commands (/api/agent/commands)
     usage_limits = False              # reports subscription usage limits (/api/agent/usage)
+    input_types = ("text",)
 
     def __init__(self, pid: str, spec: dict | None = None):
         spec = spec or {}
@@ -178,6 +188,11 @@ class Backend:
         self.default_model = spec.get("default_model", self.default_model)
         if spec.get("efforts") is not None:
             self.efforts = tuple(str(e) for e in spec["efforts"])
+        if spec.get("input_types") is not None:
+            types = spec["input_types"]
+            if not isinstance(types, list) or not types or any(t not in ("text", "image", "pdf") for t in types):
+                raise ValueError("input_types must contain text, image or pdf")
+            self.input_types = tuple(types)
 
     def unavailable(self) -> str | None:
         """None when the backend can run, else why not (shown to the author)."""
@@ -191,6 +206,29 @@ class Backend:
 
     def preflight(self, root: Path) -> str | None:
         """Checked right before each turn; a message here stops the turn (nothing is sent)."""
+        return None
+
+    def check_session(self, root: Path, session_id: str) -> str | None:
+        return "This session's project cannot be verified. Start a new chat."
+
+    def check_attachments(self, root: Path, paths: list[str]) -> str | None:
+        if not isinstance(paths, list) or not all(isinstance(p, str) for p in paths):
+            return "attachments must be a list of project file paths"
+        for rel in paths:
+            try:
+                p = project_path(root, rel)
+                if not p.is_file() or p.stat().st_size > 25 * 1024 * 1024:
+                    return f"Attachment is missing or larger than 25 MB: {rel}"
+                kind = attachment_type(p)
+                if kind not in self.input_types:
+                    return f"{self.label} does not support {kind} attachments: {rel}"
+                if kind == "text":
+                    data = p.read_bytes()
+                    if b"\x00" in data:
+                        return f"Attachment is not a supported text file: {rel}"
+                    data.decode("utf-8")
+            except (ValueError, OSError, RuntimeError) as e:
+                return f"Cannot attach {rel}: {e}"
         return None
 
     def run(self, job: Job) -> dict:
@@ -215,7 +253,14 @@ class Backend:
                 "available": why is None, "reason": why,
                 "models": list(self.models), "default_model": self.default_model,
                 "efforts": list(self.efforts), "skills": self.skills,
-                "usage_limits": self.usage_limits, "enforces_scope": self.enforces_scope}
+                "usage_limits": self.usage_limits, "enforces_scope": self.enforces_scope,
+                "read_only_ask": self.read_only_ask, "input_types": list(self.input_types)}
+
+
+def attachment_type(path: Path) -> str:
+    if path.suffix.lower() in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
+        return "image"
+    return "pdf" if path.suffix.lower() == ".pdf" else "text"
 
 
 class CliBackend(Backend):

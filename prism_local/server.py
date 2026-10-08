@@ -14,6 +14,8 @@ Optional per-project settings live in PROJECT_DIR/prism.json (see README).
 """
 from __future__ import annotations
 
+from gitenv import git_env
+
 import argparse
 import fnmatch
 import gzip
@@ -30,7 +32,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import NO_WINDOW, AgentManager  # noqa: E402
 from gitsync import GitSync  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, with_line_ends_of, write_bytes  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
@@ -157,9 +159,7 @@ def resolve(rel: str) -> Path:
     """Map a project-relative path to an editable file, or raise ValueError."""
     if not rel or rel.startswith("/") or "\\" in rel:
         raise ValueError("bad path")
-    p = (ROOT / rel).resolve()
-    if ROOT not in p.parents:
-        raise ValueError("outside project")
+    p = project_path(ROOT, rel)
     r = p.relative_to(ROOT).as_posix()
     if p.suffix not in EDITABLE_SUFFIXES or _excluded(r):
         raise ValueError("not an editable file")
@@ -186,14 +186,21 @@ def list_files() -> list[str]:
                     seen.add(rel)
             if len(seen) > MAX_FILES:
                 break
-    return sorted(seen, key=lambda s: (s != CFG.main, s.count("/") == 0, s))
+    safe = []
+    for rel in seen:
+        try:
+            if resolve(rel).is_file():
+                safe.append(rel)
+        except (ValueError, OSError, RuntimeError):
+            pass
+    return sorted(safe, key=lambda s: (s != CFG.main, s.count("/") == 0, s))
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     """Read-only git in the project. --no-optional-locks: the editor asks every two
     seconds, and must never hold .git/index.lock when a git command of yours starts."""
     return subprocess.run(["git", "--no-optional-locks", *args], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=timeout,
+                          text=True, encoding="utf-8", errors="replace", timeout=timeout, env=git_env(),
                           **NO_WINDOW)
 
 
@@ -445,6 +452,10 @@ def sync_upload(rel: str) -> None:
         if not g.has_remote:
             return done("local", "Committed. The repository has no remote, so nothing was pushed.")
         g.push()
+        if g.blocked_reason:
+            return done("local", "Committed locally; sync paused: " + g.blocked_reason)
+        if not g.enabled:
+            return done("local", "Committed locally; automatic sync is off")
         if g.error:
             return done("failed", "Committed, but not pushed: " + g.error)
         done("synced", f"Committed and pushed to {g.upstream or 'origin'}.")
@@ -734,13 +745,7 @@ def project_name() -> str:
 
 
 def github_url() -> str | None:
-    """The repository's page on GitHub, from the origin remote."""
-    try:
-        remote = git("remote", "get-url", "origin").stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return None
-    m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?/?$", remote)
-    return "https://github.com/" + m.group(1) if m else None
+    return GITSYNC.status().get("github")
 PRESENCE = Presence()
 
 
@@ -767,7 +772,7 @@ class Handler(httpbase.Handler):
 
     def _get(self, path, q):
         if path == "/api/ping":
-            return self._json({"app": "prism-local", "root": str(ROOT), "pid": os.getpid(),
+            return self._json({"app": "prism-local", "root": str(ROOT), "project_key": registry.project_key(ROOT), "pid": os.getpid(),
                                "pages": PRESENCE.count()})
         if path == "/api/pdfstat":
             return self._json({"mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
@@ -803,6 +808,8 @@ class Handler(httpbase.Handler):
                                "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
                                "build": {m: CFG.describe(m) for m in CFG.modes}})
         if path == "/api/agent/events":
+            if q.get("project_key") != registry.project_key(ROOT):
+                return self._err(409, "This page belongs to another project. Reopen the project's editor.")
             job = AGENT.jobs.get(int(q["job"]))
             if not job:
                 return self._err(404, "unknown job")
@@ -854,6 +861,8 @@ class Handler(httpbase.Handler):
             return self._err(500, f"{type(e).__name__}: {e}")
 
     def _post(self, path, body):
+        if path.startswith("/api/agent") and body.get("project_key") != registry.project_key(ROOT):
+            return self._err(409, "This page belongs to another project. Reopen the project's editor.")
         if path == "/api/git/publish":
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
@@ -876,7 +885,11 @@ class Handler(httpbase.Handler):
             return self._json(r, code)
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
-            if action in ("on", "off"):
+            if action == "bind":
+                if not isinstance(body.get("target"), dict):
+                    return self._err(400, "Open the Git menu and confirm the displayed target")
+                GITSYNC.bind_target(body["target"])
+            elif action in ("on", "off"):
                 GITSYNC.set_enabled(action == "on")
             elif action in ("commit", "pull", "resolve"):
                 if action == "resolve" and (BUILD_LOCK.locked() or AGENT.busy()):
@@ -894,7 +907,8 @@ class Handler(httpbase.Handler):
                     resolve(f)          # an editable project file, or ValueError
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
-                            body.get("effort") or None, scope, body.get("provider") or None)
+                            body.get("effort") or None, scope, body.get("provider") or None,
+                            body.get("attachments") or [])
             return self._json(r, 409 if "error" in r else 200)
         if path == "/api/home":
             r = registry.ensure_server(None)
@@ -906,6 +920,8 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/undo":
             return self._json(AGENT.undo(int(body["turn"])))
         if path == "/api/build":
+            if body.get("by") == "agent" and (not AGENT.active or AGENT.active.mode != "edit" or AGENT.active.done):
+                return self._err(403, "Agent compilation is available only during an Edit turn")
             r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
             if body.get("by") == "agent" and not r.get("busy"):
                 AGENT.built(r)          # the editor shows the agent's build like its own
@@ -1030,5 +1046,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-
-

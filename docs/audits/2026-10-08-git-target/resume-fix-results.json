@@ -1,0 +1,88 @@
+{
+  "baseline": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "before_manifest": "resume-fix-before.json",
+  "sha256": {
+    "README.md": "e6e15b236ed8211f726f9f603b0329e0de24cd06790973f8810785280ea3bf60",
+    "prism_local/agent.py": "22a6db57cf91f04d698dfba4dd82bc6a731ec98283b80b6b693baa5d712e4baa",
+    "prism_local/backend_claude.py": "c197226deb2be8db616e9178fed85f6a002c0d6d4c88b9c9cd3678a809055893",
+    "prism_local/backend_codex.py": "328b4d31e5c73c93611fcd905e28d7e667059808bdb7f26f08207e93ba96955a",
+    "prism_local/backend_deepcode.py": "51e5be6351a8c816fd54c68ca27921688678b9e4e158de42775baf18841ea39a",
+    "prism_local/backend_openai.py": "0df300a3b8ac266e7e7a68ad9053bb867fab738a57293a29d8ca3a703cb83cf9",
+    "prism_local/backends.py": "a25490ea6691c9b9bc9d2d3edd0fa9553f62b1cdd41462efa9d6d90e37905206",
+    "prism_local/fsutil.py": "16b0c4f5bb67eedd12c51d511f2ab4152ea4e86bfc5113c856f11debaa69b43c",
+    "prism_local/gitenv.py": "3f442283d7e4c6c194bd39135003fa1d5b417bb5c24a0a968d774c72901ca566",
+    "prism_local/gitsync.py": "a5dca3ec3b38b6ad46600a0aa944f90f5de059a7583dfb84fef2faad635919c4",
+    "prism_local/hub.py": "a8ef07e912cd7f02e6cd091f7509aeb8703f83f00cbc6f1950fb9489f8f1e7d1",
+    "prism_local/mcp_compile.py": "ffdd10f3d870e121c5b969646d8107af8b24526727f90aee14038c4541bc3ff0",
+    "prism_local/registry.py": "c797e53005e02fdfa59f190ea2b390724479b3c024d23c80badfde07fce3e4d0",
+    "prism_local/server.py": "ec03259c66bc317749c6abeb417cc2e5e22547110aa1b0375d309c4db88c73f4",
+    "prism_local/sessionmeta.py": "d54f3e17fae59beef6cd264a05db3e28ad36d37090f4cbe720f11bc0a9b31ced",
+    "prism_local/static/app.js": "6daa5adcb78ef43d7d094f45972f1bf7031ccedaa12748c3baf4e5f3dbf53bf4",
+    "prism_local/static/common.js": "b9b5ac2c8fd4e3896511fd2005add4d987362279aae279366bc3ad4b945a2db3",
+    "prism_local/static/index.html": "42e02c541004466d0ac937cb097ea85e919d6de1b7580303e966db832edefa36",
+    "tests/fake_deepcode.py": "91a0e22aa9be41bc95b9302df1bf5564eb02f192c214662a15ad2d586fefd433",
+    "tests/test_agent.py": "3df821588dcac49a877ced39ad97fdb4017a81fc7bff22cb2dd1bed106c44ff3",
+    "tests/test_backend_contracts.py": "383d8ec8e55544da733bc3c1ff4a5a018d56e2775e979eb1c70b5f53d5a2b114",
+    "tests/test_collab.py": "7c139a6dea6ab134fe604ccb29019b1489d15e84cc2e21cac49c2044bced11a3",
+    "tests/test_git_target.py": "0778a300819338c674e6ac3ee0604df9c8d34100a9f1b14afb3c0f75b506a648",
+    "tests/test_gitsync.py": "8a48575aae60960e50e67871be821666066262d4187a9879e9d3cd9f24f8fee5",
+    "tests/test_hub.py": "55b047401b4e68da570f9da583170ba4fbcb145726065b78fd34943a3814256f",
+    "tests/test_server.py": "f57c736497016cce3ab2c7029f54bd93a07e7eb5622e7cc306efc2a0dba48ac2",
+    "tests/test_sync_buttons.py": "ea59eaddd46b47b07b0270a6035e02fd9edbc679b24c670e68583989dee3e63a",
+    "tests/tmpdirs.py": "3b3452e541cd164af92ea8e918268051f85e0457717cb105efa055fdc4e445af"
+  },
+  "changed_since_audit": [
+    "prism_local/backend_deepcode.py",
+    "tests/test_git_target.py"
+  ],
+  "unchanged_source_count": 26,
+  "existing_audit_files_unchanged": true,
+  "checks": [
+    {
+      "output": "resume-fix-red.txt",
+      "terminal": [
+        "Ran 1 test in 0.005s",
+        "FAILED (failures=1)"
+      ],
+      "sha256": "5109ef8c2b3b1e623477607efe66db950ff897110d483c9e93455db0dc2502cd",
+      "expected_red": true
+    },
+    {
+      "output": "resume-fix-green.txt",
+      "terminal": [
+        "Ran 1 test in 0.005s",
+        "OK"
+      ],
+      "sha256": "c3dc4ce80790d0a5a68dcff2d3009be59564c24dfe01144e0f6b50051e539cc3",
+      "expected_red": false
+    },
+    {
+      "output": "resume-fix-tests.txt",
+      "terminal": [
+        "Ran 26 tests in 18.486s",
+        "OK"
+      ],
+      "sha256": "91147de387f03e11d0c85b065453d62be4359404a50674c8b3c71571191247ed",
+      "expected_red": false
+    },
+    {
+      "output": "resume-fix-native.txt",
+      "terminal": [
+        "DEEPCODE_COLLISION_ACCEPTANCE_PASSED"
+      ],
+      "sha256": "3dac0dcfcfc150819774b8bf01f889ab241813c232a3a5c01aa88f478f128413",
+      "expected_red": false
+    }
+  ],
+  "python_syntax": "passed",
+  "diff_check": "passed",
+  "native_deepcode": {
+    "version": "0.4.3",
+    "cli_sha256": "7f11e36ee6a4fe7f1239a10b4591af51f0aa761ae81a699618535a41920d044b"
+  },
+  "full_suite": "not rerun in this turn",
+  "real_deepseek_model": "not tested",
+  "real_tex": "not tested",
+  "windows_linux": "skipped by user",
+  "product_commit_or_push": false
+}

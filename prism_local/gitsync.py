@@ -23,14 +23,20 @@ a folder inside any other repository (prism-local's examples, say).
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import re
 import subprocess
 import threading
 import time
 from pathlib import Path
 from typing import Callable
+from urllib.parse import urlsplit, urlunsplit
 
 import keepboth
+import registry
+from gitenv import git_env
+from fsutil import write_bytes
 from proc import NO_WINDOW
 
 IDLE = 120               # seconds without an edit before an autosave commit
@@ -48,6 +54,46 @@ SHARED_MARKER = "prism-repo.json"
 AUX = (".aux", ".log", ".out", ".toc", ".lof", ".lot", ".bbl", ".blg", ".bcf", ".run.xml",
        ".fls", ".fdb_latexmk", ".synctex.gz", ".synctex", ".nav", ".snm", ".vrb", ".idx",
        ".ilg", ".ind", ".xdv", ".dvi", ".thm", ".loe")
+
+
+def redact_url(url: str) -> str:
+    if "://" in url:
+        try:
+            p = urlsplit(url)
+            host = p.hostname or ""
+            if p.port:
+                host += f":{p.port}"
+            return urlunsplit((p.scheme, host, p.path, "", ""))
+        except ValueError:
+            return "(invalid URL)"
+    return re.sub(r"^[^/@:]+@", "", url)
+
+
+def safe_git_message(message: str) -> str:
+    return re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+", lambda m: redact_url(m.group()), message)
+
+
+def repository_identity(url: str, top: Path) -> str:
+    clean = redact_url(url)
+    m = re.fullmatch(r"(?:https?://github\.com/|ssh://github\.com(?::22)?/|github\.com:)([\w.-]+/[\w.-]+?)(?:\.git)?/?", clean)
+    if m:
+        return "github.com/" + m.group(1).lower()
+    if "://" not in url and ":" not in url:
+        return registry.norm((top / url).resolve())
+    return clean
+
+
+def public_target(target: dict | None) -> dict | None:
+    if not isinstance(target, dict):
+        return None
+    return {k: redact_url(target[k]) if k.endswith("_url") else target.get(k)
+            for k in ("remote", "branch_ref", "fetch_url", "push_url", "repository_identity",
+                      "configuration_fingerprint") if k in target}
+
+
+def github_url(target: dict | None) -> str | None:
+    identity = (target or {}).get("repository_identity", "")
+    return "https://" + identity if identity.startswith("github.com/") else None
 
 
 GUARD_MARK = "prism-local: refuse force pushes"
@@ -81,10 +127,14 @@ def install_guard(git_dir: Path) -> bool:
     uses a hooks folder of its own (core.hooksPath). True when the guard is in place."""
     try:
         r = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=git_dir, capture_output=True,
-                           text=True, timeout=20, **NO_WINDOW)
+                           text=True, timeout=20, env=git_env(), **NO_WINDOW)
         if r.stdout.strip():
             return False
-        hook = Path(git_dir) / "hooks" / "pre-push"
+        r = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=git_dir,
+                           capture_output=True, text=True, timeout=20, env=git_env(), **NO_WINDOW)
+        if r.returncode:
+            return False
+        hook = (git_dir / r.stdout.strip()).resolve() / "pre-push"
         if hook.exists():
             return GUARD_MARK in hook.read_text(encoding="utf-8", errors="replace")
         hook.parent.mkdir(parents=True, exist_ok=True)
@@ -109,7 +159,7 @@ def record_move(old: Path, new: Path) -> str | None:
     Returns the commit message, or None."""
     def git(*args, cwd=new):
         return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+                              errors="replace", timeout=60, env=git_env(),
                               **NO_WINDOW)
     try:
         r = git("rev-parse", "--show-toplevel")
@@ -153,6 +203,8 @@ class GitSync:
         self.ahead = self.behind = 0
         self.has_remote = False
         self.upstream: str | None = None
+        self.target: dict | None = None
+        self.blocked_reason: str | None = None
         self.state = "idle"                   # idle | committing | pushing | pulling
         self.error: str | None = None
         self.notice: str | None = None        # e.g. "pulled 2 commits from GitHub"
@@ -163,9 +215,15 @@ class GitSync:
     # ------------------------------------------------------------ git
     def git(self, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
         """git at the repository's top: paths are relative to it (see rel())."""
-        return subprocess.run(["git", *args], cwd=self.top or self.root_fn(), capture_output=True, text=True,
+        r = subprocess.run(["git", "--no-optional-locks", *args], cwd=self.top or self.root_fn(), capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=timeout,
-                              env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
+                              env=git_env(), **NO_WINDOW)
+        if args[0] in ("push", "fetch"):
+            print(json.dumps({"event": "git_sync", "git_top": str(self.top),
+                              "target": public_target(self.target), "stage": args[0],
+                              "result": "passed" if r.returncode == 0 else "failed",
+                              "error": safe_git_message(r.stderr.strip())[-300:] if r.returncode else None}), flush=True)
+        return r
 
     def _ok(self, *args: str, timeout: float = 60) -> str:
         r = self.git(*args, timeout=timeout)
@@ -184,7 +242,7 @@ class GitSync:
                 r = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir", timeout=20)
                 lines = r.stdout.strip().splitlines()
                 top = Path(lines[0]).resolve() if r.returncode == 0 and len(lines) == 2 else None
-                if top == root:
+                if top is not None and registry.norm(top) == registry.norm(root):
                     self.own = True
                 elif top is not None and shared_marker(top):
                     self.own, self.prefix = True, root.relative_to(top).as_posix() + "/"
@@ -239,9 +297,10 @@ class GitSync:
         return bool(self._settings().get("sync", True))
 
     def set_enabled(self, on: bool) -> None:
-        f = self._settings_file()
-        if f:
-            f.write_text(json.dumps({**self._settings(), "sync": bool(on)}), encoding="utf-8")
+        with self.lock:
+            f = self._settings_file()
+            if f:
+                write_bytes(f, json.dumps({**self._settings(), "sync": bool(on)}).encode())
 
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
@@ -307,12 +366,109 @@ class GitSync:
         return ok
 
     # ------------------------------------------------------------ remote
+    def _candidate(self) -> dict:
+        if not self.check_repo():
+            raise ValueError("This project has no repository to sync")
+        actual = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir").stdout.strip().splitlines()
+        if len(actual) != 2 or registry.norm(Path(actual[0]).resolve()) != registry.norm(self.top) \
+                or registry.norm(Path(actual[1]).resolve()) != registry.norm(self.git_dir.resolve()):
+            raise ValueError("Project repository changed. Reopen the editor before syncing")
+        branch = self.git("symbolic-ref", "--quiet", "HEAD").stdout.strip()
+        if not branch.startswith("refs/heads/"):
+            raise ValueError("Detached HEAD: select a local branch before syncing")
+        name = branch.removeprefix("refs/heads/")
+        def values(key):
+            return self.git("config", "--get-all", key).stdout.strip().splitlines()
+        remotes = self.git("remote").stdout.splitlines()
+        upstream = values(f"branch.{name}.remote")
+        merges = values(f"branch.{name}.merge")
+        if len(upstream) > 1 or len(merges) > 1:
+            raise ValueError("Ambiguous upstream configuration")
+        remote = upstream[0] if upstream else "origin"
+        if remote == "." or remote not in remotes:
+            raise ValueError("A unique remote upstream or origin is required")
+        branch_ref = merges[0] if merges else branch
+        if not branch_ref.startswith("refs/heads/") or self.git("check-ref-format", branch_ref).returncode:
+            raise ValueError("Sync requires one valid remote branch")
+        for key in (f"branch.{name}.pushRemote", "remote.pushDefault"):
+            if any(v != remote for v in values(key)):
+                raise ValueError(f"{key} differs from the sync remote {remote}")
+        if self.git("config", "--bool", "--get", f"remote.{remote}.mirror").stdout.strip() == "true":
+            raise ValueError("Mirror remotes cannot be used for editor sync")
+        fetch = self.git("remote", "get-url", "--all", remote).stdout.strip().splitlines()
+        push = self.git("remote", "get-url", "--push", "--all", remote).stdout.strip().splitlines()
+        if len(fetch) != 1 or len(push) != 1:
+            raise ValueError("Sync requires exactly one fetch URL and one push URL")
+        identity = repository_identity(fetch[0], self.top)
+        if identity != repository_identity(push[0], self.top) or (
+                "://" in fetch[0] and not identity.startswith("github.com/") and fetch[0] != push[0]):
+            raise ValueError("Fetch and push repositories differ: " + redact_url(push[0]))
+        config = self.git("config", "--null", "--get-regexp",
+                          r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$").stdout
+        # Only relevant selected-remote/branch configuration affects the binding. Other
+        # remotes may be added by the author without changing this target.
+        entries = [e for e in config.split("\0") if e and (
+            e.lower().startswith((f"branch.{name}.".lower(), f"remote.{remote}.".lower(),
+                                  "remote.pushdefault", "url.")))]
+        fingerprint = hashlib.sha256(json.dumps([branch, sorted(entries)]).encode()).hexdigest()
+        return {"remote": remote, "branch_ref": branch_ref, "local_branch": branch,
+                "fetch_url": redact_url(fetch[0]), "push_url": redact_url(push[0]), "repository_identity": identity,
+                "git_dir": registry.norm(self.git_dir.resolve()),
+                "configuration_fingerprint": fingerprint}
+
+    def bind_target(self, expected: dict | None = None) -> None:
+        """Called only after explicit menu confirmation, or after creating a known repo."""
+        with self.lock:
+            candidate = self._candidate()
+            if expected is not None and public_target(candidate) != expected:
+                raise ValueError("Sync target changed since confirmation; open the menu again")
+            write_bytes(self._settings_file(), json.dumps({**self._settings(), "sync_target": candidate}).encode())
+            self.target, self.blocked_reason = candidate, None
+
+    def validate_target(self) -> bool:
+        with self.lock:
+            bound = self._settings().get("sync_target")
+            self.target = None
+            try:
+                candidate = self._candidate()
+                self.target = candidate
+                if not isinstance(bound, dict):
+                    raise ValueError("Confirm this project's sync target in the Git menu")
+                # git_dir is the current local location, not the bound remote identity.
+                if public_target(candidate) != public_target(bound) \
+                        or candidate["local_branch"] != bound.get("local_branch"):
+                    raise ValueError("Sync target changed. Local edits are saved; confirm the new target in the Git menu")
+                self.blocked_reason = None
+            except (ValueError, OSError, subprocess.SubprocessError) as exc:
+                self.blocked_reason = str(exc)
+            signature = (self.blocked_reason, json.dumps(public_target(self.target), sort_keys=True))
+            if getattr(self, "_target_log", None) != signature:
+                self._target_log = signature
+                print(json.dumps({"event": "git_target", "project_key": registry.project_key(self.root_fn().resolve()),
+                                  "cwd": str(self.root_fn().resolve()), "git_top": str(self.top),
+                                  "target": public_target(self.target), "stage": "validation",
+                                  "blocked_reason": self.blocked_reason}), flush=True)
+            return self.blocked_reason is None
+
+    @property
+    def tracking_ref(self) -> str:
+        return "refs/remotes/" + self.upstream if self.upstream else "refs/remotes/prism-local/missing"
+
+    def fetch(self, manual: bool = False) -> subprocess.CompletedProcess | None:
+        if not self.validate_target() or (not manual and not self.enabled):
+            return None
+        t = self.target
+        self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
+        return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
+                        t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120)
+
     def _remote_state(self) -> None:
         self.has_remote = bool(self.git("remote", timeout=20).stdout.strip())
-        up = self.git("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}", timeout=20)
-        self.upstream = up.stdout.strip() if up.returncode == 0 else None
-        if self.upstream:
-            r = self.git("rev-list", "--left-right", "--count", "HEAD...@{u}", timeout=20)
+        self.validate_target()
+        self.upstream = (f"{self.target['remote']}/{self.target['branch_ref'].removeprefix('refs/heads/')}"
+                         if self.target else None)
+        if self.upstream and self.git("rev-parse", "--verify", self.tracking_ref).returncode == 0:
+            r = self.git("rev-list", "--left-right", "--count", f"HEAD...{self.tracking_ref}", timeout=20)
             try:
                 self.ahead, self.behind = (int(x) for x in r.stdout.split())
             except ValueError:
@@ -321,7 +477,7 @@ class GitSync:
             n = self.git("rev-list", "--count", "HEAD", timeout=20).stdout.strip()
             self.ahead, self.behind = (int(n) if n.isdigit() else 0), 0
 
-    def push(self, retry: bool = True, tries: int = PUSH_TRIES) -> None:
+    def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> None:
         """Push. If GitHub has commits this copy lacks (a co-author pushed), bring them in
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
         (co-authors pushing one after another), up to `tries` times. Never forced."""
@@ -329,17 +485,20 @@ class GitSync:
         with self.lock:
             for attempt in range(attempts):
                 self._remote_state()
-                if not self.has_remote or not self.ahead:
+                if self.blocked_reason or (not manual and not self.enabled) or not self.has_remote or not self.ahead:
                     return
                 self.state = "pushing"
                 try:
-                    args = ["push", "-q"] if self.upstream else ["push", "-q", "-u", "origin", "HEAD"]
+                    if not self.validate_target():
+                        return
+                    args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
+                            self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
                     r = self.git(*args, timeout=180)
                     if r.returncode == 0:
                         self.last_push, self.error = time.time(), None
                         self._remote_state()
                         return
-                    msg = (r.stderr or r.stdout).strip()
+                    msg = safe_git_message((r.stderr or r.stdout).strip())
                     # GitHub has commits this copy lacks: GitHub said so, or the guard did
                     # (it stops such a push before GitHub sees it).
                     behind = any(s in msg for s in ("rejected", "fetch first", "non-fast-forward",
@@ -347,7 +506,7 @@ class GitSync:
                 finally:
                     self.state = "idle"
                 if behind and attempt < attempts - 1:
-                    self.pull()
+                    self.pull(manual=manual)
                     if self.error:
                         return                   # pull said what is wrong
                     if self.behind and self.busy_fn():
@@ -359,7 +518,7 @@ class GitSync:
                               if behind else "Push failed: " + msg[-300:])
                 return
 
-    def pull(self) -> None:
+    def pull(self, manual: bool = False) -> None:
         """Fetch, and bring GitHub's commits in. Your changes are committed first. When only
         GitHub moved on, a fast-forward; when both did (co-authors writing at the same time),
         a merge commit that keeps both sides. Nothing is ever rewritten or thrown away: when
@@ -371,11 +530,15 @@ class GitSync:
                 return
             self.state = "pulling"
             try:
-                r = self.git("fetch", "-q", "--prune", timeout=120)
+                r = self.fetch(manual=manual)
+                if r is None:
+                    return
                 if r.returncode != 0:
-                    self.error = "Could not reach GitHub: " + (r.stderr or r.stdout).strip()[-200:]
+                    self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
                     return
                 self._remote_state()
+                if self.blocked_reason:
+                    return
                 if self.busy_fn():
                     # An agent turn is running: it reads and writes the files now, and a merge
                     # changing them under it could have its writes drop a co-author's text.
@@ -388,16 +551,18 @@ class GitSync:
                     if self.clash:               # resolved elsewhere (a terminal, a co-author)
                         self.error, self.clash = None, []
                     if healed and self.ahead:
-                        self.push(retry=False)   # put the dropped commits back on GitHub now
+                        self.push(retry=False, manual=manual)   # put the dropped commits back on GitHub now
                     return
                 if self.changes():
                     if self.busy_fn():           # an agent turn is writing: after it
                         return
                     self.commit_all("Autosave before pulling")
                     self._remote_state()
+                    if self.blocked_reason:
+                        return
                 n = self.behind
                 if not self.ahead:
-                    m = self.git("merge", "-q", "--ff-only", "@{u}", timeout=60)
+                    m = self.git("merge", "-q", "--ff-only", self.tracking_ref, timeout=60)
                     if m.returncode == 0:
                         self.notice = f"Pulled {n} commit{'s' if n != 1 else ''} from GitHub"
                         self.error, self.clash = None, []
@@ -409,7 +574,7 @@ class GitSync:
                 if healed:
                     self.notice = self._heal_note        # says more than "combined"
                 if healed and self.ahead and not self.error:
-                    self.push(retry=False)       # put the dropped commits back on GitHub now
+                    self.push(retry=False, manual=manual)       # put the dropped commits back on GitHub now
             finally:
                 self.state = "idle"
 
@@ -475,7 +640,7 @@ class GitSync:
         """Merge GitHub's branch into this one. Where both sides changed the same lines, both
         versions are kept (keepboth.py), so syncing never stops for it. If anything goes
         wrong, the merge is called off and everything is exactly as before."""
-        m = self.git("merge", "--no-edit", "-m", "Merge changes from GitHub", "@{u}", timeout=120)
+        m = self.git("merge", "--no-edit", "-m", "Merge changes from GitHub", self.tracking_ref, timeout=120)
         if m.returncode == 0:
             self.notice = (f"Combined your changes with {n} commit{'s' if n != 1 else ''} from GitHub "
                            "(a co-author's work)")
@@ -530,7 +695,7 @@ class GitSync:
 
     def _blob(self, spec: str) -> bytes:
         r = subprocess.run(["git", "show", spec], cwd=self.top or self.root_fn(), capture_output=True,
-                           timeout=60, env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
+                           timeout=60, env=git_env(), **NO_WINDOW)
         if r.returncode != 0:
             raise RuntimeError(f"git show {spec}: " + r.stderr.decode("utf-8", "replace").strip())
         return r.stdout
@@ -541,7 +706,7 @@ class GitSync:
         deleted and the other changed keeps the changed version."""
         top = self.top or self.root_fn()
         mine = self.git("config", "user.name", timeout=20).stdout.strip() or "you"
-        them = self.git("log", "-1", "--format=%an", "@{u}", timeout=20).stdout.strip() or "a co-author"
+        them = self.git("log", "-1", "--format=%an", self.tracking_ref, timeout=20).stdout.strip() or "a co-author"
         if them == mine:
             them = f"{them} (another copy)"
         kept = []
@@ -625,10 +790,10 @@ class GitSync:
 
     def _report_clash(self, why: str = "") -> None:
         """The automatic merge could not be done: say so; both versions stay where they are."""
-        clash = [x for x in self.git("diff", "--name-only", "HEAD", "@{u}", timeout=30).stdout.splitlines() if x]
+        clash = [x for x in self.git("diff", "--name-only", "HEAD", self.tracking_ref, timeout=30).stdout.splitlines() if x]
         names = [x[len(self.prefix):] if x.startswith(self.prefix) else x for x in clash]
         self.clash = names
-        who = self.git("log", "-1", "--format=%an, %ar", "@{u}", timeout=20).stdout.strip()
+        who = self.git("log", "-1", "--format=%an, %ar", self.tracking_ref, timeout=20).stdout.strip()
         self.error = (f"Your changes and GitHub's could not be combined by themselves{why}"
                       f"{f' (last there: {who})' if who else ''}. Nothing was lost: GitHub keeps "
                       "its version, this copy keeps yours (committed). In the GitHub menu: compare "
@@ -638,8 +803,8 @@ class GitSync:
     def theirs(self, path: str) -> dict:
         """GitHub's version of a project file, and how it differs from yours."""
         full = self.rel(path)
-        content = self.git("show", f"@{{u}}:{full}", timeout=30)
-        diff = self.git("diff", "--no-color", "HEAD", "@{u}", "--", full, timeout=30)
+        content = self.git("show", f"{self.tracking_ref}:{full}", timeout=30)
+        diff = self.git("diff", "--no-color", "HEAD", self.tracking_ref, "--", full, timeout=30)
         return {"path": path, "content": content.stdout if content.returncode == 0 else None,
                 "diff": diff.stdout}
 
@@ -651,18 +816,22 @@ class GitSync:
         with self.lock:
             if self.changes():
                 self.commit_all("Combined with GitHub's version")
-            r = self.git("fetch", "-q", "--prune", timeout=120)
+            r = self.fetch(manual=True)
+            if r is None:
+                return
             if r.returncode != 0:
-                self.error = "Could not reach GitHub: " + (r.stderr or r.stdout).strip()[-200:]
+                self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
                 return
             self._remote_state()
+            if self.blocked_reason:
+                return
             if not self.behind:
                 self.clash = []
-                self.push()
+                self.push(manual=True)
                 return
             m = self.git("merge", "--no-edit", "-X", "ours", "-m",
                          "Merge changes from GitHub (clashing lines: kept the combined version)",
-                         "@{u}", timeout=120)
+                         self.tracking_ref, timeout=120)
             if m.returncode != 0:
                 if self.git_dir and (self.git_dir / "MERGE_HEAD").exists():
                     self.git("merge", "--abort", timeout=60)
@@ -670,7 +839,7 @@ class GitSync:
                 return
             self.error, self.clash = None, []
             self.notice = "Combined with GitHub's version"
-            self.push()
+            self.push(manual=True)
 
     # ------------------------------------------------------------ hooks
     def touched(self) -> None:
@@ -767,17 +936,23 @@ class GitSync:
             self.notice = "The agent is working: this copy syncs as soon as its turn ends"
             return
         if action == "pull":
-            self._safe(self.pull)
+            self._safe(lambda: self.pull(manual=True))
         elif action == "resolve":
             self._safe(self.resolve_mine)
         else:
             self._safe(lambda: self.commit_all("Saved"))
-            self._safe(self.push)
+            self._safe(lambda: self.push(manual=True))
 
     # ------------------------------------------------------------ for the editor
     def status(self) -> dict:
         own = self.check_repo()
+        if own:
+            self.validate_target()
         st = {"own": own, "enabled": own and self.enabled,
+              "target": public_target(self.target),
+              "bound_target": public_target(self._settings().get("sync_target")) if own else None,
+              "blocked_reason": self.blocked_reason,
+              "github": github_url(self.target) if own and not self.blocked_reason else None,
               "shared": self.top.name if own and self.prefix else None, "clash": self.clash,
               "kept": self.kept_both() if own and self.kept else [],
               "guarded": bool(getattr(self, "guarded", False)), "state": self.state, "error": self.error,

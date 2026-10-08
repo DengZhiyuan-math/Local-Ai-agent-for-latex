@@ -1,0 +1,61 @@
+{
+  "baseline": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "source_manifest": "followup-manifest.json",
+  "checks": [
+    {
+      "command": "PRISM_SKIP_TEX=1 python3 -m unittest discover -s tests",
+      "exit": 0,
+      "terminal": [
+        "Ran 251 tests in 275.937s",
+        "OK (skipped=14)"
+      ],
+      "output": "followup-full-tests.txt",
+      "sha256": "5645f5f776c50bdda2a8e8e99d4a2d9df8f7935fa112e3ae16a02aeb0b42a63a"
+    },
+    {
+      "command": "PRISM_SKIP_TEX=1 PYTHONPATH=tests:prism_local python3 -m unittest test_git_target",
+      "exit": 0,
+      "terminal": [
+        "Ran 22 tests in 14.099s",
+        "OK"
+      ],
+      "output": "followup-target-tests.txt",
+      "sha256": "17e0bc4b16a0f1acd45dc6bd45287fa8ca81d48d440b4b96499cb633f9d414b1"
+    },
+    {
+      "command": "PRISM_SKIP_TEX=1 PYTHONPATH=tests:prism_local python3 -m unittest test_git_target.Targets.test_moved_worktree_keeps_binding",
+      "exit": 0,
+      "terminal": [
+        "Ran 1 test in 1.817s",
+        "OK"
+      ],
+      "output": "followup-worktree-tests.txt",
+      "sha256": "90306d14360344e6c3d60ac6203d75485f2a535b3d3c29c0860b75131c57f497"
+    },
+    {
+      "command": "PRISM_SKIP_TEX=1 python3 docs/audits/2026-10-08-git-target/deepcode_acceptance.py --bin /private/tmp/prism-deepcode-runtime/node_modules/.bin/deepcode",
+      "exit": 0,
+      "terminal": [
+        "DEEPCODE_GIT_SESSION_ACCEPTANCE_PASSED (synthetic local model/build)"
+      ],
+      "output": "followup-deepcode-native.txt",
+      "sha256": "67c87d01ee84e2976d44c50249b43561e47e5f92cc8eca507a922847b2b0cfc4"
+    },
+    {
+      "command": "PRISM_SKIP_TEX=1 python3 docs/audits/2026-10-08-git-target/followup-deepcode-collision.py --bin /private/tmp/prism-deepcode-runtime/node_modules/.bin/deepcode",
+      "exit": 0,
+      "terminal": [
+        "DEEPCODE_COLLISION_ACCEPTANCE_PASSED"
+      ],
+      "output": "followup-deepcode-collision.txt",
+      "sha256": "938bb6f6c86d1f1b107f8c6a8a52f243ffcaeddb049b145fc0746c99b592bfa0"
+    }
+  ],
+  "python_syntax": "passed",
+  "diff_check": "passed",
+  "source_hashes_unchanged_during_final_checks": true,
+  "real_deepseek_model": "not tested",
+  "real_tex": "not tested",
+  "windows_linux": "skipped by user",
+  "product_commit_or_push": false
+}

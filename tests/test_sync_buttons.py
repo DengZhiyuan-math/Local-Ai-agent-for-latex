@@ -20,6 +20,8 @@ from tmpdirs import tmpdir  # noqa: E402
 from test_lifecycle import NO_WINDOW, stop, wait_file  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO / "prism_local"))
+import gitsync
 SERVER = REPO / "prism_local" / "server.py"
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 HEADERS = {"Content-Type": "application/json", "X-Prism-Local": "1"}
@@ -54,6 +56,7 @@ class SyncButtons(unittest.TestCase):
         self.mine = tmp / "my paper"
         git(tmp, "clone", "-q", str(self.remote), str(self.mine))
         identity(self.mine, "Me")
+        gitsync.GitSync(lambda: self.mine, lambda: "build").bind_target()
         self.other = tmp / "coauthor"
         git(tmp, "clone", "-q", str(self.remote), str(self.other))
         identity(self.other, "Alice")
@@ -95,6 +98,29 @@ class SyncButtons(unittest.TestCase):
             if self.status()["state"] == "idle":
                 return
             time.sleep(0.1)
+
+    def test_target_change_keeps_file_and_pauses_upload_and_close_sync(self):
+        tool = self.remote.parent / "tool.git"
+        git(self.remote.parent, "init", "-q", "--bare", str(tool))
+        git(self.mine, "config", "remote.origin.pushurl", str(tool))
+        self.save_file("main.tex", "local edit\n")
+        self.assertTrue(self.button("commit")["blocked_reason"])
+        self.assertEqual(self.read("main.tex"), "local edit\n")
+        import base64
+        code, upload = self.req("/api/upload", {"name": "fixture.png", "data": base64.b64encode(b"PNG").decode()})
+        self.assertEqual(code, 200, upload)
+        stop(self.proc)
+        self.assertEqual(git(tool, "for-each-ref"), "")
+        self.assertEqual((self.mine / "main.tex").read_text(), "local edit\n")
+
+    def test_agent_rejects_wrong_or_missing_project_key_before_start(self):
+        code, info = self.req("/api/agent/info")
+        self.assertEqual(code, 200)
+        self.assertEqual(info["project_key"], self.req("/api/ping")[1]["project_key"])
+        for key in (None, "another-project"):
+            code, result = self.req("/api/agent", {"project_key": key, "prompt": "fixture", "provider": "unavailable"})
+            self.assertEqual(code, 409)
+            self.assertIn("another project", result["error"])
 
     def read(self, rel):
         return self.req(f"/api/file?path={rel}")[1]["content"]
@@ -176,10 +202,10 @@ class SyncButtons(unittest.TestCase):
         text = self.read("main.tex")
         self.save_file("main.tex", text + "\n% offline line\n")
         st = self.button("commit")
-        self.assertTrue(st["error"], "it says so")
+        self.assertTrue(st["blocked_reason"], "it says so")
         self.assertEqual(git(self.mine, "log", "-1", "--format=%s"), "Saved: main.tex", "committed, kept")
         st = self.button("pull")
-        self.assertIn("reach GitHub", st["error"])
+        self.assertIn("target changed", st["blocked_reason"])
         git(self.mine, "remote", "set-url", "origin", str(self.remote))
         st = self.button("commit")
         self.assertIsNone(st["error"])
@@ -211,11 +237,12 @@ class SyncButtons(unittest.TestCase):
     # ------------------------------------------------------------ the switch
     def test_switch_off_and_on(self):
         settings = self.mine / ".git" / "prism-local.json"
-        settings.write_text(json.dumps({"restore_rewritten": False}), encoding="utf-8")
+        before_settings = json.loads(settings.read_text())
+        settings.write_text(json.dumps({**before_settings, "restore_rewritten": False}), encoding="utf-8")
         st = self.button("off")
         self.assertFalse(st["enabled"])
         self.assertEqual(json.loads(settings.read_text(encoding="utf-8")),
-                         {"restore_rewritten": False, "sync": False}, "other settings stay")
+                         {**before_settings, "restore_rewritten": False, "sync": False}, "other settings stay")
         text = self.read("main.tex")
         self.save_file("main.tex", text + "\n% while off\n")
         st = self.button("commit")                     # by hand it still saves

@@ -1,0 +1,19 @@
+{
+  "baseline": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "source_manifest": "followup-manifest.json",
+  "source_files_checked": 28,
+  "source_mismatch": [],
+  "provided_outputs_checked": 5,
+  "provided_output_mismatch": [],
+  "independent_target_tests": {
+    "count": 22,
+    "exit": 0,
+    "terminal": "Ran 22 tests in 14.209s; OK",
+    "output": "followup-audit-target-tests.txt"
+  },
+  "standards_findings": 0,
+  "spec_findings": 1,
+  "worst_priority": "P2",
+  "product_edits": false,
+  "commit_or_push": false
+}

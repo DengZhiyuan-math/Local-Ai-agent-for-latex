@@ -15,6 +15,8 @@ live in memory and end when the server stops.
 from __future__ import annotations
 
 import json
+import base64
+import mimetypes
 import os
 import re
 import urllib.error
@@ -23,8 +25,8 @@ import uuid
 from pathlib import Path
 
 import mcp_compile
-from backends import SYSTEM_APPEND, Backend, Job
-from fsutil import with_line_ends_of, write_bytes
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, attachment_type
+from fsutil import project_path, with_line_ends_of, write_bytes
 
 MAX_READ = 200_000        # characters of one read_file result
 MAX_HITS = 200            # search results
@@ -88,6 +90,8 @@ class OpenAICompat(Backend):
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
         spec = spec or {}
+        if "pdf" in self.input_types:
+            raise ValueError("API attachment transport supports text and image; PDF is not implemented")
         self.base_url = str(spec.get("base_url") or "").rstrip("/")
         if not self.base_url:
             raise ValueError("base_url is required")
@@ -98,6 +102,13 @@ class OpenAICompat(Backend):
         if not self.default_model and self.models:
             self.default_model = self.models[0]
         self.sessions: dict[str, list[dict]] = {}
+        self.session_projects: dict[str, str] = {}
+
+    def check_session(self, root: Path, session_id: str) -> str | None:
+        import registry
+        if session_id not in self.sessions or self.session_projects.get(session_id) != registry.project_key(root.resolve()):
+            return "The API session is unavailable for this project. Start a new chat."
+        return None
 
     def unavailable(self) -> str | None:
         if self.api_key_env and not os.environ.get(self.api_key_env):
@@ -114,18 +125,29 @@ class OpenAICompat(Backend):
 
     # ------------------------------------------------------------ the loop
     def run(self, job: Job) -> dict:
+        import registry
+        if job.session_id and self.check_session(job.root, job.session_id):
+            raise ValueError("The API session does not belong to this project. Start a new chat.")
         model = job.model or self.default_model
         saved = self.sessions.get(job.session_id or "")
         if saved is None:
-            if job.session_id:
-                job.emit({"t": "error", "message": "The earlier conversation ended when the "
-                          "server restarted; this message starts a new one."})
             sid = uuid.uuid4().hex
             msgs = [{"role": "system", "content": self.system_prompt(job.root)}]
         else:
             sid, msgs = job.session_id, list(saved)
         job.emit({"t": "init", "session_id": sid, "model": model})
-        msgs.append({"role": "user", "content": job.prompt})
+        content = [{"type": "text", "text": job.prompt}]
+        for rel in job.attachments:
+            _, p = self._path(job, rel)
+            if attachment_type(p) == "image":
+                mime = mimetypes.guess_type(p.name)[0]
+                encoded = base64.b64encode(p.read_bytes()).decode("ascii")
+                content.append({"type": "text", "text": f"[Attached image: {rel}; {mime}]"})
+                content.append({"type": "image_url", "image_url": {"url": f"data:{mime};base64,{encoded}"}})
+            else:
+                text = p.read_text(encoding="utf-8")
+                content[0]["text"] += f"\n\n[Attached text: {rel}]\n{text}"
+        msgs.append({"role": "user", "content": content if len(content) > 1 else content[0]["text"]})
         tools = READ_TOOLS + (WRITE_TOOLS if job.mode == "edit" else [])
         if job.mode == "edit" and job.server_url:
             tools = tools + [COMPILE_TOOL]
@@ -169,20 +191,23 @@ class OpenAICompat(Backend):
         if res.get("subtype") != "API error":     # keep the conversation consistent
             self.sessions.pop(sid, None)
             self.sessions[sid] = msgs
+            self.session_projects[sid] = registry.project_key(job.root.resolve())
             while len(self.sessions) > MAX_SESSIONS:
-                self.sessions.pop(next(iter(self.sessions)))
+                oldest = next(iter(self.sessions))
+                self.sessions.pop(oldest)
+                self.session_projects.pop(oldest, None)
         return res
 
     def system_prompt(self, root: Path) -> str:
-        parts = [SYSTEM_APPEND, TOOL_PROMPT]
+        parts = [SYSTEM_APPEND.replace(FILE_TOOL_RULE, ""), TOOL_PROMPT]
         for name in PROJECT_RULES:
-            p = root / name
-            if p.is_file():
-                try:
+            try:
+                p = project_path(root, name)
+                if p.is_file():
                     parts.append(f"[{name} of this project]\n"
                                  + p.read_text(encoding="utf-8", errors="replace")[:20000])
-                except OSError:
-                    pass
+            except (OSError, ValueError, RuntimeError):
+                pass
         return "\n".join(parts)
 
     def _complete(self, job: Job, model: str, msgs: list[dict], tools: list[dict]):
@@ -275,17 +300,11 @@ class OpenAICompat(Backend):
 
     @staticmethod
     def _path(job: Job, rel: str) -> tuple[str, Path]:
-        rel = str(rel).replace("\\", "/")
-        if rel.startswith("/") or re.match(r"[A-Za-z]:", rel):
-            raise ToolError("give a path relative to the project root")
-        root = job.root.resolve()
-        p = (root / rel).resolve()
-        if p != root and root not in p.parents:
-            raise ToolError("the path is outside the project")
-        r = p.relative_to(root).as_posix()
-        if r == ".git" or r.startswith(".git/"):
-            raise ToolError("the .git directory is off limits")
-        return r, p
+        try:
+            p = project_path(job.root, rel)
+        except (ValueError, OSError, RuntimeError) as e:
+            raise ToolError(str(e)) from None
+        return p.relative_to(job.root.resolve()).as_posix(), p
 
     def tool(self, job: Job, name: str, args: dict, denials: list[str]) -> str:
         if name == "compile":
@@ -295,14 +314,23 @@ class OpenAICompat(Backend):
                 r = mcp_compile.build(job.server_url, bool(args.get("clean")))
             except (OSError, ValueError) as e:
                 raise ToolError(f"could not compile: {e}") from None
-            return mcp_compile.report(r)[0]
+            text, failed = mcp_compile.report(r)
+            if failed:
+                raise ToolError(text)
+            return text
         if name == "list_files":
             return "\n".join(job.files()) or "(no editable files)"
         if name == "read_file":
             rel, p = self._path(job, args["path"])
             if not p.is_file():
                 raise ToolError(f"no such file: {rel}")
-            lines = p.read_text(encoding="utf-8", errors="replace").splitlines()
+            try:
+                text = p.read_text(encoding="utf-8")
+                if "\x00" in text:
+                    raise UnicodeError
+            except UnicodeError:
+                raise ToolError(f"{rel} is binary; attach it with a provider that supports its input type") from None
+            lines = text.splitlines()
             start = max(1, int(args.get("offset") or 1))
             end = len(lines) if not args.get("limit") else start - 1 + int(args["limit"])
             body = "\n".join(f"{i:6}\t{lines[i - 1]}" for i in range(start, min(end, len(lines)) + 1))
@@ -320,8 +348,9 @@ class OpenAICompat(Backend):
                 if under and rel != under and not rel.startswith(under + "/"):
                     continue
                 try:
-                    text = (job.root / rel).read_text(encoding="utf-8", errors="replace")
-                except OSError:
+                    _, p = self._path(job, rel)
+                    text = p.read_text(encoding="utf-8", errors="replace")
+                except (OSError, ToolError):
                     continue
                 for n, line in enumerate(text.splitlines(), 1):
                     if rx.search(line):

@@ -1,8 +1,8 @@
-"""The agent's compile tool: a minimal MCP server (stdio) for Claude Code.
+"""The agent's compile tool: a minimal MCP server (stdio) for CLI backends.
 
     python mcp_compile.py --url http://127.0.0.1:8765/
 
-Claude Code starts it for each turn from the agent panel (backend_claude.py) and offers
+CLI backends start it for Edit turns from the agent panel and offer
 its one tool, `compile`. The tool asks the editor server to build the project, exactly
 as the Compile button does (same engine, settings and build folder; the PDF in the
 editor reloads), and answers with the errors and warnings and their file:line. So the
@@ -14,7 +14,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 import time
+from pathlib import Path
 import urllib.error
 import urllib.request
 
@@ -37,6 +39,11 @@ TOOL = {
 }
 MAX_DIAGNOSTICS = 60
 WAIT_BUSY = 300          # seconds to wait for a build that is already running
+
+
+def config(url: str) -> dict:
+    return {"command": sys.executable,
+            "args": [str(Path(__file__).resolve()), "--url", url]}
 
 
 def build(url: str, clean: bool) -> dict:
@@ -62,7 +69,7 @@ def report(r: dict) -> tuple[str, bool]:
         return "Another build is still running; try again in a moment.", True
     diags = r.get("diagnostics") or []
     errors = [d for d in diags if d.get("severity") == "error"]
-    ok = r.get("exit") == 0 and not errors
+    ok = r.get("exit") == 0 and not errors and not r.get("cancelled") and not r.get("timed_out")
     if r.get("cancelled"):
         head = "The build was stopped by the author."
     elif r.get("timed_out"):

@@ -1,0 +1,7 @@
+{
+  "same_directory": true,
+  "a_before_b_accepted": true,
+  "session_metadata_still_matches_a": true,
+  "a_after_b_rejected": true,
+  "b_foreign_a_rejected": true
+}

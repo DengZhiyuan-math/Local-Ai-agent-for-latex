@@ -1,0 +1,38 @@
+.................................../opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=5 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=7 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=6 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=9 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=8 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed file <_io.FileIO name=11 mode='rb' closefd=True>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/email/parser.py:49: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 64376)>
+  feedparser = FeedParser(self._class, policy=self.policy)
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+................................./opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed <socket.socket fd=3, family=2, type=1, proto=0, laddr=('127.0.0.1', 64381)>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed <socket.socket fd=5, family=2, type=1, proto=0, laddr=('127.0.0.1', 64383)>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed <socket.socket fd=6, family=2, type=1, proto=0, laddr=('127.0.0.1', 64387)>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py:2259: ResourceWarning: unclosed <socket.socket fd=7, family=2, type=1, proto=0, laddr=('127.0.0.1', 64390)>
+  def __init__(self, name, parent):
+ResourceWarning: Enable tracemalloc to get the object allocation traceback
+.s.....sssssssssss..................................................................................................................s......s...................
+----------------------------------------------------------------------
+Ran 227 tests in 145.185s
+
+OK (skipped=14)

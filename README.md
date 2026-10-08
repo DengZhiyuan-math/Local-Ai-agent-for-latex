@@ -171,6 +171,16 @@ The list and settings live in `%LOCALAPPDATA%\prism-local` on Windows,
 
 ## History and sync with GitHub
 
+Open the Git menu and **Confirm sync target** for an existing repository before its first
+remote sync. The menu shows the repository and branch used by both fetch and push. A changed
+remote, branch, push URL or URL rewrite pauses remote sync and keeps your local edits and
+commits. Correct the configuration or confirm the new target in that menu. A repository
+created by Prism is bound to its known target when it is created.
+
+The automatic sync switch controls autosave commits, uploads and closing sync. The explicit
+**Save to GitHub now** and **Get changes from GitHub** actions still work with the switch
+off. They use the same target checks.
+
 In a project with a repository (its own, or its folder's shared one):
 
 - your changes are committed two minutes after you stop editing (at the latest ten minutes
@@ -226,10 +236,10 @@ Several co-authors can work on one repository, each with prism-local (or plain g
 - **No force push from here.** Every repository prism-local syncs gets a `pre-push` hook
   that refuses a push which would drop commits from GitHub or delete a branch there: from the
   editor or a terminal. A repository with a pre-push hook of its own keeps it.
-- **AI agents cannot reach GitHub at all.** Claude Code, Codex, Deep Code and every command
-  they start run with git's network transports switched off (`GIT_ALLOW_PROTOCOL`) and without
-  the GitHub CLI's login: no push, fetch or `gh` from an agent gets anywhere, `--force` and
-  `--no-verify` included. prism-local itself does the syncing.
+- **Agent commits and pushes are prohibited.** The editor removes inherited GitHub tokens
+  and blocks normal git transports with `GIT_ALLOW_PROTOCOL`. A child can override this
+  environment; these settings are supplemental guards, not an access boundary. Codex uses
+  native filesystem permissions and disables command networking. prism-local handles syncing.
 - **A force push from elsewhere is undone.** A co-author's own git (or `--no-verify` past the
   hook) can still rewrite the branch on GitHub. Every prism-local copy keeps the full history,
   and its next sync notices (git's log of where GitHub's branch has been) that commits were
@@ -341,6 +351,10 @@ is reported in the Compile menu and the build output, and the defaults apply.
 
 ## The agent panel
 
+Each project and provider has its own conversation. The server checks the project before
+starting a turn and checks a saved CLI session before resuming it. If an old session's
+project cannot be verified, start a new chat. Old saved records are kept.
+
 This section describes the panel with Claude Code, the default. The next section covers the
 other providers and what differs for them.
 
@@ -409,6 +423,11 @@ Consequences:
 - After each turn, a card lists the changed files with diffs and offers **Undo this turn**.
   - Undo restores a file byte for byte, and only if nobody edited it since that turn.
   - Undo history lives in server memory: the last 50 turns, lost when the server restarts.
+  - Change detection covers regular project files, binary files, hidden and excluded
+    directories, file modes and link metadata. It does not follow links outside the project
+    or scan `.git`. Undo keeps at most 25 MB per file and 100 MB per snapshot; larger files
+    are compared by SHA-256 and marked as unavailable for Undo. Read failures are reported.
+    Snapshots detect changes; they do not enforce access permissions.
   - For durable history, use git.
 - While a turn runs in Edit mode, what you type is saved when the turn ends, so it never
   becomes part of the agent's diff or its Undo. If the agent changed the same file, you get
@@ -450,31 +469,43 @@ setx DEEPSEEK_API_KEY "sk-..."
 ```
 
 **Codex CLI.** Each message runs `codex exec --json` in the project, with the sandbox set to
-`workspace-write` in Edit mode and `read-only` in Ask mode, and `resume` to continue the
+an isolated named permissions profile, and `resume` to continue the
 conversation. Codex reads your `AGENTS.md`. `/effort` sets `model_reasoning_effort`
-(`minimal` … `xhigh`). Codex cannot be limited to single files, so with @-mentions prism-local
-**undoes any change it made outside the mentioned files** when the turn ends, and says so.
+(`minimal` … `xhigh`). Edit grants native write permission only to the @-mentioned files,
+or the project tree when there are no mentions. Repository metadata remains read-only.
+Ask grants no project writes and no compile tool. The adapter requires a CLI supporting
+named profiles and `--ignore-user-config`; it checks compatibility and login before a turn.
+It supplies only the editor's compile MCP, without loading user MCP configuration.
 Codex reads and searches files with its native shell tools and edits with `apply_patch`.
 The editor sends these tool instructions on every turn, including resumed conversations.
 
 **Deep Code (DeepSeek's terminal agent).** [Deep Code](https://github.com/lessweb/deepcode-cli)
 is the CLI that DeepSeek's documentation lists for agents. Each message runs
 `deepcode --exec` in the project, with the message on stdin, and `--resume` continues the
-conversation. Its own settings apply (`~/.deepcode/settings.json`: model, API key,
+conversation. Its own settings apply (`~/.deepcode/settings.json` and `.deepcode/settings.json`: model, API key,
 permissions); prism-local passes `DEEPSEEK_API_KEY` on when Deep Code has no key of its own,
 and `/model` (`deepseek-v4-pro`, `deepseek-flash`) and `/effort` (`low`, `high`, `max`).
 Deep Code prints only its final reply, so the panel shows the tools it used once the turn
-ends. It cannot be limited to files or made read-only, so prism-local undoes its changes
-outside the @-mentioned files, and every change of an Ask turn. It has no compile tool:
-compile in the editor.
+ends. Each turn refreshes native tool instructions. A temporary project settings overlay
+registers the editor compile MCP for Edit and denies write/delete/MCP categories for Ask.
+The overlay restores the exact original settings bytes after the turn; concurrent edits are
+kept and reported. User MCP servers require a separate clean Deep Code profile.
+Deep Code category checks are not an OS sandbox and cannot restrict writes to single files.
+Scope uses post-turn restoration. The panel states this limit.
 
 **API providers (DeepSeek and others).** There is no agent CLI, so prism-local runs the agent
 loop itself over the OpenAI chat-completions API with function calling. The model gets five
 tools: `list_files`, `read_file` and `search`, plus `write_file` and `edit_file` in Edit mode,
-only for files the turn may change. It cannot run shell commands or compile. Your
+only for files the turn may change. Edit also has the editor's compile tool. It cannot run shell commands. Your
 `CLAUDE.md` / `AGENTS.md` is added to its instructions. The model must support function
 calling (DeepSeek's `deepseek-chat` does). The conversation lives in server memory and ends
 when the server stops. The card at the end of a turn shows the tokens used.
+
+API attachments default to UTF-8 text. For a vision model, configure its provider with
+`"input_types": ["text", "image"]`; images then use chat-completions `image_url` content
+with a base64 data URL. The editor rejects unsupported image/PDF inputs before a model
+request. API PDF transport is not implemented. Codex receives image paths through its
+native `--image` option. Deep Code defaults to text attachments pending model validation.
 
 **Your own providers and defaults** go in `~/.prism-local/agents.json` (or the file named by
 `PRISM_AGENTS`). Any OpenAI-compatible endpoint works:
@@ -500,7 +531,7 @@ when the server stops. The card at the end of a turn shows the tokens used.
 - An entry with the name of a built-in provider changes only the fields it gives.
 - Fields: `type` (`claude`, `codex` or `openai`), `label`, `bin` (CLIs), `base_url`,
   `api_key_env` (omit it for a server that needs no key), `models` (suggestions for `/model`;
-  the first is the default), `default_model`, `efforts` (for APIs that take
+  the first is the default), `default_model` (applied to checks and every runtime), `efforts` (for APIs that take
   `reasoning_effort`), `headers`, `max_steps` (tool rounds per message, default 40),
   `timeout` (seconds), `enabled`.
 - `PRISM_AGENT=<name>` picks the default provider for one run.

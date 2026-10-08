@@ -16,6 +16,8 @@ state-changing request, and uses the Python standard library only.
 """
 from __future__ import annotations
 
+from gitenv import git_env
+
 import argparse
 import json
 import os
@@ -153,7 +155,7 @@ def git_info(root: Path) -> dict | None:
     repository (such as prism-local's) has none to sync with: report which one."""
     def git(*args):      # read-only, and never holding .git/index.lock (see server.git)
         return subprocess.run(["git", "--no-optional-locks", *args], cwd=root, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=8, **NO_WINDOW)
+                              text=True, encoding="utf-8", errors="replace", timeout=8, env=git_env(), **NO_WINDOW)
     try:
         top = git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
@@ -165,7 +167,6 @@ def git_info(root: Path) -> dict | None:
                 return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
             shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)}
         r = git("status", "--porcelain", "-b", "--", ".")
-        remote = git("remote", "get-url", "origin").stdout.strip()
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
@@ -176,16 +177,14 @@ def git_info(root: Path) -> dict | None:
     branch = re.split(r"\.\.\.| ", head)[0] if head else ""
     ahead = re.search(r"ahead (\d+)", head)
     behind = re.search(r"behind (\d+)", head)
-    web = None
-    m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?$", remote)
-    if m:
-        web = "https://github.com/" + m.group(1)
+    sync = project_sync(root).status()
+    web = sync["github"]
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
     return {"branch": branch, "changes": len(lines) - 1,
             "ahead": int(ahead.group(1)) if ahead else 0,
             "behind": int(behind.group(1)) if behind else 0, "github": web,
-            "fetch_error": fetch_error, **(shared or {})}
+            "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"], **(shared or {})}
 
 
 # ---------------------------------------------------------------- checking GitHub
@@ -220,9 +219,11 @@ def fetch_targets() -> list[Path]:
 def fetch_one(top: Path) -> str | None:
     """git fetch; an error message, or None."""
     try:
-        r = subprocess.run(["git", "fetch", "-q", "--prune"], cwd=top, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace", timeout=90,
-                           env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
+        sync = project_sync(top)
+        with sync.lock:
+            r = sync.fetch()
+        if r is None:
+            return sync.blocked_reason
     except (OSError, subprocess.SubprocessError) as e:
         return str(e)
     return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "git fetch failed")
@@ -386,7 +387,7 @@ def repo_top(p: Path) -> Path | None:
     try:
         r = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--show-toplevel"], cwd=p,
                            capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=20, **NO_WINDOW)
+                           timeout=20, env=git_env(), **NO_WINDOW)
     except (OSError, subprocess.SubprocessError):
         return None
     return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
@@ -405,12 +406,14 @@ def repo_kind(p: Path) -> tuple[str, Path | None]:
 def github_of(top: Path | None) -> str | None:
     if top is None:
         return None
-    try:
-        remote = run_git(top, "remote", "get-url", "origin", timeout=20).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
+    sync = project_sync(top)
+    if not sync.validate_target():
         return None
-    m = re.match(r"(?:https://github\.com/|git@github\.com:)(.+?)(?:\.git)?/?$", remote)
-    return "https://github.com/" + m.group(1) if m else (remote or None)
+    return gitsync.github_url(sync.target) or gitsync.redact_url(sync.target["push_url"])
+
+
+def project_sync(root: Path) -> gitsync.GitSync:
+    return gitsync.GitSync(lambda: root, lambda: "build")
 
 
 def folder_projects(data: dict, fid: str) -> list[tuple[dict, list[str]]]:
@@ -545,12 +548,15 @@ def _ensure_ignore(top: Path) -> None:
 
 def _publish(root: Path, github: bool, owner: str, name: str, report: list[str]) -> str | None:
     """Push to origin, or create a private GitHub repository for `root` first."""
-    url = github_of(root)
-    if url:
-        try:
-            run_git(root, "push", "-q", "-u", "origin", "HEAD", timeout=300)
-        except subprocess.CalledProcessError as e:
-            report.append(f"Not pushed to {url}: {(e.stderr or e.stdout or '').strip()[-300:]}")
+    sync = project_sync(root)
+    if run_git(root, "remote").stdout.strip():
+        if not sync.validate_target():
+            report.append("Local files kept; sync paused: " + sync.blocked_reason)
+            return None
+        url = github_of(root)
+        sync.push(manual=True)
+        if sync.error or sync.blocked_reason:
+            report.append("Not pushed: " + (sync.blocked_reason or sync.error))
         return url
     if not github:
         return None
@@ -595,7 +601,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
             ref = f"refs/prism/imported/{r['id']}"
             got = subprocess.run(["git", "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}"], cwd=top,
                                  capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                 timeout=300, **NO_WINDOW)
+                                 timeout=300, env=git_env(), **NO_WINDOW)
             if got.returncode == 0:
                 imports.append(run_git(top, "rev-parse", ref).stdout.strip())
             if (root / SPLIT_BACKUP).exists():
@@ -611,7 +617,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         report.append("Not committed, too large for GitHub: " + ", ".join(big))
     tree = run_git(top, "write-tree").stdout.strip()
     head = subprocess.run(["git", "rev-parse", "-q", "--verify", "HEAD^{commit}"], cwd=top, capture_output=True,
-                          text=True, **NO_WINDOW).stdout.strip()
+                          text=True, env=git_env(), **NO_WINDOW).stdout.strip()
     old_tree = run_git(top, "rev-parse", "HEAD^{tree}").stdout.strip() if head else None
     if imports or tree != old_tree:
         parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
@@ -880,7 +886,7 @@ def repo_name(folder: str) -> str:
 def run_git(root: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
                           encoding="utf-8", errors="replace", timeout=timeout, check=True,
-                          env={**os.environ, "GIT_TERMINAL_PROMPT": "0"}, **NO_WINDOW)
+                          env=git_env(), **NO_WINDOW)
 
 
 def git_init(root: Path) -> None:
@@ -922,23 +928,37 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
     full = f"{owner}/{name}" if owner else name
     try:
         git_init(root)
+        if run_git(root, "remote").stdout.strip():
+            return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
         run_git(root, "add", "-A")
         _unstage_big(root)
         if run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
             run_git(root, "commit", "-q", "-m", "Initial commit")
         r = subprocess.run([st["gh"], "repo", "create", full, "--private", "--source", ".",
-                            "--remote", "origin", "--push"],
+                            "--remote", "origin"],
                            cwd=root, capture_output=True, text=True, encoding="utf-8",
                            errors="replace", timeout=180,
-                           env={**os.environ, "GH_PROMPT_DISABLED": "1"}, **NO_WINDOW)
+                           env={**git_env(), "GH_PROMPT_DISABLED": "1"}, **NO_WINDOW)
     except subprocess.CalledProcessError as e:
         return {"error": f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[:400]}"}
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": str(e)}
     if r.returncode != 0:
         return {"error": (r.stderr or r.stdout).strip()[:500] or "gh repo create failed"}
-    m = re.search(r"https://github\.com/\S+", r.stdout + r.stderr)
-    url = m.group(0).rstrip(".") if m else f"https://github.com/{owner or st['account']}/{name}"
+    url = f"https://github.com/{owner or st['account']}/{name}"
+    sync = project_sync(root)
+    try:
+        candidate = sync._candidate()
+        if candidate["repository_identity"] != f"github.com/{owner or st['account']}/{name}".lower():
+            return {"error": "Created repository differs from the effective Git sync target; local files kept"}
+        if candidate["branch_ref"] != candidate["local_branch"]:
+            return {"error": "Created repository target differs from the current branch; local files kept"}
+        sync.bind_target(gitsync.public_target(candidate))
+        sync.push(manual=True)
+        if sync.error or sync.blocked_reason:
+            return {"error": sync.blocked_reason or sync.error, "url": url}
+    except (ValueError, OSError, subprocess.SubprocessError) as exc:
+        return {"error": str(exc), "url": url}
     return {"url": url, "protection": protect_branch(st["gh"], url, root)}
 
 
@@ -992,7 +1012,7 @@ def publish_info(root: Path) -> dict:
     for d, what in PRIVATE_DIRS.items():
         if (root / d).is_dir():
             ignored = top is not None and subprocess.run(
-                ["git", "check-ignore", "-q", d + "/"], cwd=root, capture_output=True, **NO_WINDOW).returncode == 0
+                ["git", "check-ignore", "-q", d + "/"], cwd=root, capture_output=True, env=git_env(), **NO_WINDOW).returncode == 0
             info["private_dirs"].append({"dir": d, "what": what, "ignored": ignored})
     return info
 
@@ -1419,4 +1439,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-

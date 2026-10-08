@@ -202,8 +202,12 @@ class ClaudeShell(unittest.TestCase):
         self.cfg = tmpdir()                     # an empty user config, not the real one
         old = os.environ.get("CLAUDE_CONFIG_DIR")
         os.environ["CLAUDE_CONFIG_DIR"] = str(self.cfg)
-        self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR") if old is None
+        self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR", None) if old is None
                         else os.environ.__setitem__("CLAUDE_CONFIG_DIR", old))
+        from unittest import mock
+        patcher = mock.patch("backend_claude.use_config_dir")
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.root = tmpdir()
         self.claude = ClaudeCode("claude", {"bin": "claude"})
 
@@ -322,8 +326,8 @@ class CodexBackend(unittest.TestCase):
                 self.assertIn("read-only shell commands", prompt)
                 self.assertIn("apply_patch", prompt)
                 self.assertIn("Never commit, push", prompt)
-                self.assertEqual(cmd[cmd.index("--sandbox") + 1],
-                                 "read-only" if mode == "ask" else "workspace-write")
+                self.assertNotIn("--sandbox", cmd)
+                self.assertIn('default_permissions="prism-editor"', cmd)
 
     def test_resumed_turn_refreshes_tool_rules_and_scope(self):
         message = "Read defs.tex\n\n[Scope for this turn] You may change ONLY main.tex."
@@ -338,12 +342,13 @@ class CodexBackend(unittest.TestCase):
         cmd, prompt = self.codex.command(job_for(mode="ask", prompt="hi", model="gpt-5-codex",
                                                  effort="high"))
         self.assertEqual(cmd[:2], ["codex", "exec"])
-        self.assertEqual(cmd[cmd.index("--sandbox") + 1], "read-only")
+        self.assertNotIn("--sandbox", cmd)
+        self.assertIn('default_permissions="prism-editor"', cmd)
         self.assertIn("model_reasoning_effort=high", cmd)
         self.assertEqual(cmd[-1], "-", "the prompt comes on stdin")
         self.assertIn("prism-local", prompt, "a new conversation carries the editor's rules")
         cmd, prompt = self.codex.command(job_for(mode="edit", prompt="more", session_id="t-1"))
-        self.assertEqual(cmd[cmd.index("--sandbox") + 1], "workspace-write")
+        self.assertNotIn("--sandbox", cmd)
         self.assertEqual(cmd[-3:], ["resume", "t-1", "-"])
         self.assertTrue(prompt.endswith("[Message]\nmore"))
 
@@ -397,12 +402,15 @@ class DeepCodeBackend(unittest.TestCase):
         self.m = manager(self.root, lambda: ["main.tex"], deepcode=DeepCode("deepcode", {"bin": str(fake)}))
 
     def call(self):
-        return json.loads((self.root / "call.json").read_text(encoding="utf-8"))
+        return json.loads((self.home / "call.json").read_text(encoding="utf-8"))
 
     def test_project_code_is_deep_codes(self):
         from backend_deepcode import project_code
         # Values from Deep Code's own getProjectCode (cli.js 0.4.3), run in node.
-        self.assertEqual(project_code(Path(r"C:\Users\me\paper")), "C-Users-me-paper")
+        if os.name == "nt":
+            self.assertEqual(project_code(Path(r"C:\Users\me\paper")), "C-Users-me-paper")
+        else:
+            self.assertEqual(project_code(Path("/Users/me/paper")), "-Users-me-paper")
         if os.name == "nt":
             self.assertEqual(
                 project_code(Path(r"D:\DynNum\paper\Sectorial Lattice Counting via the Non-Spherical Average")),
@@ -426,7 +434,7 @@ class DeepCodeBackend(unittest.TestCase):
                                                   effort="max")["job"]])
         c = self.call()
         self.assertEqual(c["args"][-2:], ["--resume", sid])
-        self.assertNotIn("[Instructions from the editor]", c["message"])
+        self.assertIn("[Instructions from the editor]", c["message"])
         self.assertEqual((c["model"], c["effort"]), ("deepseek-v4-pro", "max"))
         self.assertEqual(done["session_id"], sid)
 

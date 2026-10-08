@@ -1,0 +1,36 @@
+{
+  "sources_before": {
+    "prism_local/gitsync.py": "4e1617ea033d0b14cfa9eb45f7092b3eab2a931902fa44a5db6ede12817264d2",
+    "prism_local/backend_deepcode.py": "6c174b765791494172fe4a4f413985db4c2ba3ba692c0e458456eb178ad9cd50"
+  },
+  "rename_binding": {
+    "accepted": false,
+    "same_remote_and_ref": true,
+    "git_dir_changed": true,
+    "reason": "Sync target changed. Local edits are saved; confirm the new target in the Git menu"
+  },
+  "blob_environment": {
+    "normal_git_uses_paper": true,
+    "blob_reads_foreign": true,
+    "conflict_stage_reads_foreign": true
+  },
+  "deepcode_collision": {
+    "different_roots": true,
+    "same_project_code": true,
+    "same_sessions_dir": true,
+    "local_session_accepted": true,
+    "foreign_session_accepted": true
+  },
+  "sources_after": {
+    "prism_local/gitsync.py": "4e1617ea033d0b14cfa9eb45f7092b3eab2a931902fa44a5db6ede12817264d2",
+    "prism_local/backend_deepcode.py": "6c174b765791494172fe4a4f413985db4c2ba3ba692c0e458456eb178ad9cd50"
+  },
+  "sources_unchanged_during_probe": true,
+  "creation_binding_race": {
+    "would_pass_target_validation": true,
+    "bound_push_identity": "github.com/owner/tool",
+    "external_network_used": false,
+    "reported_created_url": "https://github.com/owner/paper",
+    "reported_error": null
+  }
+}

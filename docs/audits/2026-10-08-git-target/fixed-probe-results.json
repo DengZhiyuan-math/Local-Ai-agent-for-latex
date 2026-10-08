@@ -1,0 +1,43 @@
+{
+  "nested_paper_without_own_git": {
+    "git_top_is_tool": true,
+    "agent_sees_tool_origin": true,
+    "editor_auto_sync_enabled": false
+  },
+  "branch.main.pushRemote": {
+    "origin_url_is_paper": true,
+    "upstream": null,
+    "production_push_argv": [],
+    "dry_run_output": "",
+    "dry_run_selects_tool": false,
+    "reported_error": "branch.main.pushRemote differs from the sync remote origin"
+  },
+  "remote.origin.pushurl": {
+    "origin_url_is_paper": true,
+    "upstream": null,
+    "production_push_argv": [],
+    "dry_run_output": "",
+    "dry_run_selects_tool": false,
+    "reported_error": "Fetch and push repositories differ: /private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-git-target-3bnqpty9/latex-ai-agent.git"
+  },
+  "bound_normal_dry_run": {
+    "production_push_argv": [
+      "push",
+      "-q",
+      "--no-follow-tags",
+      "--recurse-submodules=no",
+      "--",
+      "origin",
+      "HEAD:refs/heads/main"
+    ],
+    "dry_run_selects_paper": true,
+    "dry_run_selects_tool": false,
+    "dry_run_output": "To <fixture>/paper.git\n*\tHEAD:refs/heads/main\t[new branch]\nDone\n"
+  },
+  "inherited_git_environment": {
+    "cwd_is_paper": true,
+    "agent_env_preserves_git_dir": false,
+    "agent_sees_tool_origin": false
+  },
+  "remote_refs_unchanged": true
+}

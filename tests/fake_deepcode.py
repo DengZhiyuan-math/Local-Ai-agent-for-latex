@@ -20,7 +20,7 @@ message = sys.stdin.read()
 root = Path.cwd()
 resume = args[args.index("--resume") + 1] if "--resume" in args else None
 sid = resume or str(uuid.uuid4())
-(root / "call.json").write_text(json.dumps({
+(Path.home() / "call.json").write_text(json.dumps({
     "args": args, "message": message, "key": os.environ.get("DEEPCODE_API_KEY"),
     "model": os.environ.get("DEEPCODE_MODEL"), "effort": os.environ.get("DEEPCODE_REASONING_EFFORT")}),
     encoding="utf-8")
@@ -30,6 +30,10 @@ if "EDIT" in message:
 d = sessions_dir(root)
 d.mkdir(parents=True, exist_ok=True)
 with open(d / f"{sid}.jsonl", "a", encoding="utf-8") as f:
+    if not resume:
+        f.write(json.dumps({"id": str(uuid.uuid4()), "sessionId": sid, "role": "system",
+                            "content": '# Local Workspace Environment\n\n```json\n' +
+                            json.dumps({"root path": str(root), "pwd": str(root)}) + '\n```'}) + "\n")
     for m in ({"role": "user", "content": message},
               {"role": "assistant", "content": "", "tool_calls": [
                   {"id": "call_1", "type": "function",
@@ -39,6 +43,7 @@ with open(d / f"{sid}.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps(m) + "\n")
 index_path = d / "sessions-index.json"
 index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {"entries": []}
+index["originalPath"] = str(root)
 index["entries"] = [e for e in index["entries"] if e["id"] != sid] + [{"id": sid, "updateTime": int(time.time() * 1000)}]
 index_path.write_text(json.dumps(index), encoding="utf-8")
 print("Changed main.tex.")

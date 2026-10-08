@@ -1,0 +1,414 @@
+[
+  {
+    "mode": "edit",
+    "scope": [
+      "main.tex"
+    ],
+    "done": {
+      "t": "done",
+      "turn": 1,
+      "provider": "codex",
+      "changed": [
+        {
+          "path": "main.tex",
+          "diff": "--- a/main.tex\n+++ b/main.tex\n@@ -1 +1 @@\n-original\n+scoped\n",
+          "created": false,
+          "deleted": false,
+          "undoable": true
+        }
+      ],
+      "exit": 0,
+      "scope": [
+        "main.tex"
+      ],
+      "snapshot_issues": [],
+      "undo_unavailable": [],
+      "out_of_scope": [],
+      "reverted": [],
+      "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+      "duration": 24600,
+      "usage": {
+        "in": 70867,
+        "out": 293
+      }
+    },
+    "events": [
+      {
+        "t": "init",
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "model": null
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "I’ll read `main.tex`, replace `original` with `scoped`, then run Prism compile once and report the error without fixing it.\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_1",
+        "name": "Bash",
+        "summary": "/bin/zsh -lc \"pwd; rg --files -g 'AGENTS.md' -g 'CLAUDE.md' -g 'main.tex'\""
+      },
+      {
+        "t": "tool_result",
+        "id": "item_1",
+        "error": false,
+        "preview": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-codex-live-cpk6ubu_\nmain.tex\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_2",
+        "name": "Bash",
+        "summary": "/bin/zsh -lc 'cat main.tex'"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_2",
+        "error": false,
+        "preview": "original\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_3",
+        "name": "Edit",
+        "summary": "main.tex"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_3",
+        "error": false,
+        "preview": ""
+      },
+      {
+        "t": "tool",
+        "id": "item_4",
+        "name": "prism.compile",
+        "summary": ""
+      },
+      {
+        "t": "tool_result",
+        "id": "item_4",
+        "error": true,
+        "preview": "Build FAILED (exit 1).\n1 error(s), 0 warning(s).\n- error: main.tex:1: Acceptance fixture compile error"
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "Changed `main.tex`: replaced `original` with `scoped`.\n\nRan Prism compile once. It failed with:\n`main.tex:1: Acceptance fixture compile error`\n\nStopped without fixing the error."
+      },
+      {
+        "t": "done",
+        "turn": 1,
+        "provider": "codex",
+        "changed": [
+          {
+            "path": "main.tex",
+            "diff": "--- a/main.tex\n+++ b/main.tex\n@@ -1 +1 @@\n-original\n+scoped\n",
+            "created": false,
+            "deleted": false,
+            "undoable": true
+          }
+        ],
+        "exit": 0,
+        "scope": [
+          "main.tex"
+        ],
+        "snapshot_issues": [],
+        "undo_unavailable": [],
+        "out_of_scope": [],
+        "reverted": [],
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "duration": 24600,
+        "usage": {
+          "in": 70867,
+          "out": 293
+        }
+      }
+    ]
+  },
+  {
+    "mode": "ask",
+    "scope": null,
+    "done": {
+      "t": "done",
+      "turn": 2,
+      "provider": "codex",
+      "changed": [],
+      "exit": 0,
+      "scope": null,
+      "snapshot_issues": [],
+      "undo_unavailable": [],
+      "out_of_scope": [],
+      "reverted": [],
+      "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+      "duration": 10229,
+      "usage": {
+        "in": 115129,
+        "out": 377
+      }
+    },
+    "events": [
+      {
+        "t": "init",
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "model": null
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "I’ll read `main.tex` without changing files or compiling.\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_1",
+        "name": "Bash",
+        "summary": "/bin/zsh -lc 'cat main.tex'"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_1",
+        "error": false,
+        "preview": "scoped\n"
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "`main.tex` contains exactly `scoped` followed by a newline:\n\n```text\nscoped\n```\n\nNo files changed. No compilation run."
+      },
+      {
+        "t": "done",
+        "turn": 2,
+        "provider": "codex",
+        "changed": [],
+        "exit": 0,
+        "scope": null,
+        "snapshot_issues": [],
+        "undo_unavailable": [],
+        "out_of_scope": [],
+        "reverted": [],
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "duration": 10229,
+        "usage": {
+          "in": 115129,
+          "out": 377
+        }
+      }
+    ]
+  },
+  {
+    "mode": "edit",
+    "scope": null,
+    "done": {
+      "t": "done",
+      "turn": 3,
+      "provider": "codex",
+      "changed": [
+        {
+          "path": "other.tex",
+          "diff": "--- a/other.tex\n+++ b/other.tex\n@@ -1 +1 @@\n-original\n+unscoped\n",
+          "created": false,
+          "deleted": false,
+          "undoable": true
+        }
+      ],
+      "exit": 0,
+      "scope": null,
+      "snapshot_issues": [],
+      "undo_unavailable": [],
+      "out_of_scope": [],
+      "reverted": [],
+      "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+      "duration": 37136,
+      "usage": {
+        "in": 187524,
+        "out": 537
+      }
+    },
+    "events": [
+      {
+        "t": "init",
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "model": null
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "I’ll read `other.tex` and replace `original` with `unscoped`. I won’t compile.\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_1",
+        "name": "Bash",
+        "summary": "/bin/zsh -lc 'cat other.tex'"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_1",
+        "error": false,
+        "preview": "original\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_2",
+        "name": "Edit",
+        "summary": "other.tex"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_2",
+        "error": false,
+        "preview": ""
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "Changed `other.tex`: replaced `original` with `unscoped`. No compilation run."
+      },
+      {
+        "t": "done",
+        "turn": 3,
+        "provider": "codex",
+        "changed": [
+          {
+            "path": "other.tex",
+            "diff": "--- a/other.tex\n+++ b/other.tex\n@@ -1 +1 @@\n-original\n+unscoped\n",
+            "created": false,
+            "deleted": false,
+            "undoable": true
+          }
+        ],
+        "exit": 0,
+        "scope": null,
+        "snapshot_issues": [],
+        "undo_unavailable": [],
+        "out_of_scope": [],
+        "reverted": [],
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "duration": 37136,
+        "usage": {
+          "in": 187524,
+          "out": 537
+        }
+      }
+    ]
+  },
+  {
+    "mode": "edit",
+    "scope": [
+      "main.tex"
+    ],
+    "done": {
+      "t": "done",
+      "turn": 4,
+      "provider": "codex",
+      "changed": [
+        {
+          "path": "main.tex",
+          "diff": "--- a/main.tex\n+++ b/main.tex\n@@ -1 +1 @@\n-scoped\n+scoped-again\n",
+          "created": false,
+          "deleted": false,
+          "undoable": true
+        }
+      ],
+      "exit": 0,
+      "scope": [
+        "main.tex"
+      ],
+      "snapshot_issues": [],
+      "undo_unavailable": [],
+      "out_of_scope": [],
+      "reverted": [],
+      "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+      "duration": 16598,
+      "usage": {
+        "in": 263745,
+        "out": 704
+      }
+    },
+    "events": [
+      {
+        "t": "init",
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "model": null
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "I’ll read `main.tex` and replace `scoped` with `scoped-again`. No compilation is needed.\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_1",
+        "name": "Bash",
+        "summary": "/bin/zsh -lc 'cat main.tex'"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_1",
+        "error": false,
+        "preview": "scoped\n"
+      },
+      {
+        "t": "tool",
+        "id": "item_2",
+        "name": "Edit",
+        "summary": "main.tex"
+      },
+      {
+        "t": "tool_result",
+        "id": "item_2",
+        "error": false,
+        "preview": ""
+      },
+      {
+        "t": "message_start"
+      },
+      {
+        "t": "text",
+        "text": "Changed only `main.tex`: replaced `scoped` with `scoped-again`. No compilation run."
+      },
+      {
+        "t": "done",
+        "turn": 4,
+        "provider": "codex",
+        "changed": [
+          {
+            "path": "main.tex",
+            "diff": "--- a/main.tex\n+++ b/main.tex\n@@ -1 +1 @@\n-scoped\n+scoped-again\n",
+            "created": false,
+            "deleted": false,
+            "undoable": true
+          }
+        ],
+        "exit": 0,
+        "scope": [
+          "main.tex"
+        ],
+        "snapshot_issues": [],
+        "undo_unavailable": [],
+        "out_of_scope": [],
+        "reverted": [],
+        "session_id": "01a11aa5-649f-7a52-ad3a-762995f9f71f",
+        "duration": 16598,
+        "usage": {
+          "in": 263745,
+          "out": 704
+        }
+      }
+    ]
+  }
+]

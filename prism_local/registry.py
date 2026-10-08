@@ -20,6 +20,7 @@ import time
 import urllib.request
 import zlib
 from pathlib import Path
+from gitenv import git_env
 
 WIN = os.name == "nt"
 PORT_BASE, PORT_SPAN, PORT_TRIES = 8800, 1000, 20
@@ -396,7 +397,7 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
         with open(log, mode, encoding="utf-8") as logf:     # the child keeps its own handle
             proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=logf,
                                     stderr=subprocess.STDOUT, close_fds=True,
-                                    env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **kw)
+                                    env={**git_env(), "PYTHONIOENCODING": "utf-8"}, **kw)
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline and proc.poll() is None:
             info = running_instance(inst, app, project, timeout=1.0, cleanup=False)

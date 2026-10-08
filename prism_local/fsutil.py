@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import threading
 import time
@@ -9,6 +10,20 @@ from pathlib import Path
 
 EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".txt", ".tikz"}
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
+
+
+def project_path(root: Path, rel: str) -> Path:
+    """Resolve an in-project path. Internal links are allowed; .git is off limits."""
+    rel = str(rel).replace("\\", "/")
+    if not rel or rel.startswith("/") or re.match(r"[A-Za-z]:", rel):
+        raise ValueError("give a path relative to the project root")
+    root = root.resolve()
+    p = (root / rel).resolve()
+    if root not in p.parents:
+        raise ValueError("the path is outside the project")
+    if ".git" in Path(rel).parts or ".git" in p.relative_to(root).parts:
+        raise ValueError("the .git directory is off limits")
+    return p
 
 
 def uses_crlf(data: bytes) -> bool:

@@ -12,7 +12,7 @@ _made: list = []
 
 def tmpdir() -> Path:
     """A new, empty temporary folder (prism-test-…) that is removed at the end of the run."""
-    d = Path(tempfile.mkdtemp(prefix="prism-test-"))
+    d = Path(tempfile.mkdtemp(prefix="prism-test-")).resolve()
     _made.append(d)
     return d
 

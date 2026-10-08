@@ -1,0 +1,11 @@
+PRISM_SKIP_TEX=1; PRISM_NATIVE_CODEX not set.
+Targeted: test_git_target test_gitsync test_collab test_sync_buttons test_backend_contracts
+Integration: test_server test_hub test_lifecycle test_agent
+
+targeted
+Ran 80 tests in 249.305s
+OK
+
+integration
+Ran 110 tests in 47.817s
+OK (skipped=2)

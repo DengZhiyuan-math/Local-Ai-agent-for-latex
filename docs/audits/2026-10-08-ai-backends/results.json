@@ -1,0 +1,98 @@
+{
+  "audited_head": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "audit_date": "2026-10-08",
+  "offline_run": {
+    "cli_default_model_applied": {
+      "claude": false,
+      "codex": false,
+      "deepcode": false
+    },
+    "compile_registration": {
+      "claude": true,
+      "codex": false
+    },
+    "codex_native_tool_instructions": {
+      "allows_read_only_shell": true,
+      "uses_patch": true,
+      "claude_shell_ban_present": false
+    },
+    "deepcode_tool_instructions": {
+      "still_names_claude_tools": true,
+      "refreshes_editor_instructions_on_resume": false
+    },
+    "codex_mcp_semantic_error": {
+      "tool_result_error": false,
+      "synthetic_event": true
+    },
+    "missing_bin_reported_available": true,
+    "api_request": {
+      "default_model_applied": true,
+      "compile_tool_registered": true,
+      "all_message_content_is_text": true
+    },
+    "api_binary_read": {
+      "returns_text": true,
+      "has_replacement_characters": true
+    },
+    "api_failed_build": {
+      "reply_says_failed": true,
+      "tool_result_error": false
+    },
+    "manager_edit_rollback": {
+      "changed": [
+        "main.tex"
+      ],
+      "reverted": [
+        "other.tex"
+      ],
+      "unreported_writes_persist": [
+        "figure.png",
+        "script.py",
+        "build/x.tex"
+      ]
+    },
+    "manager_ask_rollback": {
+      "changed": [],
+      "reverted": [
+        "main.tex",
+        "other.tex"
+      ],
+      "unreported_writes_persist": [
+        "figure.png",
+        "script.py",
+        "build/x.tex"
+      ]
+    },
+    "api_symlink_search": {
+      "direct_read_denied": true,
+      "search_reads_outside_project": true
+    },
+    "git_environment_guard": {
+      "unchanged_environment_blocks_read": true,
+      "child_can_override_guard": true,
+      "external_network_used": false
+    },
+    "non_claude_slash_reference": {
+      "selection_kept": false
+    }
+  },
+  "separate_native_sandbox_run": {
+    "platform": "macOS",
+    "cli_version": "0.156.1",
+    "model_or_external_network_used": false,
+    "native_codex_path_permissions": {
+      "exit": 0,
+      "output": "{\"main.tex\": \"allowed\", \"other.tex\": \"denied\", \"figure.png\": \"denied\"}",
+      "stderr": ""
+    }
+  },
+  "existing_test_suite": {
+    "command": "PRISM_SKIP_TEX=1 python3 -m unittest discover -s tests",
+    "tests": 215,
+    "failures": 5,
+    "errors": 2,
+    "skipped": 14,
+    "duration_seconds": 210.45,
+    "exit": 1
+  }
+}

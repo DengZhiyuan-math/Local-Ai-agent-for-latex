@@ -8,6 +8,7 @@ What must hold whatever happens:
   in their own clone, never thrown away;
 - a clone is never left half-way (a merge in progress, conflict markers in a file).
 """
+import json
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,7 @@ class Collaboration(unittest.TestCase):
         self.busy[name] = False
         g = gitsync.GitSync(lambda d=d: d, lambda: "build", busy=lambda name=name: self.busy[name])
         g.check_repo()
+        g.bind_target()
         g._remote_state()
         return d, g
 
@@ -593,7 +595,7 @@ class Collaboration(unittest.TestCase):
         self.save("A")
         self.pull("B")
         db, gb = self.people["B"]
-        (gb.git_dir / "prism-local.json").write_text('{"restore_rewritten": false}', encoding="utf-8")
+        (gb.git_dir / "prism-local.json").write_text(json.dumps({**gb._settings(), "restore_rewritten": False}), encoding="utf-8")
         self.rewrite_remote()
         self.pull("B")
         self.assertNotIn("A's secret", self.remote_file("main.tex"))
@@ -622,7 +624,7 @@ class Collaboration(unittest.TestCase):
         self.write("A", "main.tex", PAPER.replace("First", "Offline first"))
         g.now("commit")
         g.now("pull")
-        self.assertTrue(g.error)
+        self.assertTrue(g.blocked_reason)
         self.assertIn("Offline first", self.read("A", "main.tex"))
         self.assertTrue(self.in_history("A", "main.tex", "Offline first"), "committed, waiting to be pushed")
 
@@ -664,6 +666,7 @@ class SharedFolderCollaboration(unittest.TestCase):
         identity(d, name)
         g = gitsync.GitSync(lambda: d / project, lambda: "build")
         g.check_repo()
+        g.bind_target()
         g._remote_state()
         return d, g
 

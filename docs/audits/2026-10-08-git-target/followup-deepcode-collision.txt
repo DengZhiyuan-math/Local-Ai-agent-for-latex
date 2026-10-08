@@ -1,0 +1,13 @@
+{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "c-760f69c3fb", "cwd": "/private/tmp/dc-aedh5hfk/a-b/c", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "deepcode", "project_key": "c-760f69c3fb", "cwd": "/private/tmp/dc-aedh5hfk/a-b/c", "session_id": "bc3c2139-433a-4558-ae54-7ee476663be2"}
+{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "b-c-5d0609e470", "cwd": "/private/tmp/dc-aedh5hfk/a/b-c", "session_id": null}
+{
+  "same_native_directory": true,
+  "native_local_resume": true,
+  "native_index_rewritten_to_b": true,
+  "foreign_resume_blocked_before_model": true,
+  "per_session_project_checked": true,
+  "cli": "/private/tmp/prism-deepcode-runtime/node_modules/.bin/deepcode",
+  "model": "synthetic loopback"
+}
+DEEPCODE_COLLISION_ACCEPTANCE_PASSED

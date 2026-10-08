@@ -1,0 +1,13 @@
+{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmp7m3uqk0c-f49c45f9a6", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp7m3uqk0c", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "replace", "project_key": "tmpkdcbhjf0-4a55f743b5", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpkdcbhjf0", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "wild", "project_key": "tmpwp4i0_ub-29f29fac1a", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpwp4i0_ub", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "wild", "project_key": "tmpwp4i0_ub-29f29fac1a", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpwp4i0_ub", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "replace", "project_key": "project-600fe4fec8", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp64g9ua_c/project", "session_id": null}
+....{"event": "agent_start", "job": 1, "provider": "cli", "project_key": "tmprshfiist-6527f1e367", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmprshfiist", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "cli", "project_key": "tmprshfiist-6527f1e367", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmprshfiist", "session_id": null}
+....{"event": "agent_start", "job": 1, "provider": "api", "project_key": "tmpowhbvjvn-028f016699", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpowhbvjvn", "session_id": null}
+.
+----------------------------------------------------------------------
+Ran 12 tests in 2.527s
+
+OK

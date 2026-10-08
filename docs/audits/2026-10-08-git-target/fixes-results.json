@@ -1,0 +1,53 @@
+{
+  "date": "2026-10-08",
+  "base_commit": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "status": "local_verified",
+  "tests": {
+    "full": {
+      "run": 246,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 14,
+      "seconds": 255.65
+    },
+    "targeted": {
+      "run": 46,
+      "passed": true
+    },
+    "final_ui_hub": {
+      "run": 35,
+      "passed": true
+    },
+    "native_codex": {
+      "run": 12,
+      "passed": true,
+      "model_call": false
+    }
+  },
+  "deepcode": {
+    "version": "0.4.3",
+    "runtime": "native CLI",
+    "model": "synthetic local",
+    "build": "synthetic local",
+    "turns": 4,
+    "git_permission_denials": 2,
+    "passed": true,
+    "os_sandbox_claim": false
+  },
+  "cross_platform": {
+    "windows": "skipped at user request; unverified",
+    "linux": "skipped at user request; unverified"
+  },
+  "validation_limits": [
+    "Real DeepSeek model not run",
+    "Real TeX compilation not run",
+    "No browser visual acceptance",
+    "External Git config mutations are not atomic with app validation"
+  ],
+  "publication": {
+    "committed": false,
+    "pushed": false,
+    "published": false
+  },
+  "original_incident_root_cause": "unverified"
+}

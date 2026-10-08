@@ -23,7 +23,8 @@ import time
 from pathlib import Path
 
 import registry
-from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, find_bin, kill_tree
+import sessionmeta
+from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, executable, find_bin, kill_tree
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 
@@ -303,6 +304,16 @@ class LiveInput:
 
 
 class ClaudeCode(CliBackend):
+    def check_session(self, root: Path, session_id: str) -> str | None:
+        use_config_dir()
+        if sessionmeta.valid_id(session_id):
+            home = Path(os.environ.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+            code = re.sub(r"[^A-Za-z0-9]", "-", str(root.resolve()))
+            if sessionmeta.matches(home / "projects" / code / f"{session_id}.jsonl", root, session_id):
+                return None
+        return "Claude Code session does not belong to this project. Start a new chat."
+
+    input_types = ("text", "image", "pdf")
     kind = "claude"
     label = "Claude Code"
     models = ["opus", "sonnet", "haiku", "fable", "best", "opusplan", "sonnet[1m]", "opus[1m]"]
@@ -325,7 +336,7 @@ class ClaudeCode(CliBackend):
         return self.bin_override or claude_bin()
 
     def unavailable(self) -> str | None:
-        return None if self.bin() else \
+        return None if executable(self.bin()) else \
             "Claude Code CLI not found. Start the editor with CLAUDE_BIN=/path/to/claude."
 
     def info(self) -> dict:
@@ -356,20 +367,23 @@ class ClaudeCode(CliBackend):
                "--include-partial-messages", "--permission-mode", perm,
                "--append-system-prompt", SYSTEM_APPEND]
         allowed = self.scope_rules(job.scope) if job.scope else []
-        if job.server_url:
+        cmd += ["--strict-mcp-config"]
+        if job.server_url and job.mode == "edit":
             # The compile tool (mcp_compile.py): the editor's own build, no shell needed.
-            cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": {
-                "command": sys.executable,
-                "args": [str(Path(__file__).with_name("mcp_compile.py")), "--url", job.server_url]}}})]
+            import mcp_compile
+            cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": mcp_compile.config(job.server_url)}})]
             allowed.append(COMPILE_TOOL)
+        else:
+            cmd += ["--mcp-config", json.dumps({"mcpServers": {}})]
         if allowed:
             cmd += ["--allowedTools", *allowed]
         if not shell_rules(job.root):
             cmd += ["--disallowedTools", *SHELL_TOOLS]
         if job.session_id:
             cmd += ["--resume", job.session_id]
-        if job.model:
-            cmd += ["--model", job.model]
+        model = job.model or self.default_model
+        if model:
+            cmd += ["--model", model]
         if job.effort:
             cmd += ["--effort", job.effort]
         return cmd, job.prompt

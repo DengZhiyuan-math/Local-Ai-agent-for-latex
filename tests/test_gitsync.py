@@ -39,6 +39,7 @@ class GitSyncTest(unittest.TestCase):
         git(self.root, "remote", "add", "origin", str(self.remote))
         git(self.root, "push", "-q", "-u", "origin", "main")
         self.g = gitsync.GitSync(lambda: self.root, lambda: "build")
+        self.g.bind_target()
 
     def last(self):
         return git(self.root, "log", "-1", "--format=%s"), \
@@ -181,6 +182,7 @@ class SharedRepositoryTest(unittest.TestCase):
         git(self.top, "push", "-q", "-u", "origin", "main")
         self.a = self.top / "sheets" / "ex 1"
         self.g = gitsync.GitSync(lambda: self.a, lambda: "build")
+        self.g.bind_target()
 
     def test_commits_only_its_own_project_and_pushes(self):
         st = self.g.status()

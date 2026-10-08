@@ -7,7 +7,12 @@ const store = {
   set(k, v) { try { localStorage.setItem("prism." + k, JSON.stringify(v)); } catch { /* ignore */ } },
 };
 
+let projectKey = null;             // fixed for this page's lifetime; never follow a reused port
 async function api(path, body) {
+  if (projectKey && path.startsWith("/api/agent")) {
+    if (body !== undefined) body = { ...body, project_key: projectKey };
+    else if (path.startsWith("/api/agent/events")) path += (path.includes("?") ? "&" : "?") + "project_key=" + encodeURIComponent(projectKey);
+  }
   const opts = body === undefined ? {} : {
     method: "POST", headers: { "Content-Type": "application/json", "X-Prism-Local": "1" },
     body: JSON.stringify(body),

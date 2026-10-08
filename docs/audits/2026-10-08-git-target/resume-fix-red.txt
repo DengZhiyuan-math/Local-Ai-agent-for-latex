@@ -1,0 +1,14 @@
+F
+======================================================================
+FAIL: test_deepcode_collision_allows_a_b_a_and_rejects_foreign_sessions (test_git_target.SessionOwnership.test_deepcode_collision_allows_a_b_a_and_rejects_foreign_sessions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_git_target.py", line 344, in test_deepcode_collision_allows_a_b_a_and_rejects_foreign_sessions
+    self.assertIsNone(backend.check_session(a, sid))
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'Deep Code session does not belong to this project. Start a new chat.' is not None
+
+----------------------------------------------------------------------
+Ran 1 test in 0.005s
+
+FAILED (failures=1)

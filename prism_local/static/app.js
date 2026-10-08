@@ -399,10 +399,17 @@ function renderSync(st) {
   // Without a repository, or one that is not on GitHub, the menu offers to create one.
   $("#sync-publish").hidden = st.own && st.remote;
   for (const el of document.querySelectorAll('#sync-menu [data-sync], #sync-menu label.dd-item')) el.hidden = !st.own;
+  $("#sync-bind").hidden = !st.own || !st.target || !st.blocked_reason;
+  S.githubUrl = st.github || "";
+  $("#sync-github").hidden = !S.githubUrl;
+  if (S.githubUrl) $("#sync-github").href = S.githubUrl;
+  else $("#sync-github").removeAttribute("href");
+  const targetText = (t) => t ? `${t.repository_identity}, branch ${t.branch_ref.replace(/^refs\/heads\//, "")}` : "unavailable";
   let text, cls = "", detail;
   const when = st.last_push || (st.last_commit && st.last_commit.at);
   if (!st.own) { text = "Not on GitHub"; cls = "off"; detail = "This project has no git repository yet. Create a private GitHub repository for it below: it is then saved and synced automatically."; }
   else if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
+  else if (st.blocked_reason && st.remote) { text = "Sync paused"; cls = "warn"; detail = `Local edits are saved. ${st.blocked_reason}. Bound target: ${targetText(st.bound_target)}. Current target: ${targetText(st.target)}.`; }
   else if (st.clash && st.clash.length) { text = "Clash with GitHub"; cls = "warn"; detail = st.error || ""; }
   else if (st.error) { text = "Not synced"; cls = "warn"; detail = st.error; }
   else if (st.state !== "idle") { text = { committing: "Saving…", pushing: "Pushing…", pulling: "Pulling…" }[st.state] || "Syncing…"; cls = "busy"; detail = "Working with git…"; }
@@ -417,7 +424,7 @@ function renderSync(st) {
     detail = "Synced with GitHub. Where you and a co-author changed the same lines, both versions are in the file: open the menu to go there.";
   }
   else if (!st.remote) { text = "Not on GitHub"; cls = "off"; detail = "Committed in the project's repository, which has no GitHub remote yet: nothing is pushed. Create one below."; }
-  else { text = "Saved to GitHub"; cls = "ok"; detail = `Everything is on GitHub (${esc(st.upstream || "origin")})${when ? ", " + ago(when) : ""}.`; }
+  else { text = "Saved to GitHub"; cls = "ok"; detail = `Synced to ${targetText(st.target)}${when ? ", " + ago(when) : ""}.`; }
   label.textContent = text;
   b.className = "ghost sync-" + cls;
   b.title = detail.replace(/<[^>]+>/g, "");
@@ -459,6 +466,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-sync]"); if (!b) return;
   syncMenu(false);
   if (b.dataset.sync === "history") return showHistory();
+  if (b.dataset.sync === "bind" && !confirm(`Sync this project to ${S.sync.target.repository_identity}\nBranch: ${S.sync.target.branch_ref}\nFetch: ${S.sync.target.fetch_url}\nPush: ${S.sync.target.push_url}?`)) return;
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
@@ -467,8 +475,9 @@ $("#sync-menu").addEventListener("click", async (e) => {
   // changes brings in (no "changed on disk" clash with text not saved yet).
   if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll())) return;
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
-  const r = await api("/api/git/sync", { action: b.dataset.sync }).catch(() => null);
-  if (r) renderSync(r);
+  const r = await api("/api/git/sync", { action: b.dataset.sync, target: b.dataset.sync === "bind" ? S.sync.target : undefined }).catch(() => null);
+  if (r && r._status === 200) renderSync(r);
+  else if (r && r.error) toast(r.error);
   await poll();
 });
 // Create a private GitHub repository for the project (hub.publish_project, through this server).
@@ -964,13 +973,16 @@ window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.p
 // The agent runs on one provider at a time (Claude Code, Codex CLI, DeepSeek or another
 // OpenAI-compatible API; see backends.py). Conversation, model and effort are kept per
 // provider. P holds what /api/agent/info reports about each provider.
-const P = { list: [], byId: {} };
+const P = { list: [], byId: {}, projectKey: null };
 const C = { provider: store.get("chat.provider", null), job: null, cur: null };
 const prov = () => P.byId[C.provider] || { id: C.provider, label: "Agent", models: [], efforts: [] };
 const provLabel = () => prov().label || "the agent";
 // Settings saved before providers existed belong to Claude Code.
-const provGet = (k) => store.get(`chat.${k}.${C.provider}`, C.provider === "claude" ? store.get(`chat.${k}`, null) : null);
-const provSet = (k, v) => store.set(`chat.${k}.${C.provider}`, v);
+const conversationKey = (k, provider = C.provider) => P.projectKey ? `chat.${P.projectKey}.${provider}.${k}` : null;
+const provGet = (k) => ["session", "context", "log", "snips"].includes(k)
+  ? (conversationKey(k) ? store.get(conversationKey(k), null) : null)
+  : store.get(`chat.${k}.${C.provider}`, null);
+const provSet = (k, v) => { const key = ["session", "context", "log", "snips"].includes(k) ? conversationKey(k) : `chat.${k}.${C.provider}`; if (key) store.set(key, v); };
 // The account the provider runs under (Claude Code: `claude auth status`), and whether
 // it is the one allowed in Home → Settings. A mismatch stops every turn on the server.
 async function loadAccount() {
@@ -990,6 +1002,10 @@ function loadProvider() {
   C.session = provGet("session"); C.model = provGet("model"); C.effort = provGet("effort");
   const c = provGet("context");                    // how full this conversation's context is
   renderContext(c && c.session === C.session ? c : null);
+  C.snips = provGet("snips") || {};
+  const saved = provGet("log");
+  $("#chat-log").innerHTML = saved || "";
+  if (!saved) chatIntro();
 }
 
 /* How full the conversation's context window is, as a ring by the Send button (like the
@@ -1023,7 +1039,7 @@ $("#ctx-ring").onclick = (e) => {
   $("#ctx-ring").setAttribute("aria-expanded", String(!pop.hidden));
 };
 document.addEventListener("click", (e) => { if (!e.target.closest("#ctx")) { $("#ctx-pop").hidden = true; $("#ctx-ring").setAttribute("aria-expanded", "false"); } });
-loadProvider();
+// Load conversations only after the server supplies the project identity.
 
 function chatHidden(h) {
   $("#chat").classList.toggle("hidden", h); $("#chat-gutter").classList.toggle("hidden", h);
@@ -1059,7 +1075,7 @@ function chatAppend(html, cls) {
   if (stick || cls === "msg user") log.scrollTop = log.scrollHeight;     // unless you scrolled up to read
   return div;
 }
-function saveChatLog() { store.set("chat.log", $("#chat-log").innerHTML.slice(-400000)); }
+function saveChatLog() { provSet("log", $("#chat-log").innerHTML.slice(-400000)); }
 function chatIntro() {
   chatAppend(`The agent works in this repository and follows the project's CLAUDE.md / AGENTS.md.
 Pick who runs it in the menu above: Claude Code, Codex CLI, or an API model such as DeepSeek.
@@ -1067,16 +1083,17 @@ Pick who runs it in the menu above: Claude Code, Codex CLI, or an API model such
 <b>Ask</b> mode is read-only. Type <code>@</code> to point the agent at a file or the selection
 (or select text and press <code>${keys("⌘L")}</code>): it may then change only those files.
 Without <code>@</code>, it may change any file in the project. Type <code>/</code> for commands.
-Commits, pushes and non-allowlisted shell commands are not permitted from here.`, "msg intro");
+Commits and pushes are prohibited. Permission enforcement depends on the selected provider;
+post-turn restoration is not an access boundary.`, "msg intro");
 }
 
 /* Mentions. "@path" points the agent at a file, "@path:12-18" at those lines (made from the
    editor selection). With mentions, the agent may change only the mentioned files: the
-   server enforces that (Claude Code permission rules, the API tools' checks, or undoing
-   Codex's writes outside them after the turn). Without any, it may change any
+   Claude and Codex use native permissions; API tools check paths before writing.
+   Deep Code scope uses post-turn restoration. Without any, it may change any
    file in the project and create new ones. */
 const MENTION_RE = /(^|\s)@([^\s@]+)/g;
-C.snips = store.get("chat.snips", {});      // "@file:a-b" -> the text selected when it was made
+C.snips = {};      // selection text belongs to the current project and provider
 
 function selectionMention() {
   const t = activeTab(), sel = cm.getSelection();
@@ -1113,9 +1130,11 @@ async function referenceBlock(mentions) {
   return b + "[/Referenced]";
 }
 function describeScope(mentions, mode) {
-  if (mode === "ask") return "Ask mode: read-only";
+  if (mode === "ask") return prov().read_only_ask === false
+    ? "Ask: writes denied by category; changes restored after the turn (no OS sandbox)" : "Ask mode: read-only, no agent compilation";
   if (!mentions.length) return "Scope: whole workspace (any file, new files allowed)";
-  return "Scope: only " + mentions.map(rangeLabel).join(", ");
+  return "Scope: only " + mentions.map(rangeLabel).join(", ")
+    + (prov().enforces_scope === false ? " (restored after the turn; not a write boundary)" : "");
 }
 function updateScope() {
   const ms = parseMentions($("#chat-input").value), mode = $("#chat-mode").value;
@@ -1143,7 +1162,7 @@ function insertMention(token, snip, replaceFrom) {
   if (snip !== undefined) {
     delete C.snips[token]; C.snips[token] = snip;             // newest last; keep the latest 50
     C.snips = Object.fromEntries(Object.entries(C.snips).slice(-50));
-    store.set("chat.snips", C.snips);
+    provSet("snips", C.snips);
   }
   updateScope(); inp.focus();
 }
@@ -1422,16 +1441,21 @@ async function chatSend() {
   if (slash) { await loadCatalog(); prompt = slashPrompt(text, refs); }
   else prompt = refs ? refs + "\n\n" + text : text;
   const attached = ATT.block(), sentFiles = ATT.files.filter((f) => f.path);
+  const unsupported = sentFiles.find((f) => !(prov().input_types || ["text"]).includes(
+    /\.(png|jpe?g|gif|webp)$/i.test(f.path) ? "image" : /\.pdf$/i.test(f.path) ? "pdf" : "text"));
+  if (unsupported) return toast(`${provLabel()} does not support this attachment: ${unsupported.name}.`);
   if (attached) prompt = slash ? `${prompt}\n\n${attached}` : `${attached}\n\n${prompt}`;   // a /command stays first
   // Only the mentioned files may change; without mentions, the whole project.
   const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
   const provider = C.provider;
-  const r = await api("/api/agent", { prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider });
+  if (!P.projectKey) return toast("Wait for the project identity to load.");
+  const r = await api("/api/agent", { prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
+    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path) });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
   $("#chat-input").value = ""; updateScope();
   ATT.files = []; ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
-  const extra = [provLabel(), C.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
+  const extra = [provLabel(), r.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
   chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
   C.job = r.job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
@@ -1525,7 +1549,7 @@ async function chatSend() {
         }
         else if (e.t === "init") {
           // The session belongs to the provider that ran the turn, even if the menu changed since.
-          store.set(`chat.session.${provider}`, e.session_id);
+          store.set(conversationKey("session", provider), e.session_id);
           if (C.provider === provider) C.session = e.session_id;
         }
         else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
@@ -1663,13 +1687,20 @@ function renderTurnCard(e) {
       <button class="tiny" data-compile="1">Compile</button></div>`;
     for (const c of e.changed) {
       const add = (c.diff.match(/^\+(?!\+\+)/gm) || []).length, del = (c.diff.match(/^-(?!--)/gm) || []).length;
-      h += `<div class="row"><a data-file="${esc(c.path)}" data-line="${(c.diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)/m) || [])[1] || ""}">${esc(c.path)}</a>
+      const label = S.files.some((f) => f.path === c.path)
+        ? `<a data-file="${esc(c.path)}" data-line="${(c.diff.match(/^@@ -\d+(?:,\d+)? \+(\d+)/m) || [])[1] || ""}">${esc(c.path)}</a>`
+        : `<span>${esc(c.path)}</span>`;
+      h += `<div class="row">${label}
         <span class="add">+${add}</span> <span class="del">−${del}</span>${c.created ? " (new)" : c.deleted ? " (deleted)" : ""}
         <button class="tiny sp" data-toggle="1">diff</button></div><pre hidden>${diffHtml(c.diff)}</pre>`;
     }
   } else if (!e.is_error && e.exit === 0) {
-    h += `<div class="meta">No files changed.</div>`;
+    h += `<div class="meta">No file changes detected.</div>`;
   }
+  if (e.snapshot_issues && e.snapshot_issues.length)
+    h += `<div class="warn">Change detection is incomplete: ${esc(e.snapshot_issues.join("; "))}.</div>`;
+  if (e.undo_unavailable && e.undo_unavailable.length)
+    h += `<div class="warn">Undo is unavailable for files exceeding the snapshot limit: ${esc(e.undo_unavailable.join(", "))}.</div>`;
   const writes = ["Edit", "Write", "MultiEdit", "NotebookEdit"];
   const denied = [...new Set(e.denials || [])];
   if (e.scope && denied.some((d) => writes.includes(d)))
@@ -1686,7 +1717,7 @@ function renderTurnCard(e) {
       + `(the file changes above are not affected):<ul>${list.map((x) => `<li><code>${esc(x.slice(0, 160))}</code></li>`).join("")}</ul></div>`;
   }
   if (e.out_of_scope && e.out_of_scope.length)
-    h += `<div class="warn">Changed outside the @-mentioned files: ${esc(e.out_of_scope.join(", "))}. Use Undo this turn if that was not wanted.</div>`;
+    h += `<div class="warn">Changes exceeded this turn's permissions and could not be restored: ${esc(e.out_of_scope.join(", "))}.</div>`;
   if (e.exit !== 0 || e.is_error)
     h += `<div class="err">${esc((P.byId[e.provider] || {}).label || "The agent")}: ${esc(e.subtype || "exit " + e.exit)}.${e.stderr ? "\n" + esc(e.stderr) : ""}</div>`;
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
@@ -1714,7 +1745,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
     if (S.tabs.some(isDirty) && !(await saveAll())) return;
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
-    u.textContent = `undone (${r.restored.length})` + (r.skipped.length ? `; kept ${r.skipped.length} edited since` : "");
+    u.textContent = `undone (${r.restored.length})` + (r.skipped.length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
     u.disabled = true; saveChatLog(); AH.clear("changed"); await poll();
   }
 });
@@ -1782,7 +1813,7 @@ async function runLocal(name, arg) {
     return sysNote(`Effort for the next messages: <b>${esc(C.effort || "default")}</b>`);
   }
   if (name === "skills") {
-    if (!prov().skills) return sysNote(`${esc(provLabel())} has no skills; only Claude Code does.`);
+    if (!prov().skills) return sysNote(`The editor has no Skills catalog integration for ${esc(provLabel())}. Native CLI Skills may still be available.`);
     sysNote("Loading skills…");
     const cat = await loadCatalog(arg === "refresh");
     const last = $("#chat-log").lastElementChild;
@@ -1813,6 +1844,12 @@ function setProvider(id, quiet) {
     : `<span class="err">${esc(p.label)} is not available: ${esc(p.reason || "")}</span>`);
 }
 function renderProviders(info) {
+  if (projectKey && projectKey !== info.project_key) {
+    toast("This port now serves another project. Reopen the project's editor.");
+    return;
+  }
+  projectKey = info.project_key || null;
+  P.projectKey = info.project_key || null;
   P.list = info.providers || [];
   P.byId = Object.fromEntries(P.list.map((p) => [p.id, p]));
   // A server started before this page's code was updated sends no provider list. Hide the
@@ -1834,11 +1871,9 @@ function renderProviders(info) {
 $("#chat-provider").onchange = (e) => setProvider(e.target.value);
 
 // The prompt for a message starting with "/": the command must come first. Skills take
-// free text, so the referenced files follow the command; built-in commands get none.
+// free text. Keep referenced text for unknown commands and all providers too.
 function slashPrompt(text, refs) {
-  const name = text.slice(1).split(/\s/)[0];
-  const isSkill = catalog && catalog.skills.includes(name);
-  return refs && isSkill ? text + "\n\n" + refs : text;
+  return refs ? text + "\n\n" + refs : text;
 }
 
 /* Completion menu: "/" at the start of the message lists commands and skills;
@@ -1927,7 +1962,6 @@ $("#chat-input").addEventListener("keydown", (e) => {
 $("#chat-new").onclick = () => {
   if (C.job) return;
   C.session = null; provSet("session", null);
-  if (C.provider === "claude") store.set("chat.session", null);    // the key from before providers
   const c = provGet("context");                                    // a new chat starts empty (keep the window size)
   if (c) provSet("context", { window: c.window });
   renderContext(null);
@@ -1941,9 +1975,7 @@ function askAboutSelection() {
 }
 cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelection, "Ctrl-L": askAboutSelection });
 {
-  const saved = store.get("chat.log", "");
-  if (saved) $("#chat-log").innerHTML = saved;
-  else chatIntro();
+  chatIntro();
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
   renderQuota(store.get("chat.rate", null));
   api("/api/agent/info").then((r) => {

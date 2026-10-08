@@ -279,6 +279,7 @@ class UploadsToGitHub(unittest.TestCase):
         bare = tmpdir()
         self.git(bare, "init", "-q", "--bare")
         self.git(root, "remote", "add", "origin", str(bare))
+        server.GITSYNC.bind_target()
         (root / "main.tex").write_text("two\n", encoding="utf-8")      # your edit, not committed
         rel = server.save_upload("notes.pdf", b"%PDF-1.4")
         server.sync_upload(rel)

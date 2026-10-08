@@ -1,0 +1,106 @@
+Audited HEAD: 9c2f0ef28b2d0827272e746b58c157be7c94441c
+Command: PRISM_SKIP_TEX=1 python3 -m unittest discover -s tests
+Terminal failure excerpt; progress and ResourceWarnings omitted.
+
+======================================================================
+ERROR: test_allowed_commands_keep_the_shell (test_agent.ClaudeShell.test_allowed_commands_keep_the_shell)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_agent.py", line 205, in <lambda>
+    self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR") if old is None
+                            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen _collections_abc>", line 934, in pop
+  File "<frozen os>", line 709, in __getitem__
+KeyError: 'CLAUDE_CONFIG_DIR'
+
+======================================================================
+ERROR: test_no_rules_no_shell (test_agent.ClaudeShell.test_no_rules_no_shell)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_agent.py", line 205, in <lambda>
+    self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR") if old is None
+                            ~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^
+  File "<frozen _collections_abc>", line 934, in pop
+  File "<frozen os>", line 709, in __getitem__
+KeyError: 'CLAUDE_CONFIG_DIR'
+
+======================================================================
+FAIL: test_no_rules_no_shell (test_agent.ClaudeShell.test_no_rules_no_shell)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_agent.py", line 218, in test_no_rules_no_shell
+    self.assertEqual(self.disallowed(), ["Bash", "PowerShell", "Monitor"])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: [] != ['Bash', 'PowerShell', 'Monitor']
+
+Second list contains 3 additional elements.
+First extra element 0:
+'Bash'
+
+- []
++ ['Bash', 'PowerShell', 'Monitor']
+
+======================================================================
+FAIL: test_project_code_is_deep_codes (test_agent.DeepCodeBackend.test_project_code_is_deep_codes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_agent.py", line 405, in test_project_code_is_deep_codes
+    self.assertEqual(project_code(Path(r"C:\Users\me\paper")), "C-Users-me-paper")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '-Volumes-SamsungPSSD-prism-local-C-Users-me-paper' != 'C-Users-me-paper'
+- -Volumes-SamsungPSSD-prism-local-C-Users-me-paper
++ C-Users-me-paper
+
+
+======================================================================
+FAIL: test_rename_project_and_folder (test_hub.FolderSync.test_rename_project_and_folder)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_hub.py", line 275, in test_rename_project_and_folder
+    self.assertEqual((Path(r["path"]), r["moved"]), (new, True))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Tuples differ: (PosixPath('/private/var/folders/13/jgb8c061583ggg622p[61 chars]True) != (PosixPath('/var/folders/13/jgb8c061583ggg622pgv9l0c00[53 chars]True)
+
+First differing element 0:
+PosixPath('/private/var/folders/13/jgb8c061583ggg622p[54 chars]one')
+PosixPath('/var/folders/13/jgb8c061583ggg622pgv9l0c00[46 chars]one')
+
+- (PosixPath('/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-kq92vjfs/projects/Exercise- one'),
+?             --------
+
++ (PosixPath('/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-kq92vjfs/projects/Exercise- one'),
+   True)
+
+======================================================================
+FAIL: test_rename_the_folder_too (test_lifecycle.ServerLifecycle.test_rename_the_folder_too)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_lifecycle.py", line 131, in test_rename_the_folder_too
+    self.assertEqual(tree and tree.get("path"), str(new))
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '/private/var/folders/13/jgb8c061583ggg622p[40 chars]- v2' != '/var/folders/13/jgb8c061583ggg622pgv9l0c00[32 chars]- v2'
+- /private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-crhdkzbj/Paper- v2
+? --------
++ /var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-crhdkzbj/Paper- v2
+
+
+======================================================================
+FAIL: test_save_now_clicked_twice_at_once (test_sync_buttons.SyncButtons.test_save_now_clicked_twice_at_once)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Volumes/SamsungPSSD/prism-local/tests/test_sync_buttons.py", line 141, in test_save_now_clicked_twice_at_once
+    self.assertEqual([r["error"] for r in results], [None] * 3)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['git is busy (index.lock); will try again', None, None] != [None, None, None]
+
+First differing element 0:
+'git is busy (index.lock); will try again'
+None
+
+- ['git is busy (index.lock); will try again', None, None]
++ [None, None, None]
+
+----------------------------------------------------------------------
+Ran 215 tests in 210.450s
+
+FAILED (failures=5, errors=2, skipped=14)

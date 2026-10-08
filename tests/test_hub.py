@@ -366,6 +366,7 @@ class CheckGitHub(TempState):
         (other / "main.tex").write_text("b\n", encoding="utf-8")
         self.run_git(other, "commit", "-qam", "elsewhere")
         self.run_git(other, "push", "-q")
+        hub.project_sync(mine).bind_target()
         hub.add_project(str(mine))
         # github_of: a local remote counts as the project's remote here.
         with mock.patch.object(hub, "github_of", return_value="https://github.com/me/mine"):

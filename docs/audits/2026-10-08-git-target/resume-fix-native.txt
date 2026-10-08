@@ -1,0 +1,16 @@
+{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "c-beaf6d4cb8", "cwd": "/private/tmp/dc-ive7r0j7/a-b/c", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "deepcode", "project_key": "c-beaf6d4cb8", "cwd": "/private/tmp/dc-ive7r0j7/a-b/c", "session_id": "ae146da1-031d-422c-93a6-367450cb451f"}
+{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "b-c-7f967d52d3", "cwd": "/private/tmp/dc-ive7r0j7/a/b-c", "session_id": null}
+{"event": "agent_start", "job": 3, "provider": "deepcode", "project_key": "c-beaf6d4cb8", "cwd": "/private/tmp/dc-ive7r0j7/a-b/c", "session_id": "ae146da1-031d-422c-93a6-367450cb451f"}
+{"event": "agent_start", "job": 2, "provider": "deepcode", "project_key": "b-c-7f967d52d3", "cwd": "/private/tmp/dc-ive7r0j7/a/b-c", "session_id": "6b9c47fb-cc8e-439f-9b2d-7e97dfc0a4f9"}
+{
+  "same_native_directory": true,
+  "native_local_resume": true,
+  "native_a_b_a_b_resume": true,
+  "native_index_rewritten_to_b": true,
+  "foreign_resume_blocked_before_model": true,
+  "per_session_project_checked": true,
+  "cli": "/private/tmp/prism-deepcode-runtime/node_modules/.bin/deepcode",
+  "model": "synthetic loopback"
+}
+DEEPCODE_COLLISION_ACCEPTANCE_PASSED

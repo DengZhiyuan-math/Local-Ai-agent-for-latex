@@ -1,0 +1,40 @@
+{
+  "source_checked": 28,
+  "source_mismatch": [],
+  "outputs_checked": 4,
+  "output_mismatch": [],
+  "changed_since_previous_audit": [
+    "prism_local/backend_deepcode.py",
+    "tests/test_git_target.py"
+  ],
+  "baseline": "9c2f0ef28b2d0827272e746b58c157be7c94441c",
+  "old_audit_files_checked": 34,
+  "old_audit_file_mismatch": [],
+  "native_cli_sha256_matches": true,
+  "independent_tests": {
+    "command": "PRISM_SKIP_TEX=1 PYTHONPATH=tests:prism_local python3 -m unittest test_git_target test_agent.DeepCodeBackend",
+    "exit": 0,
+    "terminal": [
+      "Ran 26 tests in 15.972s",
+      "OK"
+    ],
+    "output": "resume-audit-tests.txt",
+    "sha256": "2289fe339f9ba8916bfbbd0849da9f5b308e00ecd2d5259195203a347cacc341"
+  },
+  "probe": {
+    "script": "resume-audit-probe.py",
+    "output": "resume-audit-probe.json",
+    "rerun_preserved_old_output": true
+  },
+  "full_suite": "not rerun",
+  "native_cli": "provided evidence reviewed; not rerun",
+  "real_deepseek": "not tested",
+  "real_tex": "not tested",
+  "windows_linux": "not tested",
+  "product_edits": false,
+  "commit_or_push": false,
+  "standards_findings": 0,
+  "spec_findings": 0,
+  "original_p2": "closed",
+  "source_hashes_unchanged_during_audit": true
+}

@@ -3,27 +3,60 @@
 A chat turn runs on one of several AI backends (backends.py): the Claude Code CLI,
 the Codex CLI, or an OpenAI-compatible API such as DeepSeek. This module does the
 part that is the same for all of them: it checks the request, states the turn's
-file scope, snapshots the editable files before the turn, reports per-file diffs
+file scope, snapshots project files before the turn, reports per-file diffs
 afterwards and can undo the turn.
 """
 from __future__ import annotations
 
 import difflib
+import hashlib
 import itertools
+import json
+import os
 import re
+import stat
 import threading
 import time
 from pathlib import Path
+from dataclasses import dataclass, field
 from typing import Callable
 
 from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
-from fsutil import write_bytes
+from fsutil import project_path, write_bytes
+import registry
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
 MAX_TURNS = 50          # turns kept in memory for their events and Undo
+MAX_SNAPSHOT_FILE = 25 * 1024 * 1024
+MAX_SNAPSHOT_BYTES = 100 * 1024 * 1024
+
+
+@dataclass(frozen=True)
+class FileState:
+    data: bytes | None = field(compare=False)
+    mode: int
+    link: str | None = None
+    digest: str | None = None
+
+
+def file_state(path: Path, budget: int) -> FileState:
+    info = path.lstat()
+    mode = stat.S_IMODE(info.st_mode)
+    if stat.S_ISLNK(info.st_mode):
+        return FileState(b"", mode, link=os.readlink(path))
+    if not stat.S_ISREG(info.st_mode):
+        raise OSError("not a regular file")
+    if info.st_size <= min(MAX_SNAPSHOT_FILE, budget):
+        data = path.read_bytes()
+        return FileState(data, mode, digest=hashlib.sha256(data).hexdigest())
+    digest = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return FileState(None, mode, digest=digest.hexdigest())
 
 
 class AgentManager:
@@ -50,29 +83,61 @@ class AgentManager:
         return self.backends.get(provider or self.default)
 
     def info(self) -> dict:
+        root = self.root_fn().resolve()
         return {"default": self.default, "config_error": self.config_error,
+                "project_key": registry.project_key(root), "root": str(root),
                 "providers": [b.info() for b in self.backends.values()]}
 
     # ------------------------------------------------------------ snapshots
     # Files are kept as bytes: Undo puts back exactly what was there (line ends, encoding),
     # and a file that is not UTF-8 cannot stop a turn.
-    def _snapshot(self) -> dict[str, bytes | None]:
-        root, snap = self.root_fn(), {}
-        for rel in self.files_fn():
-            try:
-                snap[rel] = (root / rel).read_bytes()
-            except OSError:
-                snap[rel] = None
+    def _snapshot(self, job: Job) -> dict[str, FileState]:
+        root, snap, budget = job.root, {}, MAX_SNAPSHOT_BYTES
+        def error(exc):
+            job.snapshot_issues.add(str(exc))
+        # The navigation catalog is not a change catalog. Include binary files, hidden
+        # files and excluded directories. Never follow directory links or enter .git.
+        for directory, dirs, files in os.walk(root, followlinks=False, onerror=error):
+            parent = Path(directory)
+            links = [d for d in dirs if (parent / d).is_symlink() and d != ".git"]
+            dirs[:] = sorted(d for d in dirs if d != ".git" and d not in links)
+            for name in sorted(files + links):
+                if name == ".git":
+                    continue
+                path = parent / name
+                rel = path.relative_to(root).as_posix()
+                try:
+                    # Record link metadata without reading its target, including external
+                    # and broken links. Regular files use the same path check as API reads.
+                    if not path.is_symlink():
+                        project_path(root, rel)
+                    state = file_state(path, budget)
+                    snap[rel] = state
+                    budget -= len(state.data or b"")
+                except (OSError, ValueError, RuntimeError) as exc:
+                    job.snapshot_issues.add(f"{rel}: {exc}")
         return snap
 
     @staticmethod
-    def _diff(rel: str, a: bytes | None, b: bytes | None) -> str:
+    def _diff(rel: str, a: FileState | None, b: FileState | None) -> str:
+        if any(s and s.link is not None for s in (a, b)):
+            return f"Link changed: {a.link if a else '(absent)'} -> {b.link if b else '(absent)'}\n"
+        if any(s and s.data is None for s in (a, b)):
+            return "File changed; content exceeds the Undo snapshot limit.\n"
+        ad, bd = a.data if a else b"", b.data if b else b""
+        try:
+            for data in (ad, bd):
+                data.decode("utf-8")
+                if b"\x00" in data:
+                    raise UnicodeError
+        except UnicodeError:
+            return f"Binary file changed ({len(ad)} -> {len(bd)} bytes).\n"
         text = lambda d: d.decode("utf-8", "replace").replace("\r\n", "\n")  # noqa: E731
         diff = "".join(difflib.unified_diff(
-            text(a or b"").splitlines(keepends=True), text(b or b"").splitlines(keepends=True),
+            text(ad).splitlines(keepends=True), text(bd).splitlines(keepends=True),
             fromfile=f"a/{rel}" if a is not None else "/dev/null",
             tofile=f"b/{rel}" if b is not None else "/dev/null", n=2))
-        return diff or f"(only the line ends or the encoding of {rel} changed)\n"
+        return diff or f"(line ends, encoding or file permissions of {rel} changed)\n"
 
     def _writable(self, job: Job, rel: str) -> bool:
         if job.mode != "edit":
@@ -90,7 +155,8 @@ class AgentManager:
     # ------------------------------------------------------------ run
     def start(self, prompt: str, session_id: str | None, mode: str,
               model: str | None = None, effort: str | None = None,
-              scope: list[str] | None = None, provider: str | None = None) -> dict:
+              scope: list[str] | None = None, provider: str | None = None,
+              attachments: list[str] | None = None) -> dict:
         """Run one turn. `scope` (project-relative files) limits which files the agent may
         change in edit mode; None lets it change any file and create new ones."""
         backend = self.backend(provider)
@@ -99,11 +165,19 @@ class AgentManager:
         why = backend.unavailable()
         if why:
             return {"error": why}
+        model = model or backend.default_model
         if model and not MODEL_RE.fullmatch(model):
             return {"error": f"Not a model name: {model}"}
-        bad = backend.check(model, effort) or backend.preflight(self.root_fn())
+        root = self.root_fn().resolve()
+        bad = backend.check(model, effort) or backend.check_attachments(root, attachments or []) \
+            or backend.preflight(root) or (backend.check_session(root, session_id) if session_id else None)
         if bad:
             return {"error": bad}
+        if scope:
+            try:
+                scope = sorted({project_path(root, rel).relative_to(root).as_posix() for rel in scope})
+            except (ValueError, OSError, RuntimeError) as e:
+                return {"error": f"Invalid scope: {e}"}
         with self.lock:
             if self.active and not self.active.done:
                 return {"error": "The agent is still working on the previous message."}
@@ -119,7 +193,7 @@ class AgentManager:
             note = ("You may change any file in the project and create new files in this "
                     "turn. File restrictions from earlier turns no longer apply.")
         else:
-            note = None
+            note = "Ask mode: do not create, change or delete files, and do not compile. Earlier Edit permissions no longer apply."
         # Each turn states its own scope at the end of the message. A resumed conversation
         # remembers earlier turns, and a note there outweighs one in the system prompt.
         # (Appended, not prepended: a /command must stay first.)
@@ -127,16 +201,20 @@ class AgentManager:
             prompt = f"{prompt}\n\n[Scope for this turn] {note}"
         job.provider, job.prompt, job.session_id = backend.id, prompt, session_id
         job.mode, job.model, job.effort = mode if mode in ("edit", "ask") else "ask", model, effort
-        job.root, job.files = self.root_fn(), self.files_fn
+        job.root, job.files = self.root_fn().resolve(), self.files_fn
         job.server_url = self.server_url
+        job.attachments = attachments or []
+        print(json.dumps({"event": "agent_start", "job": job.id, "provider": job.provider,
+                          "project_key": registry.project_key(root), "cwd": str(root),
+                          "session_id": session_id}), flush=True)
         job.writable = lambda rel: self._writable(job, rel)
         try:
             self.on_start()                      # your edits so far, committed apart
         except Exception:  # noqa: BLE001 — a failed commit must not stop the turn
             pass
-        job.before = self._snapshot()
+        job.before = self._snapshot(job)
         threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
-        return {"job": job.id, "provider": backend.id}
+        return {"job": job.id, "provider": backend.id, "model": job.model}
 
     def _run(self, job: Job, backend: Backend) -> None:
         t0, res = time.time(), {}
@@ -147,7 +225,7 @@ class AgentManager:
             res = {"is_error": True}
         finally:
             time.sleep(0.2)
-            job.after = self._snapshot()
+            job.after = self._snapshot(job)
             # Ask is read-only: a backend without a read-only mode may change nothing.
             read_only = job.mode == "ask" and not backend.read_only_ask
             out_of_scope = [rel for rel in sorted(set(job.before) | set(job.after))
@@ -158,13 +236,14 @@ class AgentManager:
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = self._restore(job, out_of_scope)
-                job.after = self._snapshot()
+                job.after = self._snapshot(job)
             changed = []
             for rel in sorted(set(job.before) | set(job.after)):
                 a, b = job.before.get(rel), job.after.get(rel)
                 if a != b:
                     changed.append({"path": rel, "diff": self._diff(rel, a, b),
-                                    "created": a is None, "deleted": b is None})
+                                    "created": a is None, "deleted": b is None,
+                                    "undoable": not any(s and s.data is None for s in (a, b))})
             # Undo needs only the files this turn changed: keep just those in memory.
             keep = [c["path"] for c in changed]
             job.before = {r: job.before.get(r) for r in keep}
@@ -177,6 +256,8 @@ class AgentManager:
                     self.jobs.pop(next(iter(self.jobs)))
             ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
                   "exit": res.get("exit"), "scope": job.scope,
+                  "snapshot_issues": sorted(job.snapshot_issues),
+                  "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],
                   "out_of_scope": [r for r in out_of_scope if r not in reverted],
                   "reverted": reverted,
                   "session_id": res.get("session_id") or job.session_id,
@@ -238,21 +319,35 @@ class AgentManager:
 
     def _restore(self, job: Job, rels) -> list[str]:
         """Put `rels` back as they were before `job`, where they still match its result."""
-        root, restored = self.root_fn(), []
+        root, restored = job.root, []
         for rel in rels:
             a, b = job.before.get(rel), job.after.get(rel)
             p = root / rel
             try:
-                cur = p.read_bytes() if p.exists() else None
-            except OSError:
+                # Do not follow a parent directory that was replaced by an external link.
+                parent = p.parent.resolve()
+                if parent != root and root not in parent.parents:
+                    continue
+                if ".git" in parent.relative_to(root).parts:
+                    continue
+                cur = file_state(p, MAX_SNAPSHOT_BYTES) if p.exists() or p.is_symlink() else None
+            except (OSError, ValueError, RuntimeError):
                 continue                 # cannot tell what is there now; leave it
-            if cur != b:
+            if cur != b or any(s and s.data is None for s in (a, b)):
                 continue                 # edited again since; never clobber
             try:
                 if a is None:
                     p.unlink()
+                elif a.link is not None:
+                    if p.exists() or p.is_symlink():
+                        p.unlink()
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.symlink_to(a.link)
                 else:
-                    write_bytes(p, a)
+                    if p.is_symlink():
+                        p.unlink()
+                    write_bytes(p, a.data)
+                    p.chmod(a.mode)
             except OSError:
                 continue                 # locked by another program: reported as not restored
             restored.append(rel)
