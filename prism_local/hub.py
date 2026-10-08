@@ -36,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitsync  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
+import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
 from presence import Presence  # noqa: E402
@@ -1425,6 +1426,7 @@ def main():
     if a.exit_when_idle:
         threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
     start_fetch_all()                   # what changed on GitHub since last time
+    threading.Thread(target=selfupdate.update, daemon=True).start()   # prism-local itself
     httpbase.stop_on_signals(srv)
     try:
         srv.serve_forever()

@@ -97,6 +97,12 @@ The Home page opens. Create a project (**+ New project**) or add a folder you al
 
 ### Update
 
+prism-local updates itself: before a server starts (an editor or the Home page), it takes
+what is new on GitHub, at most once every five minutes. It only fast-forwards, and leaves the
+checkout alone when that could touch work of yours: uncommitted changes, commits GitHub does
+not have, a merge or rebase in progress, or a branch that tracks none on GitHub. The server
+log says what it did. `PRISM_AUTO_UPDATE=0` switches it off. By hand:
+
 ```sh
 cd prism-local && git pull
 ```
@@ -686,6 +692,7 @@ prism_local/backends.py    the backend interface, presets and ~/.prism-local/age
 prism_local/backend_*.py   Claude Code, Codex CLI, Deep Code CLI and OpenAI-compatible API backends
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
+prism_local/selfupdate.py  updates prism-local itself from GitHub before a server starts
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0)
 examples/minimal/          a small amsart project to try it on

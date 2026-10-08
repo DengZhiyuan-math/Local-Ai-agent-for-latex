@@ -8,6 +8,8 @@ import tempfile
 from pathlib import Path
 
 _made: list = []
+# Servers the tests start must not update this checkout of prism-local (selfupdate.py).
+os.environ["PRISM_AUTO_UPDATE"] = "0"
 
 
 def tmpdir() -> Path:

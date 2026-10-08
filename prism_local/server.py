@@ -38,6 +38,7 @@ from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
+import selfupdate  # noqa: E402
 
 MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
@@ -1025,6 +1026,8 @@ def main():
     httpbase.stop_on_signals(srv)
     RESTART.update(server=srv, args=a, port=port)
     GITSYNC.start()
+    # Started from a terminal, not the launcher: update now; the editor then offers a restart.
+    threading.Thread(target=selfupdate.update, daemon=True).start()
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
