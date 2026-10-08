@@ -260,7 +260,7 @@ class FrontendReferences(unittest.TestCase):
         import shutil
         if not shutil.which("node"):
             self.skipTest("Node is not installed")
-        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text()
+        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text(encoding="utf-8")
         start = source.index("function slashPrompt(")
         end = source.index("\n}", start) + 2
         script = "const catalog={skills:[]};\n" + source[start:end] \

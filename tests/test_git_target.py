@@ -418,7 +418,7 @@ class SessionOwnership(unittest.TestCase):
 @unittest.skipUnless(shutil.which("node"), "needs Node.js")
 class Frontend(unittest.TestCase):
     def test_conversations_are_isolated_by_project_and_provider(self):
-        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text()
+        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text(encoding="utf-8")
         start = source.index("const conversationKey =")
         end = source.index("// The account", start)
         script = '''const assert = require('node:assert/strict');
@@ -436,7 +436,7 @@ C.provider = 'deepcode'; assert.equal(provGet('log'), 'paper-log');
         subprocess.run([shutil.which("node"), "-e", script], check=True, capture_output=True, text=True)
 
     def test_sync_menu_clears_stale_github_link_and_shows_binding(self):
-        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text()
+        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text(encoding="utf-8")
         start = source.index("function renderSync(st)")
         end = source.index("function syncMenu", start)
         script = '''const assert = require('node:assert/strict');
