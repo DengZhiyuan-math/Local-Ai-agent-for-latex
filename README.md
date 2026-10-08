@@ -63,7 +63,17 @@ powershell -ExecutionPolicy Bypass -File prism-local\launcher\make-shortcut.ps1
 python3 prism-local/launcher/make_desktop_entry.py
 ```
 
-**macOS, or any terminal**:
+**macOS**: add **prism-local** to Applications, then open it from Spotlight:
+
+```sh
+python3 prism-local/launcher/make_macos_app.py
+```
+
+Press **Command-Space**, search for **prism-local**, and press Return. If `/Applications`
+is not writable, use `--applications ~/Applications`. The app opens the Home page in your
+default browser. Keep the repository and Python installed; see [macOS](#macos) for updates.
+
+**Any terminal**:
 
 ```sh
 prism-local/bin/prism-home                       # the Home page: http://127.0.0.1:8790/
@@ -565,7 +575,7 @@ prism-local is meant for a single user on their own machine.
 - With an API provider, the files the model reads and your messages are sent to that
   provider's `base_url`. The key stays in the server's environment and never reaches the page.
 
-## Details: launcher, Linux, command line
+## Details: launchers and command line
 
 ### The launcher
 
@@ -573,6 +583,7 @@ The Windows shortcut and the Linux menu entry run `launcher/prism_launcher.pyw`.
 Home page in a Chrome or Edge window of its own; each project you open becomes a tab of that
 window. The Home page stops about 10 seconds after you close it; open editors keep running
 until they are closed too.
+The macOS app uses the same launcher and opens the Home page in the default browser.
 
 A shortcut that opens one project's editor directly, skipping the Home page:
 
@@ -603,6 +614,29 @@ python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop    
 - **Environment.** The shortcut runs in your normal user environment: TeX (`pdflatex`, `bibtex`
   …), `git`, `gh` and `claude` must be on your user `PATH`.
 - `launcher/make_icon.py` redraws `launcher/prism.ico`.
+
+### macOS
+
+From the repository directory:
+
+```sh
+python3 launcher/make_macos_app.py                              # /Applications/prism-local.app
+python3 launcher/make_macos_app.py --applications ~/Applications # user Applications folder
+```
+
+- The installer uses macOS `osacompile`, `sips`, and `codesign` to create an app with the
+  existing Prism icon. It registers the app with Launch Services and imports its Spotlight metadata.
+  No additional Python package is needed.
+- The app uses the Python that ran the installer and the repository in its current location.
+  Keep an external drive connected if the repository is on that drive. Run the installer
+  again after moving the repository or replacing Python. Updates from `git pull` are loaded
+  when the Home and editor servers restart.
+- Running the installer again updates its existing app. It refuses to replace an app with
+  a different bundle identifier or a symbolic link.
+- The app adds the usual Homebrew, TeX Live and user CLI folders to `PATH`. Provider settings
+  and project data remain in the locations listed above.
+- To remove the launcher, move `prism-local.app` to the Trash. This keeps the repository and
+  your papers. Closing the last Home page stops its server as described above.
 
 ### Linux
 
@@ -638,7 +672,7 @@ python launcher/prism_launcher.pyw [project | --home] [--browser window|app|defa
 bin/prism-local            command-line launcher
 bin/prism-home             command-line launcher for the Home page
 launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1 (Windows),
-                           make_desktop_entry.py (Linux menu entries), icon
+                           make_desktop_entry.py (Linux), make_macos_app.py (macOS), icon
 prism_local/server.py      HTTP server: files, SyncTeX, idle exit
 prism_local/build.py       builds: engine choice, bibliographies, indexes, reruns, log parsing
 prism_local/proc.py        starting and stopping programs (process trees on Windows)
