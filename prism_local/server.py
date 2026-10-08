@@ -463,6 +463,12 @@ def sync_upload(rel: str) -> None:
     except (OSError, subprocess.SubprocessError, RuntimeError) as e:
         done("failed", f"git: {str(e)[-300:]}")
 
+# Your snippets (static/snippets.js): one file for every project. JavaScript, run by the
+# editor page, so it lives with your settings and not in a project co-authors share.
+def snippets_file() -> Path:
+    return Path(os.environ.get("PRISM_SNIPPETS") or Path.home() / ".prism-local" / "snippets.js")
+
+
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
 # command line, on the same port, and the page reloads.
@@ -828,6 +834,9 @@ class Handler(httpbase.Handler):
             return self._json(AGENT.info())
         if path == "/api/symbols":
             return self._json(symbols())
+        if path == "/api/snippets":
+            f = snippets_file()
+            return self._json({"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None})
         if path == "/api/file":
             p = resolve(q.get("path", ""))
             return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
@@ -878,6 +887,11 @@ class Handler(httpbase.Handler):
             return self._json(GITSYNC.status())
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
+        if path == "/api/snippets":
+            f = snippets_file()
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_text(str(body.get("content") or ""), encoding="utf-8")
+            return self._json({"path": str(f)})
         if path == "/api/file":
             r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
                                 bool(body.get("force")))

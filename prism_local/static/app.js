@@ -50,9 +50,15 @@ const cm = CodeMirror($("#editor"), {
     "Cmd-J": () => forwardSync(), "Ctrl-J": () => forwardSync(),
     "Ctrl-Space": (ed) => showCompletions(ed, true),
     "Cmd-/": "toggleTexComment", "Ctrl-/": "toggleTexComment",
-    Tab: (ed) => ed.somethingSelected() ? ed.indentSelection("add") : ed.replaceSelection("  "),
+    // Snippets first (see below): expand, next field, out of a bracket, & in a matrix row.
+    Tab: () => SNIP.tab(indentOrSpaces),
+    "Shift-Tab": () => SNIP.shiftTab(),
+    Enter: () => SNIP.enter(),
+    "Shift-Enter": "newlineAndIndent",
+    Esc: () => SNIP.escape(),
   },
 });
+function indentOrSpaces(ed) { return ed.somethingSelected() ? ed.indentSelection("add") : ed.replaceSelection("  "); }
 CodeMirror.commands.toggleTexComment = (ed) => {
   const from = ed.getCursor("from").line, to = ed.getCursor("to").line;
   const lines = []; for (let l = from; l <= to; l++) lines.push(ed.getLine(l));
@@ -65,8 +71,93 @@ CodeMirror.commands.toggleTexComment = (ed) => {
     }
   });
 };
+/* ------------------------------------------------------------------ snippets */
+// Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours are in
+// ~/.prism-local/snippets.js, edited from the Snippets menu.
+const SNIP = Snippets.attach(cm, {
+  enabled: () => store.get("snip.on", true),
+  fraction: () => store.get("snip.frac", true),
+  matrix: () => store.get("snip.matrix", true),
+});
+const SNIP_FILE = { path: "", content: null, error: null, count: 0 };
+
+async function loadSnippets() {
+  const r = await api("/api/snippets").catch(() => ({}));
+  SNIP_FILE.path = r.path || ""; SNIP_FILE.content = r.content ?? null;
+  try {
+    const u = Snippets.load(r.content);
+    SNIP.setUser(u.list, u.defaults);
+    SNIP_FILE.error = null; SNIP_FILE.count = u.list.length;
+  } catch (e) {
+    SNIP.setUser([], true);
+    SNIP_FILE.error = String(e.message || e); SNIP_FILE.count = 0;
+  }
+  renderSnipMenu();
+}
+function renderSnipMenu() {
+  $("#snip-on").checked = store.get("snip.on", true);
+  $("#snip-frac").checked = store.get("snip.frac", true);
+  $("#snip-matrix").checked = store.get("snip.matrix", true);
+  $("#btn-snip").classList.toggle("off", !$("#snip-on").checked);
+  $("#snip-note").textContent = SNIP_FILE.error ? `Your snippets file has an error, so only the built-in snippets work: ${SNIP_FILE.error}`
+    : SNIP_FILE.count ? `${SNIP_FILE.count} of your own, from ${SNIP_FILE.path}` : "";
+}
+function snipMenu(open) {
+  $("#snip-menu").hidden = !open;
+  $("#btn-snip").setAttribute("aria-expanded", String(open));
+}
+$("#btn-snip").onclick = (e) => { e.stopPropagation(); snipMenu($("#snip-menu").hidden); };
+$("#snip-menu").addEventListener("click", (e) => e.stopPropagation());
+document.addEventListener("click", () => snipMenu(false));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") snipMenu(false); });
+for (const [id, key] of [["#snip-on", "snip.on"], ["#snip-frac", "snip.frac"], ["#snip-matrix", "snip.matrix"]]) {
+  $(id).onchange = (e) => { store.set(key, e.target.checked); renderSnipMenu(); };
+}
+
+// The dialog shows your snippets file to edit, or every snippet (read-only).
+let snipCm = null;
+function snipDialog(title, text, editable) {
+  snipMenu(false);
+  $("#snip-dialog").hidden = false;
+  $("#snip-title").textContent = title;
+  $("#snip-path").textContent = editable ? SNIP_FILE.path : "";
+  $("#snip-save").hidden = !editable;
+  $("#snip-error").textContent = editable ? SNIP_FILE.error || "" : "";
+  if (!snipCm) snipCm = CodeMirror($("#snip-cm"), { lineNumbers: true, indentUnit: 2, tabSize: 2, mode: "text/plain" });
+  snipCm.setOption("readOnly", !editable);
+  snipCm.setValue(text);
+  snipCm.clearHistory();
+  snipCm.refresh(); snipCm.focus();
+}
+function snipClose() { $("#snip-dialog").hidden = true; cm.focus(); }
+$("#snip-edit").onclick = () => snipDialog("My snippets", SNIP_FILE.content ?? Snippets.TEMPLATE, true);
+$("#snip-list").onclick = () => {
+  let mine = [];
+  try { mine = Snippets.load(SNIP_FILE.content).list; } catch { /* the note says what is wrong */ }
+  const row = (s) => {
+    const trig = s.trigger instanceof RegExp ? "/" + s.trigger.source + "/" : String(s.trigger);
+    const repl = typeof s.replacement === "function" ? "(function)" : String(s.replacement).replace(/\n/g, "⏎").replace(/\t/g, "");
+    return `${trig.padEnd(14)} ${(s.options || "").padEnd(5)} ${repl}${s.description ? "    — " + s.description : ""}`;
+  };
+  const head = "trigger        opts  replacement\n"
+    + "(options: t text, m math, M display, n inline, A as you type, else Tab, r regex, v on a selection, w after a word boundary)\n\n";
+  snipDialog("All snippets", head + (mine.length ? "Yours\n" + mine.map(row).join("\n") + "\n\nBuilt in\n" : "")
+    + Snippets.DEFAULTS.map(row).join("\n"), false);
+};
+$("#snip-cancel").onclick = snipClose;
+$("#snip-dialog").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); snipClose(); } });
+$("#snip-save").onclick = async () => {
+  const text = snipCm.getValue();
+  try { Snippets.load(text); } catch (e) { $("#snip-error").textContent = "Not saved: " + (e.message || e); return; }
+  const r = await api("/api/snippets", { content: text });
+  if (r._status !== 200) { $("#snip-error").textContent = "Not saved: " + (r.error || r._status); return; }
+  await loadSnippets();
+  snipClose();
+  toast("Snippets saved");
+};
+
 cm.getWrapperElement().style.display = "none";
-cm.on("change", () => { const t = activeTab(); if (t) { renderTabs(); scheduleSave(t); } });
+cm.on("change",() => { const t = activeTab(); if (t) { renderTabs(); scheduleSave(t); } });
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
 
 function modeFor(path) { return path.endsWith(".md") ? "markdown" : "stex"; }
@@ -1992,6 +2083,7 @@ cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelec
   await loadConfig();
   await poll();
   await loadSymbols();
+  loadSnippets();
   const sess = store.get("session", null);
   const exists = (p) => S.files.some((f) => f.path === p);
   if (sess && sess.tabs) {

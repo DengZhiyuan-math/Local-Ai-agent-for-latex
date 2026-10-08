@@ -69,6 +69,19 @@
   <section id="editor-pane">
     <div id="editor-head">
       <div id="tabs"></div>
+      <div id="snip-box">
+        <button id="btn-snip" class="icon ghost" data-icon="bolt" aria-label="Snippets" aria-haspopup="menu" aria-expanded="false" title="Snippets: shortcuts that expand as you type (mk → $ $, @a → \alpha, x/y Tab → \frac{x}{y}); Tab jumps to the next field"></button>
+        <div id="snip-menu" class="dropdown" role="menu" hidden>
+          <div class="dd-head">Snippets</div>
+          <label class="dd-item"><input type="checkbox" id="snip-on"> Expand snippets</label>
+          <label class="dd-item" title="In math, x/ becomes \frac{x}{}"><input type="checkbox" id="snip-frac"> Auto-fraction</label>
+          <label class="dd-item" title="In align, matrix, cases …: Tab puts &amp;, Enter ends the row with \\ (Shift-Enter: plain new line)"><input type="checkbox" id="snip-matrix"> Tab &amp; and Enter \\ in rows</label>
+          <hr>
+          <button type="button" class="dd-item" id="snip-edit">Edit my snippets…</button>
+          <button type="button" class="dd-item" id="snip-list">List all snippets…</button>
+          <div class="dd-note" id="snip-note"></div>
+        </div>
+      </div>
       <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. ⌘F search · Ctrl-Space complete">PDF</button>
     </div>
     <div id="banner" hidden></div>
@@ -143,6 +156,18 @@
   </aside>
 </main>
 
+<div id="snip-dialog" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="snip-title">
+  <div class="modal-box">
+    <div class="modal-head"><b id="snip-title">My snippets</b><span id="snip-path" class="muted"></span></div>
+    <div id="snip-cm"></div>
+    <div class="modal-foot">
+      <span id="snip-error" class="err"></span>
+      <button id="snip-cancel" class="ghost">Close</button>
+      <button id="snip-save" class="primary">Save</button>
+    </div>
+  </div>
+</div>
+
 <footer id="panel" class="collapsed">
   <div id="panel-tabs">
     <button data-panel="problems" class="active">Problems <span id="problem-count" class="badge"></span></button>
@@ -173,6 +198,7 @@
 <script src="/static/vendor/foldgutter.js"></script>
 <script src="/static/texfold.js"></script>
 <script src="/static/vendor/pdf.js"></script>
+<script src="/static/snippets.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/pdfview.js"></script>
 <script src="/static/app.js"></script>

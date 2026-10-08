@@ -68,6 +68,7 @@ const ICONS = {
   arrowdown: '<path d="M12 5v14M6.5 13.5 12 19l5.5-5.5"/>',
   edit: '<path d="M5 19h3.5L19 8.5 15.5 5 5 15.5z"/><path d="m13.5 7 3.5 3.5"/>',
   move: '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M9 13.5h6M12.5 11l2.5 2.5-2.5 2.5"/>',
+  bolt: '<path d="M13.5 3.5 6 13.5h5.5l-1 7 7.5-10h-5.5z"/>',
   trash: '<path d="M5 7h14M10 7V5h4v2M7 7l1 12.5h8L17 7"/>',
   inbox: '<path d="M4 13.5 6.5 5.5h11l2.5 8v5H4z"/><path d="M4 13.5h5l1 2h4l1-2h5"/>',
 };

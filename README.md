@@ -278,10 +278,56 @@ Several co-authors can work on one repository, each with prism-local (or plain g
 trying to push, random edits by three people with and without force pushes, a folder's shared
 repository) and checks that no commit that reached the remote is ever lost.
 
+## Snippets
+
+Short triggers expand into LaTeX as you type, after
+[obsidian-latex-suite](https://github.com/artisticat1/obsidian-latex-suite). In math:
+
+| You type | You get |
+|---|---|
+| `@a` `@b` `@G` …, or `alpha`, `theta`, `infty`, `partial` … | `\alpha` `\beta` `\Gamma` …, `\alpha`, `\theta`, `\infty`, `\partial` |
+| `x2` · `xsr` · `xrd` · `xhat` · `xbar` | `x_{2}` · `x^{2}` · `x^{}` · `\hat{x}` · `\bar{x}` |
+| `1/x` Tab · `//` · `sq` | `\frac{1}{x}` · `\frac{}{}` · `\sqrt{}` |
+| `sum` · `lim` · `dint` · `par` Tab | `\sum_{i=1}^{n}` · `\lim_{n \to \infty}` · `\int_{0}^{1} \, dx` · `\frac{\partial y}{\partial x}` |
+| `<=` `!=` `->` `=>` `xx` `**` `inn` `RR` `NN` | `\leq` `\neq` `\to` `\implies` `\times` `\cdot` `\in` `\mathbb{R}` `\mathbb{N}` |
+| `lr(` · `norm` · `avg` · `pmat` · `cases` | `\left( \right)` · `\lvert \rvert` · `\langle \rangle` · a `pmatrix` · `cases` |
+| select text, then `S` `F` `U` `C` | `\sqrt{…}` `\frac{…}{}` `\underbrace{…}_{}` `\cancel{…}` |
+
+In text: `mk` gives `$ $`, `dm` gives `\[ \]`, `beg` Tab gives `\begin{…} \end{…}` (the
+name is typed once, for both). The ⚡ menu above the editor lists them all.
+
+- **Tab** jumps to the next field of the snippet (Shift-Tab back). With no snippet, it leaves
+  the bracket or the math the cursor is in, and in `align`, `matrix`, `cases` … it puts `&`.
+  There, **Enter** ends the row with `\\` (Shift-Enter: a plain new line).
+- **Ctrl-Z** right after a snippet brings back what you typed.
+- Math is found as LaTeX writes it: `$ $`, `$$ $$`, `\( \)`, `\[ \]`, `equation`, `align`,
+  `gather`, … Inside `\text{}` it is text again. Comments and the arguments of `\label`,
+  `\ref`, `\cite`, `\begin` … get no snippets, and neither does a command you type out
+  (`\sum`, `\alpha`).
+- The ⚡ menu turns snippets, auto-fraction and the `&`/`\\` keys on and off.
+
+**Your own snippets** go in `~/.prism-local/snippets.js` (⚡ → Edit my snippets): an array of
+`{trigger, replacement, options}`, in the format of obsidian-latex-suite. They come before the
+built-in ones; `{snippets: [...], defaults: false}` drops the built-in ones.
+
+| Option | Meaning |
+|---|---|
+| `t` / `m` (`M` display, `n` inline) | only in text / only in math |
+| `A` | expand as you type (otherwise on Tab) |
+| `r` | the trigger is a regular expression; `[[0]]`, `[[1]]` … in the replacement are its groups |
+| `v` | on a selection: the trigger is the key typed, `${VISUAL}` is the selection (a replacement with `${VISUAL}` is one even without `v`) |
+| `w` | only after a word boundary |
+
+In the replacement, `$0`, `$1` … are the fields Tab visits, `${1:text}` one with text in it
+(the same number twice is typed once). A replacement can be a function of the match.
+`${GREEK}`, `${SYMBOL}`, `${ACCENT}` and `${MORE_SYMBOLS}` in a trigger stand for those names. The file is
+JavaScript and runs in the editor page: write it yourself, or read before you paste.
+
 ## Keyboard
 
 | Key | Action |
 |---|---|
+| Tab / Shift-Tab | Expand a snippet, next / previous field, out of a bracket, `&` in a row |
 | ⌘S / Ctrl-S | Save now (edits are saved automatically anyway) |
 | ⌘↵ / Ctrl-Enter | Save all and compile |
 | ⌘J / Ctrl-J | Show the cursor line in the PDF |
@@ -573,7 +619,8 @@ prism-local is meant for a single user on their own machine.
   has sent a heartbeat. The presence stream is a GET, and it is refused unless it comes from
   the same origin, so other sites cannot keep the server running.
 - It reads and writes only text source files inside the project directory. Hidden directories
-  and the build directory are excluded.
+  and the build directory are excluded. The one file outside it is your snippets file
+  (`~/.prism-local/snippets.js`), which the editor page runs as JavaScript.
 - Builds allow only TeX's restricted shell escape (a few safe helpers such as makeindex), so a
   document cannot run arbitrary programs, unless `prism.json` sets `"shell_escape": true`.
 - Anyone who can reach the port can run your build commands and the agent. Do not expose
@@ -693,7 +740,7 @@ prism_local/backend_*.py   Claude Code, Codex CLI, Deep Code CLI and OpenAI-comp
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
 prism_local/selfupdate.py  updates prism-local itself from GitHub before a server starts
-prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, app.css)
+prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0)
 examples/minimal/          a small amsart project to try it on
 tests/                     python -m unittest discover -s tests
@@ -712,7 +759,8 @@ tests/                     python -m unittest discover -s tests
 ## License
 
 MIT, see [LICENSE](LICENSE). The vendored third-party libraries keep their own licenses: see
-`prism_local/static/vendor/LICENSE-*`.
+`prism_local/static/vendor/LICENSE-*`. The snippets follow the design and most of the default
+snippets of [obsidian-latex-suite](https://github.com/artisticat1/obsidian-latex-suite) (MIT).
 
 "Prism" in the name refers to the general idea of an AI-assisted LaTeX workspace. This
 project is not affiliated with OpenAI's Prism or with Anthropic.

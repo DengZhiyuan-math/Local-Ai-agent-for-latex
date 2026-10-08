@@ -449,3 +449,20 @@ pre.panel-view { font: 12px/1.45 var(--mono); white-space: pre-wrap; }
   #sidebar { display: none; } .gutter[data-resize="sidebar"] { display: none; }
   #toolbar .hint, .toggle { display: none; }
 }
+/* Snippets (snippets.js): the menu, the fields of an expanded snippet, your snippets file. */
+#snip-box { position: relative; flex: none; }
+#snip-box .dropdown { left: auto; right: 0; }
+#btn-snip { color: var(--muted); }
+#btn-snip.off { opacity: .45; }
+.cm-snippet-stop { background: var(--sel); border-radius: 2px; }
+.modal { position: fixed; inset: 0; z-index: 100; display: flex; align-items: center; justify-content: center; background: rgba(0, 0, 0, .35); }
+.modal[hidden] { display: none; }
+.modal-box { display: flex; flex-direction: column; width: min(860px, calc(100vw - 32px)); height: min(640px, calc(100vh - 32px));
+  background: var(--panel); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 36px rgba(0, 0, 0, .25); overflow: hidden; }
+.modal-head, .modal-foot { display: flex; align-items: center; gap: 10px; padding: 8px 12px; flex: none; }
+.modal-head { border-bottom: 1px solid var(--border); }
+.modal-head .muted { color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.modal-foot { border-top: 1px solid var(--border); justify-content: flex-end; }
+.modal-foot .err { color: var(--err); margin-right: auto; font-size: 12px; white-space: pre-wrap; }
+#snip-cm { flex: 1; min-height: 0; }
+#snip-cm .CodeMirror { height: 100%; }
