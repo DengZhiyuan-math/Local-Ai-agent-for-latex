@@ -17,9 +17,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backends import SYSTEM_APPEND, CliBackend, Job, find_bin
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, CliBackend, Job, find_bin
 
 SANDBOX = {"edit": "workspace-write", "ask": "read-only"}
+
+CODEX_FILE_TOOL_RULE = """\
+- Use Codex's native tools. Read and search project files with read-only shell commands
+  (exec_command or shell_command); edit files with apply_patch in Edit mode.
+  Do not use MCP resource discovery to find local project files.
+  Do not use the shell to change or delete files, or to compile.
+"""
 
 
 def codex_bin() -> str | None:
@@ -64,13 +71,14 @@ class Codex(CliBackend):
             cmd += ["-m", job.model]
         if job.effort:
             cmd += ["-c", f"model_reasoning_effort={job.effort}"]
-        prompt = job.prompt
         if job.session_id:
             cmd += ["resume", job.session_id]
-        else:
-            # Codex has no flag to add to its system prompt; the first message carries it
-            # and the resumed conversation keeps it.
-            prompt = f"[Instructions from the editor]\n{SYSTEM_APPEND}\n[Message]\n{prompt}"
+        # Codex has no append-system-prompt flag. Refresh the editor instructions on
+        # every turn so resumed chats also replace an earlier Claude-only tool rule.
+        instructions = SYSTEM_APPEND.replace(FILE_TOOL_RULE, CODEX_FILE_TOOL_RULE)
+        prompt = ("[Instructions from the editor for this turn]\n"
+                  "These instructions replace earlier editor instructions.\n"
+                  f"{instructions}\n[Message]\n{job.prompt}")
         return cmd + ["-"], prompt
 
     def handle(self, d: dict, job: Job, st: dict) -> None:

@@ -454,6 +454,8 @@ setx DEEPSEEK_API_KEY "sk-..."
 conversation. Codex reads your `AGENTS.md`. `/effort` sets `model_reasoning_effort`
 (`minimal` … `xhigh`). Codex cannot be limited to single files, so with @-mentions prism-local
 **undoes any change it made outside the mentioned files** when the turn ends, and says so.
+Codex reads and searches files with its native shell tools and edits with `apply_patch`.
+The editor sends these tool instructions on every turn, including resumed conversations.
 
 **Deep Code (DeepSeek's terminal agent).** [Deep Code](https://github.com/lessweb/deepcode-cli)
 is the CLI that DeepSeek's documentation lists for agents. Each message runs

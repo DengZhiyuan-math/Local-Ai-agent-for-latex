@@ -54,6 +54,11 @@ from typing import Callable
 from proc import NO_WINDOW, TREE, kill_tree  # noqa: F401 — re-exported
 
 
+FILE_TOOL_RULE = """\
+- Read, search and change files with your file tools (Read, Grep, Glob, Edit,
+  Write), not shell commands such as cat, sed, python or rm.
+"""
+
 SYSTEM_APPEND = """\
 You are being driven from prism-local, a local LaTeX web editor, not the
 terminal. The author sees your text in a chat panel next to the LaTeX source
@@ -69,8 +74,7 @@ and the compiled PDF.
   \\end{equation} (or equation*, align, align*, gather, multline), never the
   shortcuts \\[ ... \\] or $$ ... $$. Use \\begin{...} environments rather than
   shortcuts elsewhere too.
-- Read, search and change files with your file tools (Read, Grep, Glob, Edit,
-  Write), not shell commands such as cat, sed, python or rm.
+""" + FILE_TOOL_RULE + """\
 - To compile, use the compile tool when you have it: it runs the editor's own
   build (the author's Compile button) and returns the errors with file:line.
   Compile after substantial edits and fix the errors your changes caused.

@@ -312,6 +312,28 @@ class CodexBackend(unittest.TestCase):
     def setUp(self):
         self.codex = Codex("codex", {"bin": "codex"})
 
+    def test_native_file_tools_in_both_modes(self):
+        # Codex reads files through its shell, not Claude's Read/Grep tools. A
+        # blanket shell ban leaves it querying MCP resources and changing nothing.
+        for mode in ("ask", "edit"):
+            with self.subTest(mode=mode):
+                cmd, prompt = self.codex.command(job_for(mode=mode, prompt="Read defs.tex"))
+                self.assertNotIn("not shell commands such as", prompt)
+                self.assertIn("read-only shell commands", prompt)
+                self.assertIn("apply_patch", prompt)
+                self.assertIn("Never commit, push", prompt)
+                self.assertEqual(cmd[cmd.index("--sandbox") + 1],
+                                 "read-only" if mode == "ask" else "workspace-write")
+
+    def test_resumed_turn_refreshes_tool_rules_and_scope(self):
+        message = "Read defs.tex\n\n[Scope for this turn] You may change ONLY main.tex."
+        cmd, prompt = self.codex.command(job_for(mode="edit", prompt=message, session_id="t-old"))
+        self.assertEqual(cmd[-3:], ["resume", "t-old", "-"])
+        self.assertIn("replace earlier editor instructions", prompt)
+        self.assertIn("read-only shell commands", prompt)
+        self.assertNotIn("not shell commands such as", prompt)
+        self.assertTrue(prompt.endswith(message), "the current scope must remain last")
+
     def test_command(self):
         cmd, prompt = self.codex.command(job_for(mode="ask", prompt="hi", model="gpt-5-codex",
                                                  effort="high"))
@@ -323,7 +345,7 @@ class CodexBackend(unittest.TestCase):
         cmd, prompt = self.codex.command(job_for(mode="edit", prompt="more", session_id="t-1"))
         self.assertEqual(cmd[cmd.index("--sandbox") + 1], "workspace-write")
         self.assertEqual(cmd[-3:], ["resume", "t-1", "-"])
-        self.assertEqual(prompt, "more")
+        self.assertTrue(prompt.endswith("[Message]\nmore"))
 
     def test_events(self):
         root = Path(tempfile.gettempdir()).resolve()
