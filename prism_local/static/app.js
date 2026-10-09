@@ -1196,15 +1196,74 @@ $("#btn-chat").onclick = () => chatHidden(!$("#chat").classList.contains("hidden
 $("#chat-mode").value = store.get("chat.mode", "edit");
 $("#chat-mode").onchange = (e) => store.set("chat.mode", e.target.value);
 
-// Minimal, safe rendering: escape first, then code fences, inline code, bold, file:line links.
+// The agent's replies: Markdown (marked: tables, lists, headings, links) with TeX math
+// (KaTeX: $…$, \(…\), $$…$$, \[…\]). Raw HTML in a reply is shown as text, links open only
+// http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
+const FILE_REF = /((?:[\w.-]+\/)*[\w.-]+\.(?:tex|bib|md))(?::(\d+))?/g;
+function texHtml(tex, display) {
+  try { return katex.renderToString(tex, { displayMode: display, throwOnError: false }); }
+  catch { return esc(tex); }
+}
+const MD = typeof marked === "undefined" || typeof katex === "undefined" ? null
+  : new marked.Marked({ gfm: true, breaks: true }).use({
+    renderer: {
+      // A line that starts with a tag: text, and the rest of it still Markdown.
+      html: (html, block) => block ? `<p>${MD.parseInline(html.trim())}</p>` : esc(html),
+      link: (href, title, text) => /^(https?:|mailto:)/i.test(href || "")
+        ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ""}>${text}</a>` : text,
+      image: (href, title, text) => esc(text || ""),
+    },
+    extensions: [{
+      name: "mathBlock", level: "block",
+      start(src) { const m = src.match(/^ {0,3}(?:\$\$|\\\[)/m); return m ? m.index : undefined; },
+      tokenizer(src) {
+        const m = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/.exec(src);
+        if (m) return { type: "mathBlock", raw: m[0], text: (m[1] ?? m[2]).trim() };
+      },
+      renderer: (t) => texHtml(t.text, true),
+    }, {
+      name: "mathInline", level: "inline",
+      start(src) { const i = src.search(/\$|\\\(|\\\[/); return i < 0 ? undefined : i; },
+      tokenizer(src) {
+        let m = /^\$\$([\s\S]+?)\$\$/.exec(src) || /^\\\[([\s\S]+?)\\\]/.exec(src);
+        if (m) return { type: "mathInline", raw: m[0], text: m[1].trim(), display: true };
+        // $x$, but not "$5 and $6": no space just inside, no digit right after.
+        m = /^\\\(([\s\S]+?)\\\)/.exec(src) || /^\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/.exec(src);
+        if (m) return { type: "mathInline", raw: m[0], text: m[1], display: false };
+      },
+      renderer: (t) => texHtml(t.text, t.display),
+    }],
+  });
+function linkFiles(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement.closest("pre, a, .katex") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes = [];
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  for (const n of nodes) {
+    const h = esc(n.data).replace(FILE_REF, (m, f, ln) => {
+      const hit = S.files.find((x) => x.path === f || x.path.endsWith("/" + f));
+      return hit ? `<a class="src" data-file="${esc(hit.path)}" data-line="${ln || ""}">${m}</a>` : m;
+    });
+    if (h !== esc(n.data)) { const t = document.createElement("template"); t.innerHTML = h; n.replaceWith(t.content); }
+  }
+}
 function renderMd(text) {
+  if (!MD) return renderPlain(text);
+  const box = document.createElement("div");
+  box.innerHTML = MD.parse(String(text));
+  linkFiles(box);
+  return box.innerHTML;
+}
+// Without the vendored libraries: escape first, then code fences, inline code, bold, file links.
+function renderPlain(text) {
   const parts = String(text).split(/```[a-zA-Z]*\n?/);
   return parts.map((p, i) => {
     if (i % 2) return `<pre>${esc(p.replace(/\n$/, ""))}</pre>`;
     let h = esc(p);
     h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>");
     h = h.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
-    h = h.replace(/((?:[\w.-]+\/)*[\w.-]+\.(?:tex|bib|md))(?::(\d+))?/g, (m, f, ln) => {
+    h = h.replace(FILE_REF, (m, f, ln) => {
       const hit = S.files.find((x) => x.path === f || x.path.endsWith("/" + f));
       return hit ? `<a class="src" data-file="${esc(hit.path)}" data-line="${ln || ""}">${m}</a>` : m;
     });
