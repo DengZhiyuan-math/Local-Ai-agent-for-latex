@@ -36,6 +36,7 @@ class BrowserCommand(unittest.TestCase):
 class MacBrowser(unittest.TestCase):
     def test_repeated_home_launch_selects_existing_page(self):
         with mock.patch.object(launcher.sys, "platform", "darwin"), \
+                mock.patch.object(launcher, "WIN", False), \
                 mock.patch.object(launcher.sys, "argv", [str(PATH), "--home", "--browser", "default"]), \
                 mock.patch.object(launcher, "ensure_server", return_value={"url": URL, "started": False}), \
                 mock.patch.object(launcher.subprocess, "run", side_effect=[
@@ -57,6 +58,7 @@ class MacBrowser(unittest.TestCase):
                         [OSError("osascript unavailable")]):
             with self.subTest(replies=replies), \
                     mock.patch.object(launcher.sys, "platform", "darwin"), \
+                    mock.patch.object(launcher, "WIN", False), \
                     mock.patch.object(launcher.subprocess, "run", side_effect=replies), \
                     mock.patch.object(launcher, "chromium_browser", return_value=None), \
                     mock.patch.object(launcher.webbrowser, "open") as opened:
@@ -65,6 +67,7 @@ class MacBrowser(unittest.TestCase):
 
     def test_none_mode_does_not_access_browser(self):
         with mock.patch.object(launcher.sys, "platform", "darwin"), \
+                mock.patch.object(launcher, "WIN", False), \
                 mock.patch.object(launcher.subprocess, "run") as native, \
                 mock.patch.object(launcher.webbrowser, "open") as opened:
             launcher.open_page(URL, "none")
