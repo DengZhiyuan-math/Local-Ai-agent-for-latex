@@ -33,6 +33,45 @@ class BrowserCommand(unittest.TestCase):
         self.assertIn('default="window"', PATH.read_text(encoding="utf-8"))
 
 
+class MacBrowser(unittest.TestCase):
+    def test_repeated_home_launch_selects_existing_page(self):
+        with mock.patch.object(launcher.sys, "platform", "darwin"), \
+                mock.patch.object(launcher.sys, "argv", [str(PATH), "--home", "--browser", "default"]), \
+                mock.patch.object(launcher, "ensure_server", return_value={"url": URL, "started": False}), \
+                mock.patch.object(launcher.subprocess, "run", side_effect=[
+                    mock.Mock(returncode=0, stdout="com.google.Chrome\n"),
+                    mock.Mock(returncode=0, stdout="true\n"),
+                ] * 2), \
+                mock.patch.object(launcher, "chromium_browser", return_value=None), \
+                mock.patch.object(launcher.webbrowser, "open") as opened:
+            self.assertEqual(launcher.main(), 0)
+            self.assertEqual(launcher.main(), 0)
+        opened.assert_not_called()
+
+    def test_unavailable_page_opens_in_default_browser(self):
+        for replies in ([mock.Mock(returncode=0, stdout="com.apple.Safari"),
+                         mock.Mock(returncode=0, stdout="false")],
+                        [mock.Mock(returncode=0, stdout="org.mozilla.firefox")],
+                        [mock.Mock(returncode=0, stdout="com.google.Chrome"),
+                         mock.Mock(returncode=1, stdout="")],
+                        [OSError("osascript unavailable")]):
+            with self.subTest(replies=replies), \
+                    mock.patch.object(launcher.sys, "platform", "darwin"), \
+                    mock.patch.object(launcher.subprocess, "run", side_effect=replies), \
+                    mock.patch.object(launcher, "chromium_browser", return_value=None), \
+                    mock.patch.object(launcher.webbrowser, "open") as opened:
+                launcher.open_page(URL, "default")
+                opened.assert_called_once_with(URL)
+
+    def test_none_mode_does_not_access_browser(self):
+        with mock.patch.object(launcher.sys, "platform", "darwin"), \
+                mock.patch.object(launcher.subprocess, "run") as native, \
+                mock.patch.object(launcher.webbrowser, "open") as opened:
+            launcher.open_page(URL, "none")
+        native.assert_not_called()
+        opened.assert_not_called()
+
+
 class LinuxBrowser(unittest.TestCase):
     """Which browser the launcher uses on Linux (tested on any system with mocks)."""
 

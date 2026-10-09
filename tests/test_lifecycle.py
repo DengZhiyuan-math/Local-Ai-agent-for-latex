@@ -97,6 +97,89 @@ class ServerLifecycle(unittest.TestCase):
         shutil.copytree(PROJECT, root)
         return root
 
+    def test_compile_active_document_and_follow_its_pdf(self):
+        root = self.copy_project()
+        # A deterministic custom builder checks routing independently of installed TeX.
+        script = ("import pathlib,sys; p=pathlib.Path(sys.argv[1]); "
+                  "out=pathlib.Path(sys.argv[2]); out.mkdir(exist_ok=True); "
+                  "sys.exit(1) if p.stem=='broken' else "
+                  "(out/(p.stem+'.pdf')).write_bytes(p.name.encode())")
+        config = json.dumps({"main": "main.tex", "build": {
+            "draft": [sys.executable, "-c", script, "{main}", "{outdir}"]}})
+        (root / "prism.json").write_text(config, encoding="utf-8")
+        (root / "中文稿.tex").write_text(r"\documentclass{ctexart}", encoding="utf-8")
+        (root / "chapter.tex").write_text("% \\documentclass{article}\n\\section{Chapter}", encoding="utf-8")
+        (root / "broken.tex").write_text(r"\documentclass{article}", encoding="utf-8")
+        url = self.start("30,1,30", project=root)
+        headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+
+        def compile(active=None):
+            return request(url, "/api/build", json.dumps({"mode": "draft", "active": active}).encode(), headers)
+
+        def pdf():
+            with HTTP.open(url + "pdf", timeout=5) as response:
+                return response.read()
+
+        for active, main in ((None, "main.tex"), ("中文稿.tex", "中文稿.tex"),
+                             ("chapter.tex", "main.tex"), ("refs.bib", "main.tex")):
+            status, result = compile(active)
+            self.assertEqual(status, 200, result)
+            self.assertEqual((result["exit"], result["main"]), (0, main))
+            self.assertEqual(pdf(), main.encode())
+            self.assertEqual(request(url, "/api/pdfstat")[1]["main"], main)
+            self.assertEqual(request(url, "/api/tree")[1]["pdf_main"], main)
+            self.assertEqual(request(url, "/api/config")[1]["main"], "main.tex")
+            self.assertEqual(request(url, "/pdf?main=another.tex")[0], 409)
+        status, result = compile("broken.tex")
+        self.assertEqual((status, result["exit"], result["main"], result["pdf_mtime"]),
+                         (200, 1, "broken.tex", None))
+        self.assertEqual(request(url, "/api/pdfstat")[1], {"main": "broken.tex", "mtime": None})
+        self.assertEqual(request(url, "/pdf")[0], 404)
+        for bad in ("../outside.tex", "/tmp/outside.tex", "build/main.tex", 123):
+            self.assertEqual(compile(bad)[0], 400, bad)
+        self.assertEqual(compile("missing.tex")[0], 404)
+        self.assertEqual((root / "prism.json").read_text(encoding="utf-8"), config)
+
+    def test_import_files_through_http_and_open_assets(self):
+        import base64
+        root = self.copy_project()
+        original = (root / "main.tex").read_bytes()
+        url = self.start("30,1,30", project=root)
+        headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+
+        def upload(name, data, destination="project"):
+            return request(url, "/api/upload", json.dumps({"name": name,
+                           "data": base64.b64encode(data).decode(), "destination": destination}).encode(), headers)
+
+        code, imported = upload("main.tex", b"new\r\n")
+        self.assertEqual((code, imported["path"]), (200, "main-2.tex"))
+        self.assertEqual((root / "main.tex").read_bytes(), original)
+        self.assertEqual((root / "main-2.tex").read_bytes(), b"new\r\n")
+        self.assertNotIn("sync", imported, "project imports use normal autosave sync")
+        for name, data, ctype in (("figure.png", b"\x00\xffPNG", "image/png"),
+                                  ("reference.pdf", b"%PDF-1.4", "application/pdf"),
+                                  ("page.html", b"<script>window.test=true</script>", "application/octet-stream")):
+            self.assertEqual(upload(name, data)[0], 200)
+            with HTTP.open(url + "/api/asset?path=" + name, timeout=5) as response:
+                self.assertEqual(response.read(), data)
+                self.assertEqual(response.headers["Content-Type"], ctype)
+                if name.endswith(".html"):
+                    self.assertTrue(response.headers["Content-Disposition"].startswith("attachment;"))
+        files = {f["path"]: f for f in request(url, "/api/tree")[1]["files"]}
+        self.assertTrue(files["main-2.tex"]["editable"])
+        self.assertFalse(files["figure.png"]["editable"])
+        self.assertFalse(files["reference.pdf"]["editable"])
+        self.assertEqual(request(url, "/api/file?path=figure.png")[0], 400)
+        for path in ("../outside.png", ".git/config", "build/main.pdf"):
+            self.assertEqual(request(url, "/api/asset?path=" + path)[0], 400)
+        self.assertEqual(request(url, "/api/asset?path=figure.png",
+                                 headers={"Sec-Fetch-Site": "cross-site"})[0], 403)
+        self.assertEqual(upload("bad.txt", b"bad", destination="outside")[0], 400)
+        self.assertFalse((root / "bad.txt").exists())
+        self.assertEqual(request(url, "/api/upload", b'{"name":"bad.txt","data":"!"}', headers)[0], 400)
+        self.assertEqual(upload("chat.txt", b"attached", destination="attachment")[1]["path"],
+                         "prism-uploads/chat.txt")
+
     def test_rename_only_the_name(self):
         root = self.copy_project()
         url = self.start("30,1,30", project=root)

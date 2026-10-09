@@ -509,7 +509,8 @@ async function drawThumb(p) {
   thumbs.set(key, null);
   try {
     const data = await fetch(`/api/pdf?id=${encodeURIComponent(p.id)}&t=${p.pdf_mtime}`).then((r) => r.ok ? r.arrayBuffer() : Promise.reject());
-    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true }).promise;   // see pdfview.js
+    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true,
+      cMapUrl: "/static/vendor/cmaps/", cMapPacked: true }).promise;   // see pdfview.js
     const page = await doc.getPage(1);
     const base = page.getViewport({ scale: 1 });
     const vp = page.getViewport({ scale: (300 / base.width) * Math.min(2, window.devicePixelRatio || 1) });

@@ -10,7 +10,7 @@ const RENDER_PX = 600, KEEP_PX = 2400;
 const PAGE_PAD = 12, PAGE_GAP = 12;          // #pdf-pages padding and gap (app.css)
 
 const PV = {
-  pdf: null, mtime: null, scale: 0, eff: 1, views: [], scaleKey: "scale",
+  pdf: null, mtime: null, main: null, scale: 0, eff: 1, views: [], scaleKey: "scale",
   onInverse: null,              // ({page, x, y}) in PDF points from the top-left
   observer: null, keeper: null, seq: 0, gen: 0,
   back: [],                     // scroll positions to return to after following a link
@@ -271,17 +271,30 @@ const PV = {
     if (this.find.hits.some((h) => this.views[h.idx] === pv)) this.drawHits();   // measure them now
   },
 
-  async load(mtime) {
+  async load(mtime, main) {
     const seq = ++this.seq;
+    if (main !== this.main || !mtime) {
+      const old = this.pdf;
+      this.pdf = null; this.mtime = null; this.main = main; this.gen++;
+      this.observer?.disconnect(); this.keeper?.disconnect();
+      this.views.forEach((v) => this.unrender(v)); this.views = [];
+      this.text = new Map(); Object.assign(this.find, { hits: [], cur: -1, index: null }); this.back = [];
+      $("#pdf-pages").replaceChildren(); $("#pdf-empty").hidden = false;
+      $("#pdf-scroll").scrollTop = 0; $("#page-label").textContent = "";
+      $("#pdf-outline").replaceChildren(); $("#pdf-find .count").textContent = ""; $("#pdf-back").hidden = true;
+      if (old) old.destroy();
+    }
+    if (!mtime) return;
     let data;
     try {
-      const res = await fetch("/pdf?t=" + mtime);
+      const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""));
       if (!res.ok) return;
       data = new Uint8Array(await res.arrayBuffer());
     } catch { return; }
     // disableFontFace: draw glyphs as paths. Through the browser's fonts, symbols of TeX's
     // Type 1 fonts (the minus and the equals sign of CMSY/CMR) go missing.
-    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true }).promise.catch(() => null);
+    const doc = await pdfjsLib.getDocument({ data, disableFontFace: true,
+      cMapUrl: "/static/vendor/cmaps/", cMapPacked: true }).promise.catch(() => null);
     if (!doc) return;
     if (seq !== this.seq) { doc.destroy(); return; }       // a newer build's PDF is on its way
     const old = this.pdf;

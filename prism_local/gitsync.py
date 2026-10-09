@@ -861,10 +861,13 @@ class GitSync:
         """After an agent turn (or its Undo): commit exactly the files it changed."""
         if not self.active() or not paths:
             return
+        # Undo snapshots include ignored files and build output; commits use the
+        # same source-file policy as autosave, restricted to this turn's paths.
+        changed = {self.rel(p) for p in paths}
         first = next((ln.strip() for ln in prompt.splitlines()
                       if ln.strip() and not ln.startswith("[")), "") or "(no message)"
         first = first if len(first) <= 72 else first[:71] + "…"
-        self._safe(lambda: self.commit([self.rel(p) for p in paths], f"Agent: {first}"))
+        self._safe(lambda: self.commit([p for p in self.changes() if p in changed], f"Agent: {first}"))
 
     def _safe(self, fn) -> None:
         try:

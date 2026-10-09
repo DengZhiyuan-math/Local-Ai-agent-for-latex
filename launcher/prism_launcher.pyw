@@ -4,7 +4,7 @@
     pythonw launcher/prism_launcher.pyw PROJECT_DIR [--browser window|app|default|none] [--port N]
     pythonw launcher/prism_launcher.pyw --home      [--browser window|app|default|none]
 
-1. If prism-local already runs for PROJECT_DIR, open another page on it.
+1. If prism-local already runs for PROJECT_DIR, reuse that server.
 2. Otherwise start prism-local with --exit-when-idle, wait until it answers,
    and open the page (by default in a new Chrome/Edge/Chromium window of its
    own, where the pop-out PDF opens as a second tab).
@@ -13,6 +13,7 @@
 
 --home (or no PROJECT_DIR) does the same for the Home page (prism_local/hub.py),
 which lists your projects and opens each one in its own prism-local server.
+On macOS, default browser mode selects an existing Chrome or Safari tab when available.
 
 Run it with pythonw on Windows so no console window appears; on Linux the
 desktop entries of make_desktop_entry.py run it with python3. The server's
@@ -158,8 +159,59 @@ def browser_command(url: str, mode: str, exe: str | None) -> list[str] | None:
     return [exe, "--new-window", url] if mode == "window" else [exe, f"--app={url}"]
 
 
+def macos_focus_page(url: str) -> bool:
+    """Select the existing page through the default browser's native scripting API."""
+    lookup = '''use framework "AppKit"
+use scripting additions
+on run argv
+    set targetURL to current application's NSURL's URLWithString:(item 1 of argv)
+    set appURL to current application's NSWorkspace's sharedWorkspace()'s URLForApplicationToOpenURL:targetURL
+    if appURL is missing value then return ""
+    return (current application's NSBundle's bundleWithURL:appURL)'s bundleIdentifier() as text
+end run'''
+    try:
+        r = subprocess.run(["/usr/bin/osascript", "-e", lookup, url], capture_output=True,
+                           text=True, timeout=10)
+        browser = r.stdout.strip() if r.returncode == 0 else ""
+        if browser == "com.google.Chrome":
+            select = "set active tab index of browserWindow to tabIndex"
+            restore = "set minimized of browserWindow to false"
+        elif browser == "com.apple.Safari":
+            select = "set current tab of browserWindow to tab tabIndex of browserWindow"
+            restore = "set miniaturized of browserWindow to false"
+        else:
+            return False
+        # Pass URLs as argv, not source. Only select a matching page; never reload it.
+        script = f'''on run argv
+    set targetURL to item 1 of argv
+    if application id "{browser}" is not running then return false
+    tell application id "{browser}"
+        repeat with browserWindow in windows
+            repeat with tabIndex from 1 to count of tabs of browserWindow
+                set tabURL to URL of tab tabIndex of browserWindow
+                if tabURL is targetURL or tabURL starts with (targetURL & "?") or tabURL starts with (targetURL & "#") then
+                    {select}
+                    {restore}
+                    set index of browserWindow to 1
+                    activate
+                    return true
+                end if
+            end repeat
+        end repeat
+    end tell
+    return false
+end run'''
+        r = subprocess.run(["/usr/bin/osascript", "-e", script, url], capture_output=True,
+                           text=True, timeout=10)
+        return r.returncode == 0 and r.stdout.strip() == "true"
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def open_page(url: str, mode: str) -> None:
     if mode == "none":
+        return
+    if sys.platform == "darwin" and mode == "default" and macos_focus_page(url):
         return
     cmd = browser_command(url, mode, chromium_browser())
     if cmd:

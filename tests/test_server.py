@@ -55,6 +55,17 @@ class Config(unittest.TestCase):
 
 
 class Files(unittest.TestCase):
+    def test_tree_lists_assets_without_reading_them_as_source(self):
+        project({"main.tex": "\\section{Introduction}", "figure.png": "",
+                 "reference.pdf": "", ".env": "secret", "build/output.pdf": ""})
+        self.assertEqual(set(server.list_files(editable_only=False)),
+                         {"main.tex", "figure.png", "reference.pdf"})
+        self.assertEqual(server.list_files(), ["main.tex"])
+        self.assertEqual(server.symbols()["outline"][0]["title"], "Introduction")
+        for bad in (".env", "build/output.pdf", "../outside.png", ".git/config"):
+            with self.assertRaises(ValueError, msg=bad):
+                server.resolve(bad, editable_only=False)
+
     def test_only_editable_files_inside_the_project(self):
         root = project({"main.tex": "", "fig.tikz": "", "build/main.log": "", "build/x.tex": "",
                         ".git/config": "", "notes/.hidden/x.tex": "", "img.png": ""})
@@ -234,6 +245,18 @@ class SyncTeXGeneratedFiles(unittest.TestCase):
     def test_contents_go_to_the_nearest_source_line(self):
         self.assertEqual(self.sync.inverse(2, 100, 100), {"file": "main.tex", "line": 3})
 
+    def test_switch_document_even_when_synctex_timestamps_match(self):
+        import gzip
+        out = server.ROOT / server.CFG.outdir
+        for main in ("main.tex", "other.tex"):
+            path = out / (Path(main).stem + ".synctex.gz")
+            with gzip.open(path, "wt", encoding="utf-8") as stream:
+                stream.write(f"Input:1:{main}\n")
+            os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+            server.CFG = server.Config(server.ROOT, main=main)
+            self.assertTrue(self.sync.load())
+            self.assertEqual(self.sync.inputs, {1: main})
+
 
 class Uploads(unittest.TestCase):
     """Files added to an agent message are saved under prism-uploads/."""
@@ -254,6 +277,39 @@ class Uploads(unittest.TestCase):
         self.assertEqual((root / "prism-uploads" / "n-2.pdf").read_bytes(), b"two")
         with self.assertRaises(ValueError):
             server.save_upload("big.bin", b"0" * (server.MAX_UPLOAD + 1))
+
+    def test_project_import_preserves_existing_files_and_bytes(self):
+        root = project({"main.tex": "original", "folder.txt/keep.txt": "keep"})
+        self.assertEqual(server.save_upload("main.tex", b"original", folder=""), "main.tex")
+        self.assertEqual(server.save_upload("main.tex", b"new\r\n", folder=""), "main-2.tex")
+        self.assertEqual((root / "main.tex").read_bytes(), b"original")
+        self.assertEqual((root / "main-2.tex").read_bytes(), b"new\r\n")
+        self.assertEqual(server.save_upload("folder.txt", b"file", folder=""), "folder-2.txt")
+        self.assertEqual(server.save_upload("../figure.png", b"\x00\xffPNG", folder=""), "figure.png")
+        self.assertEqual((root / "figure.png").read_bytes(), b"\x00\xffPNG")
+
+    @unittest.skipIf(os.name == "nt", "needs symlinks")
+    def test_upload_cannot_follow_a_link_outside_the_project(self):
+        root = project({})
+        outside = tmpdir()
+        (outside / "image.png").write_bytes(b"outside")
+        (root / "prism-uploads").symlink_to(outside, target_is_directory=True)
+        with self.assertRaises(ValueError):
+            server.save_upload("new.png", b"new")
+        (root / "image.png").symlink_to(outside / "image.png")
+        with self.assertRaises(ValueError):
+            server.save_upload("image.png", b"new", folder="")
+        self.assertEqual((outside / "image.png").read_bytes(), b"outside")
+        self.assertFalse((outside / "new.png").exists())
+
+    def test_concurrent_imports_do_not_overwrite_each_other(self):
+        from concurrent.futures import ThreadPoolExecutor
+        root = project({})
+        contents = [bytes([n]) for n in range(8)]
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            paths = list(pool.map(lambda data: server.save_upload("figure.png", data, folder=""), contents))
+        self.assertEqual(len(set(paths)), len(contents))
+        self.assertEqual([(root / p).read_bytes() for p in paths], contents)
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")

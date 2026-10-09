@@ -5,7 +5,7 @@
 /* ------------------------------------------------------------------ state */
 const S = {
   files: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
-  diagnostics: [], pdfMtime: null, building: false,
+  diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 
 /* ------------------------------------------------------------------ theme */
@@ -165,6 +165,10 @@ function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }
 function isDirty(t) { return !t.doc.isClean(t.gen); }
 
 async function openFile(path, line) {
+  if (S.files.some((f) => f.path === path && f.editable === false)) {
+    window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
+    return;
+  }
   let t = S.tabs.find((x) => x.path === path);
   if (!t) {
     const r = await api("/api/file?path=" + encodeURIComponent(path));
@@ -357,6 +361,56 @@ function renderTree() {
 }
 $("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li) openFile(li.dataset.path); });
 
+const MAX_UPLOAD_SIZE = 25 * 1024 * 1024;
+async function uploadFile(file, destination = "attachment") {
+  if (file.size > MAX_UPLOAD_SIZE) throw new Error("File is larger than 25 MB.");
+  const data = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+  const r = await api("/api/upload", { name: file.name || "pasted.png", data, destination });
+  if (r.error || !r.path) throw new Error(r.error || "Upload failed.");
+  return r;
+}
+
+// The same native file-drop handling serves the Files sidebar and agent attachments.
+function bindFileDrop(zone, overlay, add) {
+  let depth = 0;
+  const hasFiles = (e) => [...(e.dataTransfer?.types || [])].includes("Files");
+  const reset = () => { depth = 0; overlay.hidden = true; };
+  zone.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; overlay.hidden = false; });
+  zone.addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
+  zone.addEventListener("dragleave", () => { if (depth > 0 && --depth === 0) reset(); });
+  zone.addEventListener("drop", (e) => {
+    if (!hasFiles(e)) return;
+    e.preventDefault(); reset();
+    if ([...(e.dataTransfer.items || [])].some((item) => item.webkitGetAsEntry?.()?.isDirectory))
+      return toast("Drop files, not folders.");
+    const files = [...e.dataTransfer.files];
+    if (files.length) add(files);
+    else toast("Drop files, not folders.");
+  });
+  window.addEventListener("dragend", reset);
+  window.addEventListener("drop", reset);
+}
+
+async function importProjectFiles(files) {
+  let added = 0, failed = 0;
+  const status = $("#files-status");
+  for (const [i, file] of files.entries()) {
+    status.textContent = `Adding ${i + 1}/${files.length}: ${file.name}…`;
+    try { await uploadFile(file, "project"); added++; await poll(); }
+    catch (e) { failed++; toast(`${file.name}: ${e.message || e}`); }
+  }
+  status.textContent = `${added} file${added === 1 ? "" : "s"} added${failed ? ` · ${failed} failed` : ""}`;
+}
+let fileImportQueue = Promise.resolve();
+bindFileDrop($("#sidebar"), $("#files-drop"), (files) => {
+  fileImportQueue = fileImportQueue.then(() => importProjectFiles(files));
+});
+
 const KIND_ABBR = { theorem: "Thm", proposition: "Prop", lemma: "Lem", corollary: "Cor", conjecture: "Conj", claim: "Claim",
   definition: "Def", assumption: "Asm", example: "Ex", problem: "Prob", remark: "Rem", notation: "Not", hypothesis: "Hyp",
   question: "Q", exercise: "Exer", observation: "Obs", fact: "Fact", note: "Note", algorithm: "Alg", condition: "Cond" };
@@ -469,7 +523,7 @@ async function poll() {
     else if (t.conflict !== "disk") { t.conflict = "disk"; showBanner(t); }
   }
   if (anyChange || changed) loadSymbols();
-  if (r.pdf_mtime && r.pdf_mtime !== S.pdfMtime && !S.building) showPdf(r.pdf_mtime);
+  if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
   if (r.sync) renderSync(r.sync);
@@ -779,18 +833,19 @@ async function showBuild(r) {
   st.className = "status " + cls;
   st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
   // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
-  const how = [r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
+  const how = [r.main, r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
     r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
     ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
   st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
   renderProblems();
   applyDiagnostics();
   if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");
-  if (r.pdf_mtime) await showPdf(r.pdf_mtime);
+  await showPdf(r.pdf_mtime, r.main);
 }
 
 async function compile(clean = false) {
   if (S.building) return;
+  const active = S.active;
   if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
   else if (!(await saveAll())) return;
   const mode = BUILD.mode;
@@ -799,7 +854,7 @@ async function compile(clean = false) {
   st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
   setCompileButton(true);
   try {
-    const r = await api("/api/build", { mode, clean });
+    const r = await api("/api/build", { mode, clean, active });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
     await showBuild(r);
@@ -933,13 +988,13 @@ function setPopped(on) {
   // The Compile button lives on the PDF toolbar; while that is hidden, show it in the top bar.
   if (on) $("#build-status").before($("#compile-box")); else $("#pdf-toolbar").prepend($("#compile-box"));
   cm.refresh();
-  if (!on && S.pdfMtime && S.pdfMtime !== PV.mtime) PV.load(S.pdfMtime);
+  if (!on && (S.pdfMtime !== PV.mtime || S.pdfMain !== PV.main)) PV.load(S.pdfMtime, S.pdfMain);
 }
 let popWin = null;
 $("#btn-pdf-here").onclick = () => {
   if (pdfChannel) pdfChannel.postMessage({ type: "close" });
   POP.here = true; setPopped(false);
-  if (S.pdfMtime) PV.load(S.pdfMtime);
+  PV.load(S.pdfMtime, S.pdfMain);
 };
 function popOut() {
   POP.here = false;
@@ -987,10 +1042,10 @@ if (LOCKS) {
   setInterval(() => { if (POP.alive && Date.now() - POP.last > 90000) setPopped(false); }, 5000);
 }
 
-function showPdf(mtime) {
-  S.pdfMtime = mtime;
-  if (pdfChannel) pdfChannel.postMessage({ type: "pdf", mtime });
-  if (!POP.alive) return PV.load(mtime);
+function showPdf(mtime, main) {
+  S.pdfMtime = mtime; S.pdfMain = main;
+  if (pdfChannel) pdfChannel.postMessage({ type: "pdf", mtime, main });
+  if (!POP.alive) return PV.load(mtime, main);
 }
 
 /* ------------------------------------------------------------------ SyncTeX */
@@ -1197,7 +1252,7 @@ function parseMentions(text) {
   for (const m of text.matchAll(MENTION_RE)) {
     const raw = m[2].replace(/[.,;!?)]+$/, "");
     const mm = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(raw);
-    if (!mm || seen.has(raw) || !S.files.some((f) => f.path === mm[1])) continue;
+    if (!mm || seen.has(raw) || !S.files.some((f) => f.path === mm[1] && f.editable !== false)) continue;
     seen.add(raw);
     const from = mm[2] ? +mm[2] : null;
     out.push({ token: "@" + raw, file: mm[1], from, to: mm[3] ? +mm[3] : from });
@@ -1413,7 +1468,6 @@ const AV = {
 const ATT = {
   files: [],             // {id, name, size, path|null (uploading), error}
   seq: 0,
-  MAX: 25 * 1024 * 1024,
 
   render() {
     $("#chat-files").innerHTML = this.files.map((f) => `<span class="att ${f.error ? "err" : f.path ? "" : "busy"}" ${f.path ? `data-path="${esc(f.path)}"` : ""} title="${esc(f.error || f.path || "uploading…")}">`
@@ -1456,17 +1510,10 @@ const ATT = {
   async add(fileList) {
     for (const file of fileList) {
       const f = { id: ++this.seq, name: file.name || "pasted.png", size: file.size, path: null, error: null };
-      if (file.size > this.MAX) { toast(`${f.name} is larger than 25 MB.`); continue; }
+      if (file.size > MAX_UPLOAD_SIZE) { toast(`${f.name} is larger than 25 MB.`); continue; }
       this.files.push(f); this.render();
       try {
-        const data = await new Promise((res, rej) => {
-          const rd = new FileReader();
-          rd.onload = () => res(String(rd.result).split(",", 2)[1] || "");
-          rd.onerror = () => rej(rd.error);
-          rd.readAsDataURL(file);
-        });
-        const r = await api("/api/upload", { name: f.name, data });
-        if (r.error || !r.path) throw new Error(r.error || "upload failed");
+        const r = await uploadFile(file);
         f.path = r.path; f.size = r.size;
         if (r.sync) this.watch(r.path, r.sync);
       } catch (e) { f.error = String(e.message || e); }
@@ -1498,19 +1545,7 @@ $("#chat-input").addEventListener("paste", (e) => {
   ATT.add(files.map((f) => (/^image\.\w+$/.test(f.name) || !f.name ? new File([f], `pasted-${stamp}.${(f.type.split("/")[1] || "png").replace("jpeg", "jpg")}`, { type: f.type }) : f)));
 });
 // Drag files onto the agent panel.
-{
-  let depth = 0;
-  const hasFiles = (e) => [...(e.dataTransfer && e.dataTransfer.types) || []].includes("Files");
-  const chat = $("#chat");
-  chat.addEventListener("dragenter", (e) => { if (!hasFiles(e)) return; e.preventDefault(); depth++; $("#chat-drop").hidden = false; });
-  chat.addEventListener("dragover", (e) => { if (!hasFiles(e)) return; e.preventDefault(); e.dataTransfer.dropEffect = "copy"; });
-  chat.addEventListener("dragleave", (e) => { if (!hasFiles(e)) return; if (--depth <= 0) { depth = 0; $("#chat-drop").hidden = true; } });
-  chat.addEventListener("drop", (e) => {
-    if (!hasFiles(e)) return;
-    e.preventDefault(); depth = 0; $("#chat-drop").hidden = true;
-    ATT.add([...e.dataTransfer.files]);
-  });
-}
+bindFileDrop($("#chat"), $("#chat-drop"), (files) => ATT.add(files));
 
 async function chatSend() {
   if (C.job) return;
@@ -1991,7 +2026,7 @@ function mentionItems(q) {
   if (t && t.path.toLowerCase().includes(ql))
     out.push({ label: "@" + t.path, desc: "open in the editor", kind: "file", insert: "@" + t.path });
   for (const f of S.files) {
-    if (t && f.path === t.path) continue;
+    if (f.editable === false || (t && f.path === t.path)) continue;
     if (f.path.toLowerCase().includes(ql)) out.push({ label: "@" + f.path, desc: "", kind: "file", insert: "@" + f.path });
   }
   return out.slice(0, 60);

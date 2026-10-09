@@ -7,13 +7,39 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
+from unittest import mock
 
 SCRIPT = Path(__file__).resolve().parents[1] / "launcher/make_macos_app.py"
 
 
 @unittest.skipUnless(sys.platform == "darwin", "requires native macOS tools")
 class MacApp(unittest.TestCase):
+    def test_browser_selection_scripts_compile_natively(self):
+        loader = SourceFileLoader("prism_launcher_macos", str(SCRIPT.with_name("prism_launcher.pyw")))
+        launcher = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
+        loader.exec_module(launcher)
+        run = subprocess.run
+        browsers = ["com.apple.Safari"]
+        if any(p.is_dir() for p in (Path("/Applications/Google Chrome.app"),
+                                   Path.home() / "Applications/Google Chrome.app")):
+            browsers.append("com.google.Chrome")
+        with tempfile.TemporaryDirectory() as tmp:
+            for browser in browsers:
+                # Compile the exact native scripts at the process boundary. Do not control user tabs.
+                def native(args, **kwargs):
+                    result = run(["/usr/bin/osacompile", "-o", str(Path(tmp) / "browser.scpt"), "-"],
+                                 input=args[2], text=True, capture_output=True, timeout=30)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    return subprocess.CompletedProcess(args, 0, browser if "AppKit" in args[2] else "true", "")
+
+                with self.subTest(browser=browser), \
+                        mock.patch.object(launcher.subprocess, "run", side_effect=native), \
+                        mock.patch.object(launcher.webbrowser, "open") as opened:
+                    launcher.open_page("http://127.0.0.1:8790/", "default")
+                    opened.assert_not_called()
+
     def test_bundle_runs_launcher_with_quoted_paths(self):
         spec = importlib.util.spec_from_file_location("make_macos_app", SCRIPT)
         installer = importlib.util.module_from_spec(spec)

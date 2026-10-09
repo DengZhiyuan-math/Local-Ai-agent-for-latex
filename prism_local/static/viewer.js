@@ -40,7 +40,7 @@ function jumped(m) {
 
 async function checkPdf() {
   const r = await api("/api/pdfstat").catch(() => null);
-  if (r && r.mtime && r.mtime !== PV.mtime) await PV.load(r.mtime);
+  if (r && (r.mtime !== PV.mtime || r.main !== PV.main)) await PV.load(r.mtime, r.main);
 }
 
 if (pdfChannel) {
@@ -49,7 +49,7 @@ if (pdfChannel) {
     if (m.type === "jumped") jumped(m);
     else if (m.type === "reload") location.reload();      // the editor restarted with new code
     else if (m.type === "close") window.close();          // "Show here" in the editor
-    else if (m.type === "pdf" && m.mtime !== PV.mtime) await PV.load(m.mtime);
+    else if (m.type === "pdf" && (m.mtime !== PV.mtime || m.main !== PV.main)) await PV.load(m.mtime, m.main);
     else if (m.type === "forward") {
       await checkPdf();
       PV.highlight(m.r);

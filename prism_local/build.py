@@ -81,6 +81,10 @@ def strip_comments(text: str) -> str:
     return re.sub(r"(?<!\\)%.*", "", text)
 
 
+def is_document(text: str) -> bool:
+    return re.search(r"\\documentclass\b", strip_comments(text)) is not None
+
+
 def _loaded(tex: str) -> set[str]:
     return {n.strip() for m in LOAD_RE.finditer(tex) for n in m.group(1).split(",") if n.strip()}
 

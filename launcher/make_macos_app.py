@@ -38,10 +38,13 @@ def build_app(app: Path, python: str, launcher: Path) -> None:
     info = plistlib.loads(plist.read_bytes())
     # osacompile supplies generic privacy messages for unrelated applet capabilities.
     info = {key: value for key, value in info.items() if not key.endswith("UsageDescription")}
+    # The applet's asset-catalog icon takes precedence over our existing Prism icon.
+    info.pop("CFBundleIconName", None)
     info.update({"CFBundleName": "prism-local", "CFBundleDisplayName": "prism-local",
+                 "CFBundleIconFile": "applet.icns",
                  "CFBundleIdentifier": BUNDLE_ID, "CFBundleShortVersionString": "1.0",
                  "CFBundleVersion": "1", "LSApplicationCategoryType": "public.app-category.productivity",
-                 "NSAppleEventsUsageDescription": "Open the Prism Home page in your browser."})
+                 "NSAppleEventsUsageDescription": "Select an existing Prism tab in your browser."})
     plist.write_bytes(plistlib.dumps(info))
     subprocess.run(["/usr/bin/sips", "-s", "format", "icns", str(HERE / "prism.ico"), "--out",
                     str(app / "Contents/Resources/applet.icns")], capture_output=True, check=True)

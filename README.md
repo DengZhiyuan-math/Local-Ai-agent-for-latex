@@ -6,6 +6,9 @@ your papers, each kept in git and on GitHub.
 
 - **Editor**: tabs, LaTeX highlighting, search, folding of sections and environments, and
   completion of `\cref{…}`, `\cite{…}` and your own `\newcommand`s. Edits save themselves.
+- **Files**: drag files onto the sidebar to add them to the project (up to 25 MB each).
+  Different files with the same name get a number; existing files are kept. Text files
+  open in the editor; images and PDFs open in a new tab; other files download.
 - **Compile** (⌘↵ / Ctrl-Enter): the engine (pdflatex, XeLaTeX, LuaLaTeX) is picked from the
   document, bibtex/biber and makeindex run when needed, and errors are listed with their
   source lines.
@@ -343,7 +346,10 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 
 ## Building
 
-**Compile** (⌘↵) saves every file and builds the project. The built-in builder:
+**Compile** (⌘↵) saves every file. It builds the active `.tex` file if that file contains
+`\documentclass`. For a chapter or another file, it builds the root document from `prism.json`.
+The PDF pane and pop-out viewer follow the compiled document. If that document has no PDF,
+the preview clears. The last-build details show the file name. The built-in builder:
 
 1. picks the engine: `"engine"` in `prism.json`, else a `% !TEX program = xelatex` line at the
    top of the main file, else the packages the preamble loads (fontspec, unicode-math, xeCJK,
@@ -404,8 +410,9 @@ Place `prism.json` in the project root. Every key is optional:
   a shell string. `{main}` and `{outdir}` are substituted. A shell string runs with `bash -c`;
   on Windows that is Git for Windows' bash, never WSL's. Your build must produce SyncTeX data
   (`-synctex=1`) for the PDF ↔ source jumps.
-- `files`: globs for the file tree. By default every `.tex/.bib/.md/.sty/.cls/.txt/.tikz` file is
-  listed, skipping hidden directories, `outdir` and `node_modules`.
+- `files`: globs for source scanning (outline and completion). By default every
+  `.tex/.bib/.md/.sty/.cls/.bbx/.cbx/.txt/.tikz` file is scanned. The Files sidebar also lists
+  assets. Hidden files and directories, `outdir` and `node_modules` are skipped.
 - `exclude`: globs to hide from the file tree.
 
 Changes to `prism.json` apply at once, without restarting. A `prism.json` that cannot be used
@@ -636,7 +643,8 @@ The Windows shortcut and the Linux menu entry run `launcher/prism_launcher.pyw`.
 Home page in a Chrome or Edge window of its own; each project you open becomes a tab of that
 window. The Home page stops about 10 seconds after you close it; open editors keep running
 until they are closed too.
-The macOS app uses the same launcher and opens the Home page in the default browser.
+The macOS app uses the same launcher. With Chrome or Safari as the default browser, it
+selects an existing Home tab without reloading it. If no matching tab is open, it opens one.
 
 A shortcut that opens one project's editor directly, skipping the Home page:
 
@@ -680,6 +688,8 @@ python3 launcher/make_macos_app.py --applications ~/Applications # user Applicat
 - The installer uses macOS `osacompile`, `sips`, and `codesign` to create an app with the
   existing Prism icon. It registers the app with Launch Services and imports its Spotlight metadata.
   No additional Python package is needed.
+- This is a lightweight launcher. Open it from Finder, Spotlight, or the Dock. It reuses a
+  running Home server and exits after opening or selecting the browser page.
 - The app uses the Python that ran the installer and the repository in its current location.
   Keep an external drive connected if the repository is on that drive. Run the installer
   again after moving the repository or replacing Python. Updates from `git pull` are loaded
@@ -688,6 +698,8 @@ python3 launcher/make_macos_app.py --applications ~/Applications # user Applicat
   a different bundle identifier or a symbolic link.
 - The app adds the usual Homebrew, TeX Live and user CLI folders to `PATH`. Provider settings
   and project data remain in the locations listed above.
+- macOS may ask to let prism-local control Chrome or Safari so it can select an existing tab.
+  If this access is denied, or another browser is the default, it opens a new tab instead.
 - To remove the launcher, move `prism-local.app` to the Trash. This keeps the repository and
   your papers. Closing the last Home page stops its server as described above.
 
@@ -741,7 +753,7 @@ prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
 prism_local/selfupdate.py  updates prism-local itself from GitHub before a server starts
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
-prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0)
+prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs
 examples/minimal/          a small amsart project to try it on
 tests/                     python -m unittest discover -s tests
 ```
@@ -753,14 +765,16 @@ tests/                     python -m unittest discover -s tests
 - The built-in builder does not run xindy or bib2gls (xindy-style glossaries and indexes,
   glossaries-extra's `\GlsXtrLoadResources`). Use `"builder": "latexmk"` with a latexmkrc
   for those.
-- No collaborative editing, and no file creation, rename or delete inside the editor. Use your
-  file manager, git or Claude for those. (The Home page can create new projects.)
+- No collaborative editing, and no file rename or delete inside the editor. Drag existing
+  files onto the Files sidebar to add them. Use your file manager, git or Claude to create,
+  rename or delete files. (The Home page can create new projects.)
 
 ## License
 
 MIT, see [LICENSE](LICENSE). The vendored third-party libraries keep their own licenses: see
 `prism_local/static/vendor/LICENSE-*`. The snippets follow the design and most of the default
 snippets of [obsidian-latex-suite](https://github.com/artisticat1/obsidian-latex-suite) (MIT).
+The PDF.js CMaps keep their license in `prism_local/static/vendor/cmaps/LICENSE`.
 
 "Prism" in the name refers to the general idea of an AI-assisted LaTeX workspace. This
 project is not affiliated with OpenAI's Prism or with Anthropic.

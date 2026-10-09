@@ -156,6 +156,7 @@ button.flip .ico { transform: rotate(180deg); }
 #sidebar li.folder { color: var(--muted); cursor: default; font-size: 11px; padding-top: 6px; }
 #sidebar li.folder:hover { background: none; }
 #tree li .git { float: right; font-family: var(--mono); font-size: 11px; color: var(--warn); }
+#files-status { margin: 8px 12px 0; font-size: 11px; color: var(--muted); }
 #outline li { font-size: 12px; }
 #outline li .kind { color: var(--muted); font-size: 11px; margin-right: 4px; }
 #outline li .muted { color: var(--muted); }
@@ -381,11 +382,12 @@ details.live-file > pre { font: 11.5px/1.4 var(--mono); color: var(--text); whit
 .msg.user .att-sent { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 6px; }
 .msg.user .att-sent .att { padding: 1px 7px; }
 #chat-add { flex: none; }
-#chat { position: relative; }
-#chat-drop { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; pointer-events: none;
+#chat, #sidebar { position: relative; }
+#chat-drop, #files-drop { position: absolute; inset: 0; z-index: 30; display: flex; align-items: center; justify-content: center; pointer-events: none;
   background: color-mix(in srgb, var(--panel) 82%, transparent); }
-#chat-drop[hidden] { display: none; }
-#chat-drop div { padding: 18px 24px; border: 2px dashed var(--accent); border-radius: 12px; color: var(--accent); font-weight: 600; }
+#chat-drop[hidden], #files-drop[hidden] { display: none; }
+#chat-drop div, #files-drop div { padding: 18px 24px; border: 2px dashed var(--accent); border-radius: 12px; color: var(--accent); font-weight: 600; }
+#files-drop div { margin: 12px; padding: 18px 12px; text-align: center; }
 #chat-scope { font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); }
 #chat-scope::before { content: "●"; margin-right: 5px; font-size: 9px; vertical-align: 1px; }
 #chat-scope.wide::before { color: var(--warn); }

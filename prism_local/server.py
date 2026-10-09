@@ -52,7 +52,7 @@ class Config:
     """Project settings: defaults, overridden by PROJECT_DIR/prism.json. A prism.json
     that cannot be used is reported (`error`) and the defaults apply instead."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, *, main: str | None = None):
         self.root = root.resolve()
         problems: list[str] = []
         cfg = self.root / "prism.json"
@@ -66,7 +66,8 @@ class Config:
             except (OSError, ValueError) as e:
                 data = {}
                 problems.append(f"prism.json cannot be used ({e}); the defaults apply.")
-        self.main = str(data.get("main") or self._guess_main())
+        self.project_main = str(data.get("main") or self._guess_main())
+        self.main = main or self.project_main
         outdir = str(data.get("outdir") or "build").replace("\\", "/").strip("/") or "build"
         if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
             problems.append("outdir must be a folder inside the project; build is used.")
@@ -105,7 +106,7 @@ class Config:
         if (self.root / "main.tex").is_file():
             return "main.tex"
         cands = [p for p in sorted(self.root.glob("*.tex")) if not p.name.startswith("._")
-                 and "\\documentclass" in p.read_text(encoding="utf-8", errors="replace")[:5000]]
+                 and build.is_document(p.read_text(encoding="utf-8", errors="replace")[:5000])]
         return cands[0].name if cands else "main.tex"
 
     def expand(self, cmd: list[str] | str) -> list[str] | str:
@@ -149,27 +150,27 @@ def refresh_config() -> None:
 
 def _excluded(rel: str) -> bool:
     parts = rel.split("/")
-    if any(p.startswith(".") or p in SKIP_DIRS for p in parts[:-1]):
+    if any(p.startswith(".") for p in parts) or any(p in SKIP_DIRS for p in parts[:-1]):
         return True
-    if parts[-1].startswith("._") or rel.startswith(CFG.outdir + "/"):
+    if rel.startswith(CFG.outdir + "/"):
         return True
     return any(fnmatch.fnmatch(rel, g) for g in CFG.exclude)
 
 
-def resolve(rel: str) -> Path:
-    """Map a project-relative path to an editable file, or raise ValueError."""
+def resolve(rel: str, *, editable_only: bool = True) -> Path:
+    """Map a project-relative path to a visible file, or raise ValueError."""
     if not rel or rel.startswith("/") or "\\" in rel:
         raise ValueError("bad path")
     p = project_path(ROOT, rel)
     r = p.relative_to(ROOT).as_posix()
-    if p.suffix not in EDITABLE_SUFFIXES or _excluded(r):
-        raise ValueError("not an editable file")
+    if (editable_only and p.suffix not in EDITABLE_SUFFIXES) or _excluded(r):
+        raise ValueError("not an editable file" if editable_only else "not a project file")
     return p
 
 
-def list_files() -> list[str]:
+def list_files(*, editable_only: bool = True) -> list[str]:
     seen: set[str] = set()
-    if CFG.files:
+    if CFG.files and editable_only:
         for g in CFG.files:
             for p in ROOT.glob(g):
                 rel = p.relative_to(ROOT).as_posix()
@@ -183,14 +184,14 @@ def list_files() -> list[str]:
                                  and d not in SKIP_DIRS and reld + d != CFG.outdir)
             for f in filenames:
                 rel = reld + f
-                if Path(f).suffix in EDITABLE_SUFFIXES and not _excluded(rel):
+                if (not editable_only or Path(f).suffix in EDITABLE_SUFFIXES) and not _excluded(rel):
                     seen.add(rel)
             if len(seen) > MAX_FILES:
                 break
     safe = []
     for rel in seen:
         try:
-            if resolve(rel).is_file():
+            if resolve(rel, editable_only=editable_only).is_file():
                 safe.append(rel)
         except (ValueError, OSError, RuntimeError):
             pass
@@ -404,29 +405,31 @@ def upload_name(name: str) -> str:
     return stem + (f".{ext[:12]}" if ext else "")
 
 
-def save_upload(name: str, data: bytes) -> str:
-    """Save an upload under prism-uploads/; the same file again is not saved twice, another
-    one with the same name gets a number (notes-2.pdf)."""
+def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
+    """Save an upload in the project (attachments under prism-uploads/). Reuse identical
+    files; give different files with the same name a number (notes-2.pdf)."""
     if len(data) > MAX_UPLOAD:
         raise ValueError(f"the file is larger than {MAX_UPLOAD // (1024 * 1024)} MB")
-    folder = ROOT / UPLOAD_DIR
-    folder.mkdir(exist_ok=True)
     clean = upload_name(name)
     stem, dot, ext = clean.rpartition(".")
     if not dot:
         stem, ext = clean, ""
-    for n in range(1, 1000):
-        cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
-        p = folder / cand
-        if p.exists():
-            try:
-                if p.read_bytes() == data:
-                    return f"{UPLOAD_DIR}/{cand}"
-            except OSError:
-                pass
-            continue
-        write_bytes(p, data)
-        return f"{UPLOAD_DIR}/{cand}"
+    with SAVE_LOCK:
+        for n in range(1, 1000):
+            cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
+            rel = f"{folder}/{cand}" if folder else cand
+            p = project_path(ROOT, rel)
+            if not folder and _excluded(p.relative_to(ROOT).as_posix()):
+                raise ValueError("the file is excluded from this project")
+            if p.exists():
+                try:
+                    if p.read_bytes() == data:
+                        return rel
+                except OSError:
+                    pass
+                continue
+            write_bytes(p, data)
+            return rel
     raise ValueError("too many files with this name")
 
 
@@ -544,27 +547,40 @@ def relaunch() -> None:
                      close_fds=True, cwd=str(ROOT.parent), **kw)
 
 
-def run_build(mode: str, clean: bool = False) -> dict:
+def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
+    global CFG
     if mode not in CFG.modes:
         return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
-                "output": f"There is no '{mode}' build.", "pdf_mtime": None}
+                "output": f"There is no '{mode}' build.", "main": CFG.main, "pdf_mtime": None}
     if not BUILD_LOCK.acquire(blocking=False):
         return {"busy": True}
     try:
+        main = CFG.project_main
+        if active is not None:
+            if not isinstance(active, str):
+                raise ValueError("active must be a project file path")
+            source = resolve(active)
+            if not source.is_file():
+                raise FileNotFoundError(active)
+            if source.suffix == ".tex" and build.is_document(source.read_text(encoding="utf-8")):
+                main = source.relative_to(ROOT).as_posix()
+        # Select outputs in memory. Opening a standalone document does not change prism.json.
+        cfg = Config(ROOT, main=main)
+        CFG = cfg
         t0 = time.time()
-        before = mtime(CFG.pdf) if CFG.pdf.exists() else None
-        cmd = CFG.custom.get(mode)
-        b = build.Build(ROOT, CFG.main, CFG.outdir, mode, builder=CFG.builder, engine=CFG.engine,
-                        command=CFG.expand(cmd) if cmd else None, clean=clean,
-                        shell_escape=CFG.shell_escape)
+        before = mtime(cfg.pdf) if cfg.pdf.exists() else None
+        cmd = cfg.custom.get(mode)
+        b = build.Build(ROOT, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
+                        command=cfg.expand(cmd) if cmd else None, clean=clean,
+                        shell_escape=cfg.shell_escape)
         RUNNING["build"] = b
         r = b.run()
-        if CFG.error:
-            r["output"] = f"prism-local: {CFG.error}\n" + r["output"]
-        pdf = mtime(CFG.pdf) if CFG.pdf.exists() else None
+        if cfg.error:
+            r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
+        pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
         return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
-                "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+                "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
     finally:
         RUNNING["build"] = None
         BUILD_LOCK.release()
@@ -594,7 +610,7 @@ class SyncTex:
     def load(self) -> bool:
         if not CFG.synctex.exists():
             return False
-        st = CFG.synctex.stat().st_mtime_ns
+        st = (CFG.synctex, CFG.synctex.stat().st_mtime_ns)
         if st == self.stamp:
             return True
         inputs, recs, page, unit, mag = {}, [], 0, 1.0, 1.0
@@ -782,18 +798,21 @@ class Handler(httpbase.Handler):
             return self._json({"app": "prism-local", "root": str(ROOT), "project_key": registry.project_key(ROOT), "pid": os.getpid(),
                                "pages": PRESENCE.count()})
         if path == "/api/pdfstat":
-            return self._json({"mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
+            return self._json({"main": CFG.main, "mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
         if path == "/pdf":
+            if q.get("main") and q["main"] != CFG.main:
+                return self._err(409, "the compiled document changed")
             if not CFG.pdf.exists():
                 return self._err(404, "no PDF yet")
             return self._send(200, CFG.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
             st = git_status()
-            files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f)}
-                     for f in list_files()]
+            files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
+                      "editable": Path(f).suffix in EDITABLE_SUFFIXES}
+                     for f in list_files(editable_only=False)]
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
                                "move_error": MOVE["error"], "files": files, "order": document_order(),
-                               "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
+                               "pdf_main": CFG.main, "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
                                "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
@@ -811,7 +830,7 @@ class Handler(httpbase.Handler):
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))
         if path == "/api/config":
-            return self._json({"main": CFG.main, "outdir": CFG.outdir, "modes": CFG.modes,
+            return self._json({"main": CFG.project_main, "outdir": CFG.outdir, "modes": CFG.modes,
                                "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
                                "build": {m: CFG.describe(m) for m in CFG.modes}})
         if path == "/api/agent/events":
@@ -841,6 +860,13 @@ class Handler(httpbase.Handler):
             p = resolve(q.get("path", ""))
             return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
                                "mtime": mtime(p)})
+        if path == "/api/asset":
+            from urllib.parse import quote
+            p = resolve(q.get("path", ""), editable_only=False)
+            ctype = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
+                     ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}.get(p.suffix.lower())
+            extra = {} if ctype else {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(p.name)}
+            return self._send(200, p.read_bytes(), ctype or "application/octet-stream", extra)
         if path == "/api/diff":
             if q.get("path"):
                 resolve(q["path"])
@@ -865,8 +891,12 @@ class Handler(httpbase.Handler):
         refresh_config()
         try:
             return self._post(path, body)
+        except UnicodeDecodeError:
+            return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
         except (ValueError, KeyError) as e:
             return self._err(400, str(e))
+        except FileNotFoundError:
+            return self._err(404, "file not found")
         except OSError as e:                 # e.g. the file is locked by another program
             return self._err(500, f"{type(e).__name__}: {e}")
 
@@ -937,17 +967,26 @@ class Handler(httpbase.Handler):
         if path == "/api/build":
             if body.get("by") == "agent" and (not AGENT.active or AGENT.active.mode != "edit" or AGENT.active.done):
                 return self._err(403, "Agent compilation is available only during an Edit turn")
-            r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")))
+            r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")), body.get("active"))
             if body.get("by") == "agent" and not r.get("busy"):
                 AGENT.built(r)          # the editor shows the agent's build like its own
             return self._json(r, 409 if r.get("busy") else 200)
         if path == "/api/upload":
             import base64
+            destination = body.get("destination", "attachment")
+            if destination not in ("attachment", "project"):
+                return self._err(400, "unknown upload destination")
+            if destination == "project" and AGENT.busy():
+                return self._err(409, "wait until the agent's turn has finished")
             try:
                 data = base64.b64decode(str(body.get("data") or ""), validate=True)
             except ValueError:
                 return self._err(400, "the file data is not base64")
-            rel = save_upload(str(body.get("name") or "file"), data)
+            rel = save_upload(str(body.get("name") or "file"), data,
+                              folder="" if destination == "project" else UPLOAD_DIR)
+            if destination == "project":
+                GITSYNC.touched()
+                return self._json({"path": rel, "size": len(data)})
             UPLOAD_SYNC[rel] = {"state": "syncing", "message": "Committing and pushing…"}
             threading.Thread(target=sync_upload, args=(rel,), daemon=True).start()
             return self._json({"path": rel, "size": len(data), "sync": UPLOAD_SYNC[rel]})
