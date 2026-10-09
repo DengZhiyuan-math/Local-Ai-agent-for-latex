@@ -78,6 +78,7 @@ and the compiled PDF.
 """ + FILE_TOOL_RULE + """\
 - To compile, use the compile tool when you have it: it runs the editor's own
   build (the author's Compile button) and returns the errors with file:line.
+  It builds the document you edited, a standalone .tex as well as the main file.
   Compile after substantial edits and fix the errors your changes caused.
   Never run pdflatex or latexmk yourself. Without the tool, do not compile:
   the author compiles in the editor.

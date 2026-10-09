@@ -24,9 +24,12 @@ TOOL = {
     "name": "compile",
     "description": (
         "Compile the LaTeX project with the editor's own build (the author's Compile "
-        "button: same engine, bibliography and settings). The PDF in the editor reloads. "
-        "Returns whether it built, and the errors and warnings with file:line. Use it to "
-        "check your changes; do not run pdflatex or latexmk yourself."),
+        "button: same engine, bibliography and settings). It builds the document you "
+        "edited since its PDF was made, a standalone .tex with its own \\documentclass as "
+        "well as the project's main file; else the document shown. The PDF in the editor "
+        "reloads. Returns which document it built, whether it built, and the errors and "
+        "warnings with file:line. Use it to check your changes; do not run pdflatex or "
+        "latexmk yourself."),
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -81,7 +84,10 @@ def report(r: dict) -> tuple[str, bool]:
     else:
         head = f"Build FAILED (exit {r.get('exit')})."
     how = " · ".join(str(x) for x in (r.get("engine"), r.get("seconds") and f"{r['seconds']}s") if x)
-    lines = [head + (f" ({how})" if how else ""),
+    lines = [head + (f" ({how})" if how else "")]
+    if r.get("main"):
+        lines.append(f"Document: {r['main']}.")
+    lines += [
              f"{len(errors)} error(s), {len(diags) - len(errors)} warning(s)."]
     for d in diags[:MAX_DIAGNOSTICS]:
         where = f"{d.get('file')}:{d.get('line')}" if d.get("line") else (d.get("file") or "?")

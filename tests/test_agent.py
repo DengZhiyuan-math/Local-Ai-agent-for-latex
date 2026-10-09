@@ -264,6 +264,8 @@ class CompileTool(unittest.TestCase):
         text, failed = mcp_compile.report({"exit": 0, "diagnostics": []})
         self.assertFalse(failed)
         self.assertTrue(text.startswith("Build OK."))
+        text, _ = mcp_compile.report({"exit": 0, "diagnostics": [], "main": "notes/standalone.tex"})
+        self.assertIn("Document: notes/standalone.tex.", text)
 
 
 class ClaudeContext(unittest.TestCase):
