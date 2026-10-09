@@ -1588,7 +1588,7 @@ async function chatSend() {
   const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
-  let after = 0, done = false, buf = "", streamed = false;
+  let after = 0, done = false, buf = "", streamed = false, changed = [];
   // A streamed message is drawn once per batch of events, not once per fragment, and the
   // log follows it only while you have not scrolled up to read something.
   const log = $("#chat-log");
@@ -1708,7 +1708,7 @@ async function chatSend() {
           if (C.provider === provider) renderContext({ ...e, window: e.window || (provGet("context") || {}).window });
         }
         else if (e.t === "done") {
-          renderTurnCard(e); loadAccount();
+          renderTurnCard(e); loadAccount(); changed = (e.changed || []).map((c) => c.path);
           if (e.context && C.provider === provider) {
             const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
             provSet("context", c); renderContext(c);
@@ -1727,6 +1727,11 @@ async function chatSend() {
     saveChatLog();
     await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
     flushSaves();        // … then save what you typed meanwhile
+    // Auto-compile the agent's changes too, unless its own last build already has them.
+    if ($("#auto-compile").checked && changed.some((path) => {
+      const f = S.files.find((x) => x.path === path);
+      return !f || !S.pdfMtime || f.mtime > S.pdfMtime;
+    })) scheduleCompile();
   }
 }
 
