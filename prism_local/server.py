@@ -547,6 +547,27 @@ def relaunch() -> None:
                      close_fds=True, cwd=str(ROOT.parent), **kw)
 
 
+def stale_document() -> str | None:
+    """A document whose .tex is newer than its PDF (just edited): the one shown if it is,
+    else the most recently edited. None when every PDF is up to date."""
+    stale = []
+    for rel in list_files(editable_only=False):
+        src = ROOT / rel
+        if src.suffix != ".tex" or rel.split("/")[0] == CFG.outdir:
+            continue
+        try:
+            if not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
+                continue
+            pdf = ROOT / CFG.outdir / f"{src.stem}.pdf"
+            # Never built: only when edited after the last build (not an old draft lying there).
+            built = pdf if pdf.exists() else CFG.pdf
+            if mtime(src) > (mtime(built) if built.exists() else 0):
+                stale.append((rel == CFG.main, mtime(src), rel))
+        except OSError:
+            continue
+    return max(stale)[2] if stale else None
+
+
 def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
     global CFG
@@ -557,9 +578,10 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
         return {"busy": True}
     try:
         main = CFG.project_main
-        if active is None and (ROOT / CFG.main).is_file():
-            # No open file says which (the agent's compile tool): the document shown now.
-            main = CFG.main
+        if active is None:
+            # No open file says which (the agent's compile tool, auto-compile after its turn):
+            # the document edited since its PDF was built, else the document shown now.
+            main = stale_document() or (CFG.main if (ROOT / CFG.main).is_file() else main)
         if active is not None:
             if not isinstance(active, str):
                 raise ValueError("active must be a project file path")

@@ -134,6 +134,11 @@ class ServerLifecycle(unittest.TestCase):
         compile("中文稿.tex")
         status, result = compile(None)
         self.assertEqual((status, result["main"]), (200, "中文稿.tex"))
+        # ... unless another document was edited after its PDF (the agent changed it).
+        later = time.time() + 5
+        os.utime(root / "main.tex", (later, later))
+        status, result = compile(None)
+        self.assertEqual((status, result["main"]), (200, "main.tex"))
         status, result = compile("broken.tex")
         self.assertEqual((status, result["exit"], result["main"], result["pdf_mtime"]),
                          (200, 1, "broken.tex", None))

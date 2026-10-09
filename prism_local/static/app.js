@@ -285,11 +285,12 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 
 // Auto-compile: shortly after the last edit is saved; if a build is running, once it ends.
 let compileTimer = null;
-function scheduleCompile() {
+// active: the file whose document to build; null lets the server choose (after an agent turn).
+function scheduleCompile(active = undefined) {
   clearTimeout(compileTimer);
   compileTimer = setTimeout(function go() {
     if (S.building) { compileTimer = setTimeout(go, 1000); return; }
-    compile();
+    compile(false, active);
   }, AUTOCOMPILE_MS);
 }
 async function saveAll() {
@@ -843,9 +844,8 @@ async function showBuild(r) {
   await showPdf(r.pdf_mtime, r.main);
 }
 
-async function compile(clean = false) {
+async function compile(clean = false, active = S.active) {
   if (S.building) return;
-  const active = S.active;
   if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
   else if (!(await saveAll())) return;
   const mode = BUILD.mode;
@@ -1731,7 +1731,7 @@ async function chatSend() {
     if ($("#auto-compile").checked && changed.some((path) => {
       const f = S.files.find((x) => x.path === path);
       return !f || !S.pdfMtime || f.mtime > S.pdfMtime;
-    })) scheduleCompile();
+    })) scheduleCompile(null);     // the document the agent edited, whichever tab is open
   }
 }
 
