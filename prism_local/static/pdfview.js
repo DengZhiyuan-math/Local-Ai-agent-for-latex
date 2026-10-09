@@ -14,6 +14,7 @@ const PV = {
   onInverse: null,              // ({page, x, y}) in PDF points from the top-left
   observer: null, keeper: null, seq: 0, gen: 0,
   back: [],                     // scroll positions to return to after following a link
+  spots: {},                    // document -> where it was scrolled to (a fraction), for switching back
   text: new Map(),              // page index -> Promise of its text content (current PDF)
   find: { q: "", hits: [], cur: -1, index: null },   // search in the PDF
   here: false,                  // the PDF was clicked last (⌘F searches the PDF, not the editor)
@@ -273,8 +274,10 @@ const PV = {
 
   async load(mtime, main) {
     const seq = ++this.seq;
-    if (main !== this.main || !mtime) {
-      const old = this.pdf;
+    const switched = main !== this.main;
+    if (switched || !mtime) {
+      const old = this.pdf, sc = $("#pdf-scroll");
+      if (old && this.main && sc.scrollHeight) this.spots[this.main] = sc.scrollTop / sc.scrollHeight;
       this.pdf = null; this.mtime = null; this.main = main; this.gen++;
       this.observer?.disconnect(); this.keeper?.disconnect();
       this.views.forEach((v) => this.unrender(v)); this.views = [];
@@ -300,7 +303,7 @@ const PV = {
     const old = this.pdf;
     this.pdf = doc; this.mtime = mtime;
     this.text = new Map(); this.find.index = null; this.find.hits = [];
-    await this.layout(true);
+    await this.layout(true, switched ? this.spots[main] : undefined);
     if (old) old.destroy();
     if (!$("#pdf-outline").hidden) this.drawOutline();
     if (this.find.q && !$("#pdf-find").hidden) this.search($("#pdf-find input").value);
@@ -309,7 +312,7 @@ const PV = {
   // Lay out the pages of the current document at the current zoom. The pages that will be
   // on screen are drawn before the new layout replaces the old one, so a rebuild or a zoom
   // never shows blank pages.
-  async layout(keepScroll) {
+  async layout(keepScroll, at) {
     if (!this.pdf) return;
     const sc = $("#pdf-scroll");
     if (!sc.clientWidth) return;                 // hidden (e.g. popped out)
@@ -329,7 +332,8 @@ const PV = {
       wrap.appendChild(div);
       return { page, vp, div, rendered: false, task: null, canvas: null, token: null };
     });
-    const ratio = () => (keepScroll && sc.scrollHeight > 0 ? sc.scrollTop / sc.scrollHeight : 0);
+    // at: a fraction to scroll to (a document shown again); otherwise where the view is now.
+    const ratio = () => at ?? (keepScroll && sc.scrollHeight > 0 ? sc.scrollTop / sc.scrollHeight : 0);
     // Where the pages will be, by the same arithmetic as the CSS, to draw the visible ones first.
     let y = PAGE_PAD;
     const tops = views.map((v) => { const top = y; y += v.vp.height + PAGE_GAP; return top; });

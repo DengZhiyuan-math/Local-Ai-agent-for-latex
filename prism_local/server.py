@@ -557,6 +557,9 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
         return {"busy": True}
     try:
         main = CFG.project_main
+        if active is None and (ROOT / CFG.main).is_file():
+            # No open file says which (the agent's compile tool): the document shown now.
+            main = CFG.main
         if active is not None:
             if not isinstance(active, str):
                 raise ValueError("active must be a project file path")

@@ -130,6 +130,10 @@ class ServerLifecycle(unittest.TestCase):
             self.assertEqual(request(url, "/api/tree")[1]["pdf_main"], main)
             self.assertEqual(request(url, "/api/config")[1]["main"], "main.tex")
             self.assertEqual(request(url, "/pdf?main=another.tex")[0], 409)
+        # No active file (the agent's compile tool): the document shown now, not main.tex.
+        compile("中文稿.tex")
+        status, result = compile(None)
+        self.assertEqual((status, result["main"]), (200, "中文稿.tex"))
         status, result = compile("broken.tex")
         self.assertEqual((status, result["exit"], result["main"], result["pdf_mtime"]),
                          (200, 1, "broken.tex", None))
