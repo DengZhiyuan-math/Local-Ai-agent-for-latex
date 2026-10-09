@@ -47,13 +47,19 @@ class Targets(unittest.TestCase):
         git(self.root, "remote", "add", "origin", str(self.remote))
         self.g = gitsync.GitSync(lambda: self.root, lambda: "build")
 
-    def test_unbound_then_explicit_bound_push(self):
+    def test_unbound_project_binds_itself_and_pushes(self):
         self.g.push()
-        self.assertEqual(git(self.remote, "for-each-ref"), "")
-        self.assertIn("confirm", self.g.status()["blocked_reason"].lower())
-        self.g.bind_target()
-        self.g.push()
+        self.assertIsNone(self.g.status()["blocked_reason"])
+        self.assertEqual(self.g._settings()["sync_target"]["branch_ref"], "refs/heads/main")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+
+    def test_same_repository_reached_another_way_rebinds_quietly(self):
+        self.g.bind_target()
+        git(self.root, "config", "branch.main.remote", "origin")
+        git(self.root, "config", "branch.main.merge", "refs/heads/main")
+        self.assertTrue(self.g.validate_target(), self.g.blocked_reason)
+        self.assertEqual(self.g._settings()["sync_target"]["configuration_fingerprint"],
+                         self.g.target["configuration_fingerprint"])
 
     def test_create_rejects_target_changed_before_binding(self):
         import hub

@@ -432,12 +432,17 @@ class GitSync:
             try:
                 candidate = self._candidate()
                 self.target = candidate
-                if not isinstance(bound, dict):
-                    raise ValueError("Confirm this project's sync target in the Git menu")
                 # git_dir is the current local location, not the bound remote identity.
-                if public_target(candidate) != public_target(bound) \
-                        or candidate["local_branch"] != bound.get("local_branch"):
+                same = isinstance(bound, dict) and all(candidate[k] == bound.get(k) for k in
+                                                       ("repository_identity", "branch_ref", "local_branch"))
+                if isinstance(bound, dict) and not same:
                     raise ValueError("Sync target changed. Local edits are saved; confirm the new target in the Git menu")
+                # No binding yet (a project from before bindings, or a fresh clone): the
+                # candidate passed every check above, so it is bound now. The same repository
+                # and branch reached another way (ssh instead of https, an upstream set by
+                # `git push -u`) is rebound quietly.
+                if public_target(candidate) != public_target(bound):
+                    write_bytes(self._settings_file(), json.dumps({**self._settings(), "sync_target": candidate}).encode())
                 self.blocked_reason = None
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.blocked_reason = str(exc)
