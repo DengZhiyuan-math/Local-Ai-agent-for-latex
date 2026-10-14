@@ -20,6 +20,7 @@ import time
 import urllib.request
 import zlib
 from pathlib import Path
+from fsutil import replace_file
 from gitenv import git_env
 
 WIN = os.name == "nt"
@@ -71,17 +72,7 @@ def read_json(path: Path) -> dict | None:
 
 
 def write_json(path: Path, data) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + f".{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
-    for attempt in range(40):      # Windows refuses while another process is reading the file
-        try:
-            os.replace(tmp, path)
-            return
-        except PermissionError:
-            if attempt == 39:
-                raise
-            time.sleep(0.05)
+    replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"))
 
 
 class FileLock:

@@ -64,6 +64,13 @@ class SnippetsFile(unittest.TestCase):
         self.assertEqual(self.file.read_text(encoding="utf-8"), text)
         self.assertEqual(self.call("/api/snippets")["content"], text)
 
+    def test_a_save_replaces_the_whole_file_and_keeps_its_line_ends(self):
+        self.file.parent.mkdir(parents=True)
+        self.file.write_bytes(b"[]\r\n")            # written on Windows by an earlier version
+        self.call("/api/snippets", {"content": "[\n]\n"})
+        self.assertEqual(self.file.read_bytes(), b"[\r\n]\r\n")
+        self.assertEqual(list(self.file.parent.iterdir()), [self.file], "no temporary file is left")
+
 
 if __name__ == "__main__":
     unittest.main()

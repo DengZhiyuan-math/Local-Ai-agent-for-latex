@@ -1012,9 +1012,8 @@ class Handler(httpbase.Handler):
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
         if path == "/api/snippets":
-            f = snippets_file()
-            f.parent.mkdir(parents=True, exist_ok=True)
-            f.write_text(str(body.get("content") or ""), encoding="utf-8")
+            f = snippets_file()         # every project's server reads it: never half-written
+            write_bytes(f, with_line_ends_of(str(body.get("content") or ""), f).encode("utf-8"))
             return self._json({"path": str(f)})
         if path == "/api/file":
             r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),

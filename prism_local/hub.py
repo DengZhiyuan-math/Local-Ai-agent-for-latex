@@ -39,7 +39,7 @@ import httpbase  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from proc import NO_WINDOW  # noqa: E402
 from texutil import tex_title  # noqa: E402
@@ -561,7 +561,7 @@ def _ensure_ignore(top: Path) -> None:
     add = [x for x in SHARED_IGNORE if x not in have]
     if add:
         text = "\n".join(have + add) + "\n"
-        gi.write_bytes(text.lstrip("\n").encode("utf-8"))
+        write_bytes(gi, text.lstrip("\n").encode("utf-8"))
 
 
 def _publish(root: Path, github: bool, owner: str, name: str, report: list[str]) -> str | None:
@@ -653,7 +653,7 @@ def _init_own(root: Path) -> None:
     have = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
     if ".git-prism-*/" not in have:
         lines = [*have.splitlines(), ".git-prism-*/"]
-        exclude.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_bytes(exclude, ("\n".join(lines) + "\n").encode("utf-8"))
 
 
 def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
@@ -907,10 +907,10 @@ def git_init(root: Path) -> None:
     same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
     gi = root / ".gitignore"
     if not gi.exists():
-        gi.write_bytes(GITIGNORE.encode("utf-8"))
+        write_bytes(gi, GITIGNORE.encode("utf-8"))
     ga = root / ".gitattributes"
     if not ga.exists():
-        ga.write_bytes(GITATTRIBUTES.encode("utf-8"))
+        write_bytes(ga, GITATTRIBUTES.encode("utf-8"))
     if not (root / ".git").exists():
         try:
             run_git(root, "init", "-q", "-b", "main")
@@ -1051,7 +1051,7 @@ def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list
             add = [f"{d.strip('/')}/" for d in leave_out if d.strip("/") in PRIVATE_DIRS
                    and f"{d.strip('/')}/" not in have]
             if add:
-                gi.write_bytes(("\n".join(have + add) + "\n").encode("utf-8"))
+                write_bytes(gi, ("\n".join(have + add) + "\n").encode("utf-8"))
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"git init failed: {e}"}
     r = create_github_repo(target, owner, name or info["name"])

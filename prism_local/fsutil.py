@@ -44,13 +44,11 @@ def with_line_ends_of(text: str, path: Path) -> str:
     return text.replace("\n", "\r\n") if uses_crlf(head) else text
 
 
-def write_bytes(path: Path, data: bytes) -> None:
-    """Write a file so that a reader never sees half of it, where the system allows.
-
-    The data goes to a temporary file that then replaces `path`. On Windows that replace
-    fails while another program has the file open, for instance a TeX engine reading it
-    during a build; after retrying for about a second the file is written in place, which
-    such programs allow."""
+def replace_file(path: Path, data: bytes, tries: int = 40) -> None:
+    """Write a file so that a reader never sees half of it: the data goes to a temporary
+    file beside it, which then replaces `path`. Windows refuses the replace while another
+    process has the file open (a server reading it, a TeX engine during a build), so it is
+    tried every 0.05 seconds, `tries` times in all, before PermissionError is raised."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.prism-tmp")
     try:
@@ -59,19 +57,50 @@ def write_bytes(path: Path, data: bytes) -> None:
             shutil.copymode(path, tmp)      # the new file keeps the old one's permissions
         except OSError:
             pass                            # a new file: the default permissions
-        for attempt in range(20):
+        for attempt in range(tries):
             try:
                 os.replace(tmp, path)
                 return
             except PermissionError:
-                if attempt == 19:
-                    break
+                if attempt == tries - 1:
+                    raise
                 time.sleep(0.05)
-        with open(path, "r+b" if path.exists() else "wb") as f:
-            f.write(data)
-            f.truncate()
     finally:
         try:
             tmp.unlink()
         except OSError:
             pass
+
+
+def write_bytes(path: Path, data: bytes) -> None:
+    """Write a project file so that a reader never sees half of it, where the system allows.
+
+    On Windows replace_file fails while another program has the file open, for instance a
+    TeX engine reading it during a build; after retrying for about a second the file is
+    written in place, which such programs allow. Should that write fail half-way (a full
+    disk), the old contents are put back and the error is raised: a file is never left cut
+    short without a word."""
+    try:
+        replace_file(path, data, tries=20)
+        return
+    except PermissionError:
+        pass
+    try:
+        old = path.read_bytes()
+    except FileNotFoundError:
+        old = None
+    with open(path, "wb" if old is None else "r+b") as f:
+        try:
+            f.write(data)
+            f.truncate()
+            f.flush()
+        except OSError as e:
+            try:
+                f.seek(0)
+                f.write(old or b"")
+                f.truncate()
+                f.flush()
+            except OSError:
+                raise OSError(f"{path.name} was written only in part ({e}); its earlier "
+                              "version could not be put back") from e
+            raise

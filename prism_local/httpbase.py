@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+import registry
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -298,10 +299,9 @@ def own_argv() -> list[str]:
 
 
 def write_ready_file(path: Path, info: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(path.name + ".tmp")
-    tmp.write_text(json.dumps(info), encoding="utf-8")
-    os.replace(tmp, path)
+    """The instance file (registry.py). Written like every state file, so the Home page
+    reading it at that moment does not stop the server."""
+    registry.write_json(path, info)
 
 
 def remove_ready_file(path: Path) -> None:
