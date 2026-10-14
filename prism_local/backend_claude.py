@@ -27,16 +27,45 @@ import sessionmeta
 from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, executable, find_bin, kill_tree
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
+CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
+
+
+# Where `claude` is, looked up again after BIN_TTL seconds or when CLAUDE_BIN or PATH
+# change: searching PATH takes a few milliseconds on Windows, and the editor asks often.
+BIN_TTL = 60
+_bin_cache: dict = {}
 
 
 def claude_bin() -> str | None:
     # Where the installers put it, for a server started from a desktop menu whose PATH
     # lacks ~/.local/bin or npm's folder.
+    key = (os.environ.get("CLAUDE_BIN"), os.environ.get("PATH"))
+    hit = _bin_cache.get(key)
+    if hit and time.monotonic() - hit[0] < BIN_TTL:
+        return hit[1]
     home = Path.home()
-    return find_bin("CLAUDE_BIN", "claude",
-                    (str(home / ".local/bin/claude"), str(home / ".claude/local/claude"),
-                     str(home / ".npm-global/bin/claude"), "/usr/local/bin/claude",
-                     "/opt/homebrew/bin/claude"))
+    found = find_bin("CLAUDE_BIN", "claude",
+                     (str(home / ".local/bin/claude"), str(home / ".claude/local/claude"),
+                      str(home / ".npm-global/bin/claude"), "/usr/local/bin/claude",
+                      "/opt/homebrew/bin/claude"))
+    _bin_cache.clear()
+    _bin_cache[key] = (time.monotonic(), found)
+    return found
+
+
+def stamp(path) -> tuple | None:
+    """A file's or folder's modification time and size, or None if there is none."""
+    try:
+        st = os.stat(path)
+    except (OSError, TypeError, ValueError):
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def profile_dir() -> Path:
+    """Claude Code's profile folder (CLAUDE_CONFIG_DIR, see use_config_dir)."""
+    return Path(os.environ["CLAUDE_CONFIG_DIR"]) if os.environ.get("CLAUDE_CONFIG_DIR") \
+        else Path.home() / ".claude"
 
 
 # ---------------------------------------------------------------- which account
@@ -46,6 +75,9 @@ def claude_bin() -> str | None:
 OVERRIDE_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
                 "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX")
 _account_cache: dict = {}
+# How long the panel shows the login it checked without asking again. A login or logout
+# changes the login_files, which is seen at once; a turn always asks afresh (preflight).
+ACCOUNT_TTL = 300
 
 
 # CLAUDE_CONFIG_DIR as the first prism-local process was started, passed on to the
@@ -90,10 +122,25 @@ def auth_overrides(root: Path | None) -> list[str]:
     return found
 
 
+def login_files(root: Path | None) -> list[Path]:
+    """The files a login or logout writes (the profile's credentials and global config,
+    also ~/.claude.json, its usual place), and the settings auth_overrides reads."""
+    cfg = profile_dir()
+    files = [cfg / ".credentials.json", cfg / ".claude.json", Path.home() / ".claude.json",
+             cfg / "settings.json"]
+    if root:
+        files += [Path(root) / ".claude" / "settings.json",
+                  Path(root) / ".claude" / "settings.local.json"]
+    return files
+
+
 def claude_account(exe: str | None, root: Path | None = None, max_age: float = 30) -> dict:
-    """Who Claude Code is logged in as, from `claude auth status` (local, about 0.2 s)."""
+    """Who Claude Code is logged in as, from `claude auth status` (local, about 0.2 s).
+    Asked again once the answer is max_age seconds old, and at once when the CLI or one
+    of the login_files changed."""
     use_config_dir()
-    key = (exe, str(root), os.environ.get("CLAUDE_CONFIG_DIR"))
+    key = (exe, stamp(exe), str(root), os.environ.get("CLAUDE_CONFIG_DIR"),
+           tuple(stamp(f) for f in login_files(root)))
     hit = _account_cache.get(key)
     if hit and time.time() - hit[0] < max_age:
         return hit[1]
@@ -115,6 +162,8 @@ def claude_account(exe: str | None, root: Path | None = None, max_age: float = 3
         except (OSError, subprocess.SubprocessError, ValueError) as e:
             info["error"] = str(e)
     info["overrides"] = auth_overrides(root)
+    if len(_account_cache) > 20:         # answers for login files changed since
+        _account_cache.clear()
     _account_cache[key] = (time.time(), info)
     return info
 
@@ -328,6 +377,8 @@ class ClaudeCode(CliBackend):
         self.probe_lock = threading.Lock()
         # Skills and slash commands Claude Code offers in this project, from its init event.
         self.catalog: dict | None = None
+        self.catalog_key: tuple | None = None
+        self.catalog_failed: tuple | None = None    # (key, when, answer) of a failed lookup
         self.catalog_lock = threading.Lock()
         # Each model's context window, from the last turn's result (modelUsage).
         self.windows: dict[str, int] = {}
@@ -343,7 +394,7 @@ class ClaudeCode(CliBackend):
         return {**super().info(), "bin": self.bin(), "rate": self.rate}
 
     def account(self, root: Path | None, fresh: bool = False) -> dict:
-        info = claude_account(self.bin(), root, max_age=0 if fresh else 30)
+        info = claude_account(self.bin(), root, max_age=0 if fresh else ACCOUNT_TTL)
         allowed = allowed_account()
         return {"account": info, "allowed": allowed, "problem": account_problem(info, allowed)}
 
@@ -396,7 +447,7 @@ class ClaudeCode(CliBackend):
             # limits; anything else is an API key, billed per token.
             st["api_key_source"] = d.get("apiKeySource")
             st["model"] = d.get("model")
-            self._remember_catalog(d)
+            self._remember_catalog(d, self.catalog_key_for(self.bin(), job.root))
             job.emit({"t": "init", "session_id": st["session_id"], "model": d.get("model")})
         elif t == "stream_event" and d.get("parent_tool_use_id") is None:
             ev = d.get("event") or {}
@@ -512,7 +563,7 @@ class ClaudeCode(CliBackend):
             self.windows[model] = window
         return window
 
-    def _remember_catalog(self, init: dict) -> None:
+    def _remember_catalog(self, init: dict, key: tuple) -> None:
         skills = [s for s in init.get("skills") or [] if isinstance(s, str)]
         self.catalog = {
             "skills": skills,
@@ -522,6 +573,19 @@ class ClaudeCode(CliBackend):
             "version": init.get("claude_code_version"),
             "at": time.time(),
         }
+        self.catalog_key = key
+
+    @staticmethod
+    def catalog_key_for(exe: str | None, root: Path) -> tuple:
+        """What the list of skills and commands depends on: the CLI (an update replaces
+        its file), the profile folder and the project, and the folders and files its
+        skills, commands, agents and plugins come from (adding or removing one changes
+        its folder)."""
+        cfg, own = profile_dir(), Path(root) / ".claude"
+        places = [own / "commands", own / "skills", own / "agents", own / "settings.json",
+                  own / "settings.local.json", cfg / "commands", cfg / "skills", cfg / "agents",
+                  cfg / "settings.json", cfg / "plugins", cfg / "plugins" / "installed_plugins.json"]
+        return (exe, stamp(exe), str(cfg), str(root), *(stamp(p) for p in places))
 
     def commands(self, root: Path, refresh: bool = False) -> dict:
         """Skills and slash commands available here, as Claude Code lists them.
@@ -530,44 +594,59 @@ class ClaudeCode(CliBackend):
         CLI in the project, read its init event (which comes before any model call)
         and stop it. It runs with Haiku and no tools, so even if a request slips out
         before the process is stopped it costs next to nothing.
+
+        The list is kept while what it depends on (catalog_key_for) stays the same. The
+        page asks on every "/" typed until it has one, so a lookup that failed answers
+        the same for CATALOG_RETRY seconds instead of starting the CLI again.
         """
         with self.catalog_lock:
-            if self.catalog and not refresh:
-                return self.catalog
-            exe = self.bin()
-            if not exe:
-                return {"error": "Claude Code CLI not found"}
-            bad = self.preflight(root)          # the account check of a turn, before any start
-            if bad:
-                return {"error": bad}
             use_config_dir()
-            cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
-                   "--output-format", "stream-json", "--verbose"]
-            try:
-                proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
-                                        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                        text=True, encoding="utf-8", errors="replace", **TREE)
-            except OSError as e:
-                return {"error": f"Could not start Claude Code: {e}"}
-            timer = threading.Timer(60, kill_tree, args=(proc,))
-            timer.start()
-            try:
-                proc.stdin.write("ok")
-                proc.stdin.close()
-                for line in proc.stdout:
-                    try:
-                        d = json.loads(line)
-                    except ValueError:
-                        continue
-                    if d.get("type") == "system" and d.get("subtype") == "init":
-                        self._remember_catalog(d)
-                        break
-            except OSError:
-                pass
-            finally:
-                timer.cancel()
-                kill_tree(proc)
-            return self.catalog or {"error": "Claude Code did not report its commands"}
+            exe = self.bin()
+            key = self.catalog_key_for(exe, root)
+            if not refresh and self.catalog and self.catalog_key == key:
+                return self.catalog
+            failed = self.catalog_failed
+            if not refresh and failed and failed[0] == key and time.monotonic() - failed[1] < CATALOG_RETRY:
+                return failed[2]
+            answer = self._read_catalog(exe, root, key)
+            if not (self.catalog and self.catalog_key == key):
+                self.catalog_failed = (key, time.monotonic(), answer)
+            return answer
+
+    def _read_catalog(self, exe: str | None, root: Path, key: tuple) -> dict:
+        if not exe:
+            return {"error": "Claude Code CLI not found"}
+        bad = self.preflight(root)          # the account check of a turn, before any start
+        if bad:
+            return {"error": bad}
+        use_config_dir()
+        cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
+               "--output-format", "stream-json", "--verbose"]
+        try:
+            proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
+                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                    text=True, encoding="utf-8", errors="replace", **TREE)
+        except OSError as e:
+            return {"error": f"Could not start Claude Code: {e}"}
+        timer = threading.Timer(60, kill_tree, args=(proc,))
+        timer.start()
+        try:
+            proc.stdin.write("ok")
+            proc.stdin.close()
+            for line in proc.stdout:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if d.get("type") == "system" and d.get("subtype") == "init":
+                    self._remember_catalog(d, key)
+                    break
+        except OSError:
+            pass
+        finally:
+            timer.cancel()
+            kill_tree(proc)
+        return self.catalog or {"error": "Claude Code did not report its commands"}
 
     def probe_rate(self) -> dict:
         """Refresh usage limits with the cheapest possible call.

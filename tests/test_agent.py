@@ -672,6 +672,79 @@ class Registry(unittest.TestCase):
         self.assertIn("claude", bs)
 
 
+class FakeInit:
+    """The `claude -p` that commands() starts: its init event, or nothing (`lines` empty)."""
+
+    def __init__(self, lines):
+        self.stdin = open(os.devnull, "w")
+        self.stdout = iter(lines)
+
+
+class ClaudeRemembers(unittest.TestCase):
+    """The command list and the login are not looked up again while nothing they depend
+    on changed (backend_claude)."""
+    INIT = json.dumps({"type": "system", "subtype": "init", "skills": ["proof"],
+                       "slash_commands": ["review"], "claude_code_version": "2.0"}) + "\n"
+
+    def setUp(self):
+        from unittest import mock
+        no_account_lock(self)
+        self.root, self.cfg = tmpdir(), tmpdir()
+        self.exe = self.cfg / "claude"
+        self.exe.write_text("")
+        for p in (mock.patch.dict(os.environ, {"CLAUDE_CONFIG_DIR": str(self.cfg)}),
+                  mock.patch.object(backend_claude, "use_config_dir"),
+                  mock.patch.object(backend_claude, "kill_tree")):
+            p.start()
+            self.addCleanup(p.stop)
+        self.claude = ClaudeCode("claude", {"bin": str(self.exe)})
+
+    def lookups(self, lines, *calls):
+        """How many times `claude` was started for commands(**kw) of each of `calls`."""
+        from unittest import mock
+        with mock.patch.object(backend_claude.subprocess, "Popen",
+                               side_effect=lambda *a, **k: FakeInit(lines)) as popen:
+            answers = [self.claude.commands(self.root, **kw) for kw in calls]
+        return popen.call_count, answers
+
+    def test_the_command_list_is_kept_until_a_skill_folder_changes(self):
+        n, answers = self.lookups([self.INIT], {}, {})
+        self.assertEqual(n, 1)
+        self.assertEqual(answers[1]["skills"], ["proof"])
+        (self.root / ".claude" / "skills" / "new").mkdir(parents=True)
+        self.assertEqual(self.lookups([self.INIT], {}, {})[0], 1, "a new skill: looked up again")
+        (self.cfg / "commands").mkdir()
+        self.assertEqual(self.lookups([self.INIT], {}, {"refresh": True})[0], 2,
+                         "your own commands too; and refresh always asks")
+
+    def test_a_failed_lookup_is_not_repeated_for_a_while(self):
+        n, answers = self.lookups([], {}, {}, {})
+        self.assertEqual(n, 1, "every '/' typed asks; claude starts once")
+        self.assertEqual(answers, [{"error": "Claude Code did not report its commands"}] * 3)
+        key, at, answer = self.claude.catalog_failed
+        self.claude.catalog_failed = (key, at - backend_claude.CATALOG_RETRY, answer)
+        n, answers = self.lookups([self.INIT], {}, {})
+        self.assertEqual((n, answers[1]["commands"]), (1, ["review"]), "a minute later: again")
+
+    def test_the_login_is_asked_again_when_a_login_file_changes(self):
+        from unittest import mock
+        status = subprocess_done('{"loggedIn": true, "email": "me@uni.example"}')
+        with mock.patch.object(backend_claude.subprocess, "run", return_value=status) as run:
+            for _ in range(2):
+                self.assertEqual(self.claude.account(self.root)["account"]["email"], "me@uni.example")
+            self.assertEqual(run.call_count, 1)
+            (self.cfg / ".credentials.json").write_text("{}")      # a login
+            self.claude.account(self.root)
+            self.assertEqual(run.call_count, 2)
+            self.claude.account(self.root, fresh=True)
+            self.assertEqual(run.call_count, 3, "a turn always asks")
+
+
+def subprocess_done(stdout):
+    import subprocess
+    return subprocess.CompletedProcess([], 0, stdout=stdout, stderr="")
+
+
 class ClaudeAccountGuard(unittest.TestCase):
     """Only the account allowed in Home -> Settings may run turns (backend_claude)."""
     OK = {"logged_in": True, "email": "me@uni.example", "org": "Lab", "auth_method": "claude.ai",
