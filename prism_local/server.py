@@ -828,9 +828,13 @@ class Handler(httpbase.Handler):
             return self._send(200, CFG.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
             st = git_status()
-            files = [{"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
-                      "editable": Path(f).suffix in EDITABLE_SUFFIXES}
-                     for f in list_files(editable_only=False)]
+            files = []
+            for f in list_files(editable_only=False):
+                try:
+                    files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
+                                  "editable": Path(f).suffix in EDITABLE_SUFFIXES})
+                except FileNotFoundError:       # deleted since it was listed (a build, git)
+                    pass
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
                                "move_error": MOVE["error"], "files": files, "order": document_order(),
                                "pdf_main": CFG.main, "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,

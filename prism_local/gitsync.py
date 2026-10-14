@@ -964,7 +964,12 @@ class GitSync:
             except (OSError, subprocess.SubprocessError, RuntimeError):
                 pass
         while not self.stop.wait(TICK):
-            self.tick()
+            try:
+                self.tick()
+            except Exception as e:          # a bug must not end autosave for the session
+                self.error = f"{type(e).__name__}: {e}"[-300:]
+                print(json.dumps({"event": "git_sync", "git_top": str(self.top), "stage": "tick",
+                                  "result": "failed", "error": self.error}), flush=True)
 
     def _finish_crashed_merge(self) -> None:
         """A merge prism-local started and never finished (the editor was killed half-way):

@@ -19,8 +19,10 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import threading
+import traceback
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -79,6 +81,7 @@ class Handler(BaseHTTPRequestHandler):
 
     # ------------------------------------------------------------ answers
     def _send(self, code, body: bytes, ctype="application/json", extra=None):
+        self._answered = True
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
@@ -118,7 +121,7 @@ class Handler(BaseHTTPRequestHandler):
             if not valid_id(q.get("client")):
                 return self._err(400, "bad client id")
             return serve_stream(self, self.presence, q["client"])
-        return self.get(u.path, q)
+        return self._answer(self.get, u.path, q)
 
     def do_POST(self):
         u = urlparse(self.path)
@@ -148,7 +151,23 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(400, "bad client id")
             self.presence.beat(body["client"])
             return self._json({"ok": True})
-        return self.post(u.path, body)
+        return self._answer(self.post, u.path, body)
+
+    def _answer(self, handle, path: str, arg):
+        """handle(path, arg). Whatever it raises that it did not answer itself (a git that
+        timed out, a bug) becomes a JSON error the page can show, instead of a connection
+        dropped without an answer, unless part of an answer has already gone out."""
+        self._answered = False
+        try:
+            return handle(path, arg)
+        except Exception as e:
+            if self._answered or isinstance(e, (ConnectionError, TimeoutError)):
+                raise                       # the page went away, or the answer was started
+            if isinstance(e, subprocess.TimeoutExpired):
+                return self._err(504, f"{Path(str(e.cmd[0] if isinstance(e.cmd, list) else e.cmd)).name} "
+                                      f"did not finish in {e.timeout:g} seconds; try again")
+            log(f"error in {self.command} {path}:\n" + traceback.format_exc().rstrip())
+            return self._err(500, f"{type(e).__name__}: {e}")
 
     def get(self, path: str, q: dict):
         return self._err(404, "not found")
@@ -261,7 +280,6 @@ def code_stamp() -> float:
 def relaunch(argv: list[str], cwd: str) -> None:
     """Start a server again (after it stopped listening), detached, without opening a
     browser: its page is already open and reloads."""
-    import subprocess
     if "--no-browser" not in argv:
         argv = [*argv, "--no-browser"]
     try:
