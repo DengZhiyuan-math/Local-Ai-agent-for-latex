@@ -84,22 +84,69 @@ class GitSyncTest(unittest.TestCase):
         self.assertTrue(lock.acquire(timeout=0), "and let go")
         lock.release()
 
+    def test_files_lock_let_go_when_unlocking_the_file_fails(self):
+        """Unlocking the lock file can fail (the folder on a network drive gone): the lock is
+        let go anyway, or every later save and sync would wait on it for good."""
+        lock = gitsync.FilesLock(lambda: self.root / ".git")
+        self.assertTrue(lock.acquire(timeout=5))
+        with mock.patch.object(gitsync.registry.FileLock, "_lock", side_effect=OSError("gone")):
+            with self.assertRaises(OSError):
+                lock.release()
+        got = []
+        t = threading.Thread(target=lambda: got.append(lock.acquire(timeout=2)))
+        t.start()
+        t.join()
+        self.assertEqual(got, [True], "another thread gets it")
+
+    def test_nothing_to_commit_does_not_wait_for_the_index(self):
+        """Another program's git (an IDE's) holds index.lock for a moment: with nothing to
+        commit, there is nothing to wait for, and a pull goes on."""
+        (self.root / ".git" / "index.lock").write_bytes(b"")
+        try:
+            self.assertFalse(self.g.commit_all("Autosave before pulling"))
+        finally:
+            (self.root / ".git" / "index.lock").unlink()
+
+    def test_a_save_between_the_check_and_the_all_recorded_keeps_its_autosave(self):
+        """commit_all decides "everything saved is recorded" while a save may call touched():
+        the two do not interleave, so that save's autosave stays due."""
+        g = self.g
+        other = []
+
+        class Comparing(int):              # touched() from another thread, mid-comparison
+            def __eq__(self, n):
+                t = threading.Thread(target=g.touched)
+                t.start()
+                t.join(0.3)
+                other.append(t)
+                return int(self) == n
+
+            __hash__ = int.__hash__
+
+        g.touched()
+        g.saves = Comparing(g.saves)
+        g.commit_all("Autosave")
+        for t in other:
+            t.join()
+        self.assertTrue(other)
+        self.assertIsNotNone(g.dirty_since, "the save's autosave is still due")
+
     def test_a_save_during_a_commit_keeps_its_autosave_due(self):
         """git may look at a file just before a save writes it: a save that came in while a
         commit ran keeps the next autosave due, or its edit would wait for another one."""
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
         self.g.touched()
-        real = self.g.commit
+        real = self.g._record
 
-        def commit(paths, message):
-            ok = real(paths, message)
+        def record(pick, message):
+            ok = real(pick, message)
             self.g.touched()                # a save, its bytes not seen by git
             return ok
 
-        self.g.commit = commit
+        self.g._record = record
         self.g.commit_all("Autosave")
         self.assertIsNotNone(self.g.dirty_since, "still due")
-        self.g.commit = real
+        self.g._record = real
         self.g.commit_all("Autosave")
         self.assertIsNone(self.g.dirty_since)
 

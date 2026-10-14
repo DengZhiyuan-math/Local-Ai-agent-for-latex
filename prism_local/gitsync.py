@@ -240,45 +240,63 @@ _REPO_LOCKS: dict[str, list] = {}
 _REPO_LOCKS_GUARD = threading.Lock()
 
 
+def _take(path: Path | None, timeout: float, own: list | None = None) -> list | None:
+    """This process's hold on the OS file lock `path`: [its threads' lock, depth, the file
+    lock]. The file is locked at the first hold in the process, and unlocked by the process
+    ending at the latest, so a crash never leaves it behind. Re-entrant within a thread.
+    path None: `own`, a lock of this process only. None after `timeout` seconds."""
+    if path is None:
+        entry = own
+    else:
+        with _REPO_LOCKS_GUARD:
+            entry = _REPO_LOCKS.setdefault(registry.norm(path), [threading.RLock(), 0, None])
+    deadline = time.monotonic() + timeout
+    if not entry[0].acquire(timeout=max(timeout, 0)):
+        return None
+    if entry[1] == 0 and path is not None:
+        held = registry.FileLock(path, timeout=max(deadline - time.monotonic(), 0))
+        try:
+            held.__enter__()
+        except (TimeoutError, OSError):
+            entry[0].release()
+            return None
+        entry[2] = held
+    entry[1] += 1
+    return entry
+
+
+def _give_back(entry: list) -> None:
+    """Undo one _take. The threads' lock is let go even when unlocking the file fails (a
+    network drive gone): the file lock goes with its handle, closed regardless."""
+    try:
+        entry[1] -= 1
+        if entry[1] == 0 and entry[2] is not None:
+            held, entry[2] = entry[2], None
+            held.__exit__(None, None, None)
+    finally:
+        entry[0].release()
+
+
 @contextmanager
 def repo_lock(git_dir: Path | None, timeout: float | None = None):
     """Held while prism-local changes a repository (commit, merge, push): one process at a
     time, also across processes: two editors in a repository shared by several projects, or
     an editor still pushing as it closes while the project opens again. It is an OS file
-    lock (.git/prism-local.lock), gone when its process ends, so a crash never leaves it
-    behind. Re-entrant within a thread. Raises RepoBusy after `timeout` (REPO_WAIT) seconds."""
-    timeout = REPO_WAIT if timeout is None else timeout
+    lock (.git/prism-local.lock, see _take). Re-entrant within a thread. Raises RepoBusy
+    after `timeout` (REPO_WAIT) seconds."""
     if git_dir is None:
         yield
         return
-    path = git_dir / "prism-local.lock"
-    with _REPO_LOCKS_GUARD:
-        entry = _REPO_LOCKS.setdefault(registry.norm(path), [threading.RLock(), 0, None])
-    deadline = time.monotonic() + timeout
-    if not entry[0].acquire(timeout=max(timeout, 0)):
+    entry = _take(git_dir / "prism-local.lock", REPO_WAIT if timeout is None else timeout)
+    if entry is None:
         raise RepoBusy("git is busy in another prism-local window; will try again")
     try:
-        if entry[1] == 0:                   # the first hold in this process: take the file
-            held = registry.FileLock(path, timeout=max(deadline - time.monotonic(), 0))
-            try:
-                held.__enter__()
-            except (TimeoutError, OSError):
-                raise RepoBusy("git is busy in another prism-local window; will try again")
-            entry[2] = held
-        entry[1] += 1
-        try:
-            yield
-        finally:
-            entry[1] -= 1
-            if entry[1] == 0:
-                held, entry[2] = entry[2], None
-                held.__exit__(None, None, None)
+        yield
     finally:
-        entry[0].release()
+        _give_back(entry)
 
 
 FILES_WAIT = 60          # seconds git waits for a save or an Undo to finish writing (they take milliseconds)
-_FILES_LOCKS: dict[str, list] = {}
 
 
 class FilesLock:
@@ -296,39 +314,21 @@ class FilesLock:
         self._own = [threading.RLock(), 0, None]     # no repository (yet): this process only
         self._held = threading.local()
 
-    def _entry(self) -> tuple[list, Path | None]:
-        git_dir = self.git_dir_fn()
-        if git_dir is None:
-            return self._own, None
-        path = Path(git_dir) / "prism-local-files.lock"
-        with _REPO_LOCKS_GUARD:
-            return _FILES_LOCKS.setdefault(registry.norm(path), [threading.RLock(), 0, None]), path
-
     def acquire(self, timeout: float = FILES_WAIT) -> bool:
         stack = getattr(self._held, "stack", [])
-        entry, path = stack[-1] if stack else self._entry()   # again: the one this thread holds
-        deadline = time.monotonic() + timeout
-        if not entry[0].acquire(timeout=max(timeout, 0)):
+        if stack:                                    # again: the one this thread holds
+            path = stack[-1][0]
+        else:
+            git_dir = self.git_dir_fn()
+            path = Path(git_dir) / "prism-local-files.lock" if git_dir is not None else None
+        entry = _take(path, timeout, self._own)
+        if entry is None:
             return False
-        if entry[1] == 0 and path is not None:        # the first hold in this process: the file too
-            held = registry.FileLock(path, timeout=max(deadline - time.monotonic(), 0))
-            try:
-                held.__enter__()
-            except (TimeoutError, OSError):
-                entry[0].release()
-                return False
-            entry[2] = held
-        entry[1] += 1
-        self._held.stack = stack + [(entry, path)]
+        self._held.stack = stack + [(path, entry)]
         return True
 
     def release(self) -> None:
-        entry, _ = self._held.stack.pop()
-        entry[1] -= 1
-        if entry[1] == 0 and entry[2] is not None:
-            held, entry[2] = entry[2], None
-            held.__exit__(None, None, None)
-        entry[0].release()
+        _give_back(self._held.stack.pop()[1])
 
     def __enter__(self):
         if not self.acquire():
@@ -363,6 +363,7 @@ class GitSync:
         self.prefix = ""                      # the project's path in it: "" or "ex2/"
         self.last_edit = self.dirty_since = None
         self.saves = 0                        # touched() so far
+        self._touch = threading.Lock()        # touched() against commit_all's "all recorded"
         self.last_commit: dict | None = None  # {"at", "message", "hash"}
         self.last_push = self.last_fetch = 0.0
         self.push_failed_at = 0.0
@@ -382,7 +383,19 @@ class GitSync:
     def git(self, *args: str, timeout: float = 60, interactive: bool = False) -> subprocess.CompletedProcess:
         """git at the repository's top: paths are relative to it (see rel()). Only a fetch
         or push you started (manual) may ask you to log in (gitenv.NO_PROMPTS)."""
-        r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout, interactive=interactive)
+        started = time.time()
+        try:
+            r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout, interactive=interactive)
+        except subprocess.TimeoutExpired:
+            # Killed: an index.lock made since it started is its own (none other could take
+            # it while it held it), and would stop the merge --abort that follows.
+            lock = self.git_dir / "index.lock" if self.git_dir else None
+            try:
+                if lock and lock.stat().st_mtime >= started - 1:
+                    lock.unlink()
+            except OSError:
+                pass
+            raise
         if args[0] in ("push", "fetch"):
             print(json.dumps({"event": "git_sync", "git_top": str(self.top),
                               "target": public_target(self.target), "stage": args[0],
@@ -505,40 +518,42 @@ class GitSync:
 
     def commit(self, paths: list[str], message: str) -> bool:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""
-        if not paths:
-            return False
-        if self.shared:      # the repository has the project's name in every message
-            message = f"{self.root_fn().name}: {message}"
-        with self.lock, repo_lock(self.git_dir):
+        return bool(paths) and self._record(lambda: paths, lambda _: message)
+
+    def commit_all(self, why: str) -> bool:
+        saves = self.saves
+        ok = self._record(self.changes, lambda paths: f"{why}: {_names(paths)}")
+        # Everything saved is recorded, unless a save came in meanwhile: its autosave stays
+        # due (at worst one that finds nothing). A save still writing calls touched() after.
+        with self._touch:
+            if self.saves == saves:
+                self.dirty_since = None
+        return ok
+
+    def _record(self, pick: Callable[[], list[str]], message: Callable[[list[str]], str]) -> bool:
+        """Commit the paths pick() names, chosen and committed at one hold of the files lock:
+        no save lands in between, and git never reads a file a save is replacing. False:
+        nothing to commit."""
+        with self.lock, repo_lock(self.git_dir), self.writes:
+            paths = pick()
+            if not paths:
+                return False
+            msg = message(paths)
+            if self.shared:      # the repository has the project's name in every message
+                msg = f"{self.root_fn().name}: {msg}"
             self._wait_index()
             self.state = "committing"
             try:
-                with self.writes:
-                    self._ok("add", "-A", "--", *paths)
-                    if self.git("diff", "--cached", "--quiet", "--", *paths).returncode == 0:
-                        return False
-                    self._ok("commit", "-q", "-m", message, "--", *paths)
+                self._ok("add", "-A", "--", *paths)
+                if self.git("diff", "--cached", "--quiet", "--", *paths).returncode == 0:
+                    return False
+                self._ok("commit", "-q", "-m", msg, "--", *paths)
                 h = self._ok("rev-parse", "--short", "HEAD").strip()
-                self.last_commit = {"at": time.time(), "message": message, "hash": h}
+                self.last_commit = {"at": time.time(), "message": msg, "hash": h}
                 self.error = None
                 return True
             finally:
                 self.state = "idle"
-
-    def commit_all(self, why: str) -> bool:
-        saves = self.saves
-        # The look at what changed and its commit at one hold of the files lock: no save
-        # lands in between, and git never reads a file a save is replacing.
-        with self.lock, repo_lock(self.git_dir):
-            self._wait_index()
-            with self.writes:
-                paths = self.changes()
-                ok = self.commit(paths, f"{why}: {_names(paths)}") if paths else False
-        # Everything saved is recorded, unless a save came in meanwhile: its autosave stays
-        # due (at worst one that finds nothing). A save still writing calls touched() after.
-        if self.saves == saves:
-            self.dirty_since = None
-        return ok
 
     def _wait_index(self) -> None:
         """In a shared repository another editor may be committing right now."""
@@ -834,6 +849,9 @@ class GitSync:
         if self.git("merge-base", "--is-ancestor", tip, "HEAD", timeout=20).returncode != 0:
             with self.writes:
                 try:
+                    # Your edits recorded first, as for any merge: one that gives up over them
+                    # would put back the files as they were when it started.
+                    self.commit_all("Autosave before pulling")
                     m = self.git("merge", "--no-edit", "-m", "Put back commits dropped from GitHub", tip, timeout=120)
                     if m.returncode != 0 and self.git_dir and (self.git_dir / "MERGE_HEAD").exists():
                         self.git("merge", "--abort", timeout=60)
@@ -1071,11 +1089,12 @@ class GitSync:
     # ------------------------------------------------------------ hooks
     def touched(self) -> None:
         """You saved a file."""
-        now = time.time()
-        self.last_edit = now
-        self.saves += 1
-        if self.dirty_since is None:
-            self.dirty_since = now
+        with self._touch:
+            now = time.time()
+            self.last_edit = now
+            self.saves += 1
+            if self.dirty_since is None:
+                self.dirty_since = now
 
     def active(self) -> bool:
         return self.check_repo() and self.enabled
@@ -1095,14 +1114,8 @@ class GitSync:
         first = next((ln.strip() for ln in prompt.splitlines()
                       if ln.strip() and not ln.startswith("[")), "") or "(no message)"
         first = first if len(first) <= 72 else first[:71] + "…"
-
-        def record():                        # as commit_all: the look and the commit at one hold
-            with self.lock, repo_lock(self.git_dir):
-                self._wait_index()
-                with self.writes:
-                    self.commit([p for p in self.changes() if p in changed], f"Agent: {first}")
-
-        self._safe(record)
+        self._safe(lambda: self._record(lambda: [p for p in self.changes() if p in changed],
+                                        lambda _: f"Agent: {first}"))
 
     def _safe(self, fn) -> None:
         try:

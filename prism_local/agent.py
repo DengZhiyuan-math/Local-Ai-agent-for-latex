@@ -32,6 +32,7 @@ MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
 MAX_TURNS = 50          # turns kept in memory for their events and Undo
 MAX_SNAPSHOT_FILE = 25 * 1024 * 1024
 MAX_SNAPSHOT_BYTES = 100 * 1024 * 1024
+UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files (a slow hook) before saying so
 
 
 @dataclass(frozen=True)
@@ -363,8 +364,12 @@ class AgentManager:
             return {"error": "unknown turn"}
         rels = [rel for rel in sorted(set(job.before) | set(job.after))
                 if job.before.get(rel) != job.after.get(rel)]
-        with self.writes:
+        if not self.writes.acquire(timeout=UNDO_WAIT):
+            return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
+        try:
             restored = self._restore(job, rels)
+        finally:
+            self.writes.release()
         if restored:
             try:
                 self.on_changed(restored, "Undo of an agent turn")

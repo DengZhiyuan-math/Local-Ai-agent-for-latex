@@ -16,6 +16,7 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -553,25 +554,27 @@ class Collaboration(unittest.TestCase):
         self.assertSafe()
 
     def test_a_merge_cut_off_by_its_timeout_is_called_off(self):
-        """git killed by its timeout in the middle of a merge leaves it half-way, and every
-        commit fails from then on: it is called off at once, and the next sync merges."""
+        """git killed by its timeout in the middle of a merge leaves it half-way, with its
+        index.lock, and every commit fails from then on: it is called off at once, and the
+        next sync merges."""
         self.write("A", "main.tex", PAPER.replace("First", "A's first"))
         self.save("A")
         d, g = self.people["B"]
         self.write("B", "main.tex", PAPER.replace("Third", "B's third"))
-        real = g.git
+        real = gitsync.gitenv.git
 
-        def cut_off(*args, **kw):
+        def cut_off(cwd, *args, **kw):
             if args[:2] == ("merge", "--no-edit"):
-                real(args[0], "--no-commit", *args[1:], **kw)     # stopped before its commit
+                real(cwd, args[0], "--no-commit", *args[1:], **kw)     # stopped before its commit,
+                (d / ".git" / "index.lock").write_bytes(b"")           # holding the index
                 raise subprocess.TimeoutExpired(["git", *args], kw.get("timeout", 60))
-            return real(*args, **kw)
+            return real(cwd, *args, **kw)
 
-        g.git = cut_off
-        self.pull("B")
+        with mock.patch.object(gitsync.gitenv, "git", cut_off):
+            self.pull("B")
         self.assertFalse((d / ".git" / "MERGE_HEAD").exists(), "called off")
+        self.assertFalse((d / ".git" / "index.lock").exists(), "and its lock gone")
         self.assertIn("B's third", self.read("B", "main.tex"))
-        g.git = real
         self.pull("B")
         text = self.read("B", "main.tex")
         self.assertIn("A's first", text)
@@ -661,6 +664,25 @@ class Collaboration(unittest.TestCase):
         self.assertIn("A's third", text)
         self.assertIn("Rewritten first", text)
         self.assertSafe()                     # every commit seen before the rewrite is back
+
+    def test_dropped_commits_put_back_over_unrecorded_edits(self):
+        """B fetched A's commit (the Home page does) without merging it, then someone force
+        pushed it away. B's next sync puts it back with a merge: B's edits not recorded yet
+        are recorded first, as for any merge, or a merge giving up over them would stop it."""
+        self.write("A", "main.tex", PAPER.replace("Third", "A's third"))
+        self.save("A")
+        db, gb = self.people["B"]
+        git(db, "fetch", "-q")
+        self.rewrite_remote()
+        self.write("B", "main.tex", PAPER.replace("Second", "B's second"))     # not recorded yet
+        self.pull("B")
+        self.assertIsNone(gb.error, gb.error)
+        self.assertIn("rewrote the history", gb.notice or "")
+        text = self.read("B", "main.tex")
+        for part in ("A's third", "B's second", "Rewritten first"):
+            self.assertIn(part, text)
+            self.assertIn(part, self.remote_file("main.tex"))
+        self.assertSafe()
 
     def test_positions_seen_in_the_history_are_not_looked_at_again(self):
         """A pull checks the positions GitHub's branch had (its reflog) for a rewrite. Those

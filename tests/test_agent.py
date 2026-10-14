@@ -13,6 +13,7 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
@@ -538,6 +539,39 @@ class Snapshots(unittest.TestCase):
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertTrue(seen["restore"], "Undo writes holding the save lock")
             self.assertTrue(seen["commit"], "and lets go of it before the commit")
+            self.assertEqual((root / "a.tex").read_bytes(), b"one\n")
+
+    def test_undo_while_git_holds_the_files_says_busy(self):
+        """git holding the files long (a repository's slow hook): Undo says so after a moment,
+        changes nothing, and works when tried again."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    (job.root / "a.tex").write_bytes(b"ONE\n")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
+            m.writes, held, done_holding = threading.RLock(), threading.Event(), threading.Event()
+
+            def git_holding():
+                with m.writes:
+                    held.set()
+                    done_holding.wait(10)
+
+            t = threading.Thread(target=git_holding)
+            t.start()
+            held.wait(5)
+            with mock.patch.object(agent, "UNDO_WAIT", 0.2):
+                r = m.undo(done["turn"])
+            done_holding.set()
+            t.join()
+            self.assertTrue(r.get("busy"), r)
+            self.assertEqual((root / "a.tex").read_bytes(), b"ONE\n", "nothing changed")
+            self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\n")
 
 

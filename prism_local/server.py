@@ -46,6 +46,7 @@ BUILD_LOCK = threading.Lock()
 # and merges; also by the other editors of a shared repository (gitsync.FilesLock).
 SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
 SAVE_WAIT = 3           # seconds a save waits for git before the page is told to try again
+UPLOAD_WAIT = 10        # seconds an upload waits for git before it is refused (try again)
 
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
@@ -525,7 +526,9 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
     stem, dot, ext = clean.rpartition(".")
     if not dot:
         stem, ext = clean, ""
-    with SAVE_LOCK:
+    if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+        raise ValueError("git is busy with the files; try the upload again in a moment")
+    try:
         for n in range(1, 1000):
             cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
             rel = f"{folder}/{cand}" if folder else cand
@@ -541,6 +544,8 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
                 continue
             write_bytes(p, data)
             return rel
+    finally:
+        SAVE_LOCK.release()
     raise ValueError("too many files with this name")
 
 

@@ -265,6 +265,7 @@ async function saveTabNow(t, force) {
     if (!(r._status === 503 && r.busy)) break;
     if (!waited) toast(`${t.path}: git is busy with the files — saving as soon as it is done.`);
     await new Promise((res) => setTimeout(res, 1000));
+    if (C.editTurn) return false;       // an Edit turn began meanwhile: saved when it ends
   }
   if (r._status === 409 && r.conflict) {
     t.conflict = "disk"; showBanner(t);
@@ -2033,7 +2034,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (u) {
     if (S.tabs.some(isDirty) && !(await saveAll())) return;
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
-    if (r._status === 0) return toast("Not undone: " + r.error);      // the button stays, to try again
+    if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
     u.textContent = `undone (${(r.restored || []).length})` + ((r.skipped || []).length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
     u.disabled = true; saveChatLog(); AH.clear("changed"); await poll();
