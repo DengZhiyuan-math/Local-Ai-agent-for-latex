@@ -299,9 +299,11 @@ def own_argv() -> list[str]:
 
 
 def write_ready_file(path: Path, info: dict) -> None:
-    """The instance file (registry.py). Written like every state file, so the Home page
-    reading it at that moment does not stop the server."""
-    registry.write_json(path, info)
+    """The instance file (registry.py), with when this process started: a process that
+    later gets the same pid is then not taken for this server. Written like every state
+    file, so the Home page reading it at that moment does not stop the server."""
+    started = registry.process_started(os.getpid())
+    registry.write_json(path, info if started is None else {**info, "started": started})
 
 
 def remove_ready_file(path: Path) -> None:

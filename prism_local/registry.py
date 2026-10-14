@@ -4,7 +4,7 @@ Everything lives under one state directory (PRISM_STATE_DIR, otherwise
 %LOCALAPPDATA%\\prism-local or ~/.local/state/prism-local):
 
     projects.json          the project list shown on the Home page
-    instances/<key>.json   {pid, port, url, root} of each running server
+    instances/<key>.json   {pid, started, port, url, root} of each running server
     instances/home.json    the same for the Home page server
     logs/<key>.log         server output of launcher-started servers
 
@@ -128,28 +128,73 @@ def ping(url: str, app: str = "prism-local", root: Path | None = None,
     return info
 
 
-def server_alive(pid) -> bool:
+def _kernel32():
+    import ctypes
+    from ctypes import wintypes
+    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+    k32.OpenProcess.restype = wintypes.HANDLE
+    k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
+    k32.WaitForSingleObject.restype = wintypes.DWORD
+    k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
+                                               ctypes.POINTER(wintypes.DWORD))
+    k32.GetProcessTimes.argtypes = (wintypes.HANDLE, *[ctypes.POINTER(wintypes.FILETIME)] * 4)
+    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+    return k32
+
+
+def _created(k32, h) -> int | None:
+    import ctypes
+    from ctypes import wintypes
+    times = [wintypes.FILETIME() for _ in range(4)]    # creation, exit, kernel, user
+    if not k32.GetProcessTimes(h, *map(ctypes.byref, times)):
+        return None
+    return times[0].dwHighDateTime << 32 | times[0].dwLowDateTime
+
+
+def process_started(pid) -> int | None:
+    """When process `pid` started, as a number to compare (not a time to show), or None
+    where the system does not say. The instance file records it: once a server has ended,
+    Windows may give its pid to a new process, which started later."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if WIN:
+        k32 = _kernel32()
+        h = k32.OpenProcess(0x1000, False, pid)                 # query limited info
+        if not h:
+            return None
+        try:
+            return _created(k32, h)
+        finally:
+            k32.CloseHandle(h)
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_bytes()
+        return int(stat[stat.rindex(b")") + 2:].split()[19])   # field 22: starttime
+    except (OSError, ValueError, IndexError):
+        return None                     # no /proc (macOS)
+
+
+def server_alive(pid, started: int | None = None) -> bool:
     """Whether `pid` is a running Python process (a prism-local server), not a process
-    that got the number of a server that ended long ago."""
+    that got the number of a server that ended long ago. With `started` (the instance
+    file's, see process_started) the process must also have started then; instance files
+    written before that was recorded are judged by the program's name alone."""
     if not isinstance(pid, int) or pid <= 0:
         return False
     if WIN:
         import ctypes
         from ctypes import wintypes
-        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-        k32.OpenProcess.restype = wintypes.HANDLE
-        k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-        k32.WaitForSingleObject.restype = wintypes.DWORD
-        k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
-                                                   ctypes.POINTER(wintypes.DWORD))
-        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        k32 = _kernel32()
         h = k32.OpenProcess(0x1000 | 0x00100000, False, pid)  # query limited info | synchronize
         if not h:
-            return ctypes.get_last_error() == 5                # access denied: it exists
+            # Access denied: it exists, but a server of yours can always be looked at.
+            return ctypes.get_last_error() == 5 and started is None
         try:
             if k32.WaitForSingleObject(h, 0) != 0x102:         # not WAIT_TIMEOUT: it has ended
                 return False
+            now = _created(k32, h) if started is not None else None
+            if now is not None:
+                return now == started
             buf, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
             if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
                 return "python" in Path(buf.value).name.lower()
@@ -158,9 +203,15 @@ def server_alive(pid) -> bool:
             k32.CloseHandle(h)
     try:
         os.kill(pid, 0)
+        other_user = False
     except ProcessLookupError:
         return False
     except PermissionError:
+        other_user = True
+    now = process_started(pid) if started is not None else None
+    if now is not None:
+        return now == started
+    if other_user:
         return True
     try:
         return "python" in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode(
@@ -178,7 +229,7 @@ def running_instance(inst: Path, app: str = "prism-local", root: Path | None = N
         live = ping(info["url"], app, root, timeout)
         if live:
             return {**info, "pages": live.get("pages", 0)}
-    if cleanup and inst.exists() and not server_alive((info or {}).get("pid")):
+    if cleanup and inst.exists() and not server_alive((info or {}).get("pid"), (info or {}).get("started")):
         try:
             inst.unlink()
         except OSError:
@@ -361,7 +412,7 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
         if info:
             return {"url": info["url"], "started": False}
         old = read_json(inst)
-        if old and server_alive(old.get("pid")):
+        if old and server_alive(old.get("pid"), old.get("started")):
             # It runs but did not answer in time (busy, or waking up): give it a little
             # longer rather than start a second server for the same project.
             deadline = time.monotonic() + 10

@@ -102,6 +102,24 @@ class Instances(TempState):
         self.assertFalse(registry.server_alive(None))
         self.assertFalse(registry.server_alive(-5))
 
+    def test_a_pid_given_to_a_new_process_is_not_the_server(self):
+        # After a crash the system may give the server's pid to a new process, which
+        # started later than the instance file says: the file is stale.
+        started = registry.process_started(os.getpid())
+        if started is None:
+            self.skipTest("this system does not say when a process started")
+        self.assertEqual(registry.process_started(os.getpid()), started)
+        self.assertIsNone(registry.process_started(None))
+        self.assertTrue(registry.server_alive(os.getpid(), started))
+        self.assertFalse(registry.server_alive(os.getpid(), started + 1))
+        inst = registry.instance_file("slow")
+        registry.write_json(inst, {"pid": os.getpid(), "started": started, "url": "http://127.0.0.1:9/"})
+        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertTrue(inst.exists(), "the server itself, only slow")
+        registry.write_json(inst, {"pid": os.getpid(), "started": started + 1, "url": "http://127.0.0.1:9/"})
+        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertFalse(inst.exists(), "another process with its pid")
+
 
 class Create(TempState):
     def test_creates_template_and_lists_it(self):

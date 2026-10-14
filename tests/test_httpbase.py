@@ -79,6 +79,9 @@ class ReadyFile(unittest.TestCase):
         info = json.loads(path.read_text(encoding="utf-8"))
         self.assertEqual(info["url"], "second")
         self.assertEqual([p.name for p in path.parent.iterdir()], ["x.json"], "no temporary file is left")
+        if registry.process_started(os.getpid()) is not None:
+            self.assertEqual(info["started"], registry.process_started(os.getpid()))
+        self.assertTrue(registry.server_alive(info["pid"], info.get("started")))
 
 
 if __name__ == "__main__":
