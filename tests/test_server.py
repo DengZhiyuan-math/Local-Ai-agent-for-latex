@@ -6,6 +6,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
@@ -70,6 +71,69 @@ class Config(unittest.TestCase):
         (root / "prism.json").write_text('{"engine": "lualatex"}', encoding="utf-8")
         server.refresh_config()
         self.assertEqual(server.CFG.engine, "lualatex")
+
+
+DOC = "\\documentclass{article}\\begin{document}\\input{sec}\\end{document}"
+
+
+class ShownDocument(unittest.TestCase):
+    """Which document is shown (its PDF in the pane) and which a build builds."""
+
+    def setUp(self):
+        self.root = project({"main.tex": DOC, "sec.tex": "chapter", "notes.tex": "\\documentclass{article}"
+                             "\\begin{document}\\input{part}\\end{document}", "part.tex": "notes' part",
+                             "loose.tex": "in no document", "prism.json": '{"main": "main.tex"}'})
+
+    def build(self, active, during=lambda cfg: None):
+        """run_build with a stand-in for the TeX run; during(cfg) runs while it builds."""
+        class Fake:
+            def __init__(self, root, main, outdir, mode, **kw):
+                self.cfg_main = main
+
+            def run(fake):
+                during(server.Config(self.root, main=fake.cfg_main))
+                (self.root / "build").mkdir(exist_ok=True)
+                (self.root / "build" / (Path(fake.cfg_main).stem + ".pdf")).write_bytes(b"%PDF new")
+                return {"exit": 0, "diagnostics": [], "output": ""}
+        with mock.patch.object(server.build, "Build", Fake):
+            return server.run_build("draft", active=active)
+
+    def test_a_chapter_builds_the_document_that_includes_it(self):
+        self.assertEqual(self.build("sec.tex")["main"], "main.tex")
+        self.assertEqual(self.build("part.tex")["main"], "notes.tex", "not prism.json's main")
+        self.assertEqual(self.build("notes.tex")["main"], "notes.tex")
+        self.assertEqual(self.build("loose.tex")["main"], "main.tex", "included nowhere: the main")
+
+    def test_the_shown_document_changes_when_its_build_ends(self):
+        (self.root / "build").mkdir()
+        (self.root / "build" / "main.pdf").write_bytes(b"%PDF old")
+        os.utime(self.root / "build" / "main.pdf", (1000, 1000))
+        seen = {}
+
+        def during(cfg):
+            seen["shown"] = server.CFG.main
+            cfg.pdf.write_bytes(b"%PDF half")                 # the engine's first run
+            seen["pdf"] = server.pdf_state(cfg)
+        r = self.build("notes.tex", during)
+        self.assertEqual(seen["shown"], "main.tex", "while notes.tex builds, main.tex's PDF stays")
+        self.assertEqual(server.CFG.main, "notes.tex")
+        self.assertIsNotNone(r["pdf_mtime"])
+        seen.clear()
+        self.build("sec.tex", during)                     # rebuilding main.pdf, which was shown before
+        self.assertEqual(seen["pdf"], 1000.0, "reported as it was until the build ends")
+        self.assertNotEqual(server.pdf_state(server.CFG), 1000.0)
+
+    def test_a_changed_prism_json_keeps_a_standalone_document_shown(self):
+        self.build("notes.tex")
+        time.sleep(0.02)
+        (self.root / "prism.json").write_text('{"main": "main.tex", "engine": "lualatex"}', encoding="utf-8")
+        server.refresh_config()
+        self.assertEqual((server.CFG.main, server.CFG.engine), ("notes.tex", "lualatex"))
+        self.build("main.tex")
+        time.sleep(0.02)
+        (self.root / "prism.json").write_text('{"main": "notes.tex"}', encoding="utf-8")
+        server.refresh_config()
+        self.assertEqual(server.CFG.main, "notes.tex", "showing the main: it follows prism.json")
 
 
 class Files(unittest.TestCase):

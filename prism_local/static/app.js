@@ -1043,10 +1043,15 @@ if (LOCKS) {
   setInterval(() => { if (POP.alive && Date.now() - POP.last > 90000) setPopped(false); }, 5000);
 }
 
-function showPdf(mtime, main) {
+async function showPdf(mtime, main) {
   S.pdfMtime = mtime; S.pdfMain = main;
   if (pdfChannel) pdfChannel.postMessage({ type: "pdf", mtime, main });
-  if (!POP.alive) return PV.load(mtime, main);
+  // Not loaded (a build still writing it, a file cut short): forget it, so a later poll asks
+  // again, at most every few seconds.
+  if (!POP.alive && !(await PV.load(mtime, main)) && S.pdfMtime === mtime && S.pdfMain === main) {
+    const failed = S.pdfMtime;
+    setTimeout(() => { if (S.pdfMtime === failed && S.pdfMain === main) S.pdfMtime = null; }, 3000);
+  }
 }
 
 /* ------------------------------------------------------------------ SyncTeX */

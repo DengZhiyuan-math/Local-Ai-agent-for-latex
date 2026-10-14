@@ -287,19 +287,21 @@ const PV = {
       $("#pdf-outline").replaceChildren(); $("#pdf-find .count").textContent = ""; $("#pdf-back").hidden = true;
       if (old) old.destroy();
     }
-    if (!mtime) return;
+    // false: the PDF could not be had (a build is writing it, the document changed, a file
+    // cut short): the caller asks again later. Superseded by a newer load counts as done.
+    if (!mtime) return true;
     let data;
     try {
       const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""));
-      if (!res.ok) return;
+      if (!res.ok) return seq !== this.seq;
       data = new Uint8Array(await res.arrayBuffer());
-    } catch { return; }
+    } catch { return seq !== this.seq; }
     // disableFontFace: draw glyphs as paths. Through the browser's fonts, symbols of TeX's
     // Type 1 fonts (the minus and the equals sign of CMSY/CMR) go missing.
     const doc = await pdfjsLib.getDocument({ data, disableFontFace: true,
       cMapUrl: "/static/vendor/cmaps/", cMapPacked: true }).promise.catch(() => null);
-    if (!doc) return;
-    if (seq !== this.seq) { doc.destroy(); return; }       // a newer build's PDF is on its way
+    if (!doc) return seq !== this.seq;
+    if (seq !== this.seq) { doc.destroy(); return true; }  // a newer build's PDF is on its way
     const old = this.pdf;
     this.pdf = doc; this.mtime = mtime;
     this.text = new Map(); this.find.index = null; this.find.hits = [];
@@ -307,6 +309,7 @@ const PV = {
     if (old) old.destroy();
     if (!$("#pdf-outline").hidden) this.drawOutline();
     if (this.find.q && !$("#pdf-find").hidden) this.search($("#pdf-find input").value);
+    return true;
   },
 
   // Lay out the pages of the current document at the current zoom. The pages that will be

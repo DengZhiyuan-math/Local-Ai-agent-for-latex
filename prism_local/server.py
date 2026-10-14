@@ -126,6 +126,9 @@ class Config:
                 f"rerun until stable; {how}")
 
 
+# The project's settings, with the document shown now (CFG.main: its PDF is the one in the
+# PDF pane, and the one the agent's compile tool builds when nothing says which). Replaced
+# as a whole, never changed in place; a request reads it once (cfg = CFG) and uses that.
 CFG: Config = None  # type: ignore[assignment]
 ROOT: Path = Path.cwd()
 
@@ -138,12 +141,17 @@ def set_root(root: Path) -> None:
 
 def refresh_config() -> None:
     """Load prism.json again when it changed, so a new engine or outdir applies at once."""
+    global CFG
     try:
         stamp = (ROOT / "prism.json").stat().st_mtime_ns
     except OSError:
         stamp = None
     if stamp != CFG.stamp:
-        set_root(ROOT)
+        # A pull, a merge or an agent changed it: a standalone document (not prism.json's
+        # main) stays shown; the main follows prism.json.
+        old = CFG
+        keep = old.main if old.main != old.project_main and (ROOT / old.main).is_file() else None
+        CFG = Config(ROOT, main=keep)
 
 
 # ---------------------------------------------------------------- files
@@ -382,7 +390,18 @@ def resolve_tex_name(name: str) -> str | None:
     return build.project_file(ROOT, name)
 
 
-RUNNING: dict = {"build": None}      # the build in progress, for /api/build/stop
+# The build in progress (for /api/build/stop), and the PDF it writes with that PDF's mtime
+# from before it began: the engine rewrites the PDF on every run of a build, so while it
+# works the PDF is reported as it was (pdf_state) and not served half-written.
+RUNNING: dict = {"build": None, "pdf": None}
+
+
+def pdf_state(cfg: Config) -> float | None:
+    """The mtime of cfg's PDF as pages should see it; None when there is none yet."""
+    writing = RUNNING["pdf"]
+    if writing and writing[0] == cfg.pdf:
+        return writing[1]
+    return mtime(cfg.pdf) if cfg.pdf.exists() else None
 
 # Files added to an agent message (the + button, drag and drop, a pasted image) are
 # saved in the project, so the agent reads them with its file tools.
@@ -544,6 +563,46 @@ def stale_document() -> str | None:
     return max(stale)[2] if stale else None
 
 
+def input_chain(main: str) -> list[str]:
+    """`main` and the files it \\input's or \\include's, depth first."""
+    order: list[str] = []
+
+    def visit(rel: str) -> None:
+        if rel in order:
+            return
+        order.append(rel)
+        try:
+            text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        for line in text.splitlines():
+            for m in INPUT_RE.finditer(strip_comment(line)):
+                child = resolve_tex_name(m.group(1).strip())
+                if child:
+                    visit(child)
+    visit(main)
+    return order
+
+
+def document_of(rel: str, cfg: Config) -> str:
+    """The document a build started from `rel` builds: rel when it is a document; else the
+    document shown now if it includes rel (a chapter of it), else prism.json's main if
+    that does, else another document that does, else prism.json's main."""
+    def is_doc(r: str) -> bool:
+        try:
+            return r.endswith(".tex") and build.is_document((ROOT / r).read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            return False
+    if is_doc(rel):
+        return rel
+    firsts = [m for m in dict.fromkeys((cfg.main, cfg.project_main)) if (ROOT / m).is_file()]
+    others = [f for f in list_files() if f.endswith(".tex") and f not in firsts]
+    for m in firsts + [f for f in others if is_doc(f)]:
+        if rel in input_chain(m):
+            return m
+    return cfg.project_main
+
+
 def show_last_built() -> None:
     """Show the PDF of the document built last (its PDF is the newest), not always the
     project's main, so a reopened editor shows the PDF it showed before."""
@@ -567,43 +626,47 @@ def show_last_built() -> None:
 def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
     global CFG
-    if mode not in CFG.modes:
+    shown = CFG
+    if mode not in shown.modes:
         return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
-                "output": f"There is no '{mode}' build.", "main": CFG.main, "pdf_mtime": None}
+                "output": f"There is no '{mode}' build.", "main": shown.main, "pdf_mtime": None}
     if not BUILD_LOCK.acquire(blocking=False):
         return {"busy": True}
     try:
-        main = CFG.project_main
         if active is None:
             # No open file says which (the agent's compile tool, auto-compile after its turn):
             # the document edited since its PDF was built, else the document shown now.
-            main = stale_document() or (CFG.main if (ROOT / CFG.main).is_file() else main)
-        if active is not None:
+            main = stale_document() or (shown.main if (ROOT / shown.main).is_file() else shown.project_main)
+        else:
             if not isinstance(active, str):
                 raise ValueError("active must be a project file path")
             source = resolve(active)
             if not source.is_file():
                 raise FileNotFoundError(active)
-            if source.suffix == ".tex" and build.is_document(source.read_text(encoding="utf-8")):
-                main = source.relative_to(ROOT).as_posix()
+            main = document_of(source.relative_to(ROOT).as_posix(), shown)
         # Select outputs in memory. Opening a standalone document does not change prism.json.
+        # It is shown once its build has ended: until then the PDF pane keeps what it shows.
         cfg = Config(ROOT, main=main)
-        CFG = cfg
         t0 = time.time()
         before = mtime(cfg.pdf) if cfg.pdf.exists() else None
+        RUNNING["pdf"] = (cfg.pdf, before)
         cmd = cfg.custom.get(mode)
         b = build.Build(ROOT, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
                         command=cfg.expand(cmd) if cmd else None, clean=clean,
                         shell_escape=cfg.shell_escape)
         RUNNING["build"] = b
-        r = b.run()
+        try:
+            r = b.run()
+        finally:
+            RUNNING["pdf"] = None
+            CFG = cfg
         if cfg.error:
             r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
         pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
         return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
                 "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
     finally:
-        RUNNING["build"] = None
+        RUNNING["build"] = RUNNING["pdf"] = None
         BUILD_LOCK.release()
 
 
@@ -629,13 +692,14 @@ class SyncTex:
         self.recs: list[tuple] = []   # (page, kind, file, line, x, y, w, h, d) in bp
 
     def load(self) -> bool:
-        if not CFG.synctex.exists():
+        synctex = CFG.synctex
+        if not synctex.exists():
             return False
-        st = (CFG.synctex, CFG.synctex.stat().st_mtime_ns)
+        st = (synctex, synctex.stat().st_mtime_ns)
         if st == self.stamp:
             return True
         inputs, recs, page, unit, mag = {}, [], 0, 1.0, 1.0
-        with gzip.open(CFG.synctex, "rt", encoding="utf-8", errors="replace") as fh:
+        with gzip.open(synctex, "rt", encoding="utf-8", errors="replace") as fh:
             for line in fh:
                 c = line[:1]
                 if c == "I" and line.startswith("Input:"):
@@ -819,13 +883,17 @@ class Handler(httpbase.Handler):
             return self._json({"app": "prism-local", "root": str(ROOT), "project_key": registry.project_key(ROOT), "pid": os.getpid(),
                                "pages": PRESENCE.count()})
         if path == "/api/pdfstat":
-            return self._json({"main": CFG.main, "mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None})
+            cfg = CFG
+            return self._json({"main": cfg.main, "mtime": pdf_state(cfg)})
         if path == "/pdf":
-            if q.get("main") and q["main"] != CFG.main:
+            cfg = CFG
+            if q.get("main") and q["main"] != cfg.main:
                 return self._err(409, "the compiled document changed")
-            if not CFG.pdf.exists():
+            if RUNNING["pdf"] and RUNNING["pdf"][0] == cfg.pdf:
+                return self._err(503, "the PDF is being built; it is served when the build ends")
+            if not cfg.pdf.exists():
                 return self._err(404, "no PDF yet")
-            return self._send(200, CFG.pdf.read_bytes(), "application/pdf")
+            return self._send(200, cfg.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
             st = git_status()
             files = []
@@ -837,7 +905,7 @@ class Handler(httpbase.Handler):
                     pass
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
                                "move_error": MOVE["error"], "files": files, "order": document_order(),
-                               "pdf_main": CFG.main, "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
+                               "pdf_main": (cfg := CFG).main, "pdf_mtime": pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
@@ -855,9 +923,10 @@ class Handler(httpbase.Handler):
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))
         if path == "/api/config":
-            return self._json({"main": CFG.project_main, "outdir": CFG.outdir, "modes": CFG.modes,
-                               "builder": CFG.builder, "engine": CFG.engine, "error": CFG.error,
-                               "build": {m: CFG.describe(m) for m in CFG.modes}})
+            cfg = CFG
+            return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
+                               "builder": cfg.builder, "engine": cfg.engine, "error": cfg.error,
+                               "build": {m: cfg.describe(m) for m in cfg.modes}})
         if path == "/api/agent/events":
             if q.get("project_key") != registry.project_key(ROOT):
                 return self._err(409, "This page belongs to another project. Reopen the project's editor.")
