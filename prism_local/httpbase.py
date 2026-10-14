@@ -246,6 +246,39 @@ def idle_watchdog(srv: Server, presence: Presence, busy=lambda: False, what="wor
         return
 
 
+CODE_DIR = Path(__file__).resolve().parent
+
+
+def code_stamp() -> float:
+    """When prism-local's code on disk last changed. A server keeps running the code it
+    started with; once this is newer (selfupdate.py), its page offers a restart."""
+    try:
+        return max(p.stat().st_mtime for p in (*CODE_DIR.glob("*.py"), *(CODE_DIR / "static").glob("*.*")))
+    except (OSError, ValueError):
+        return 0.0
+
+
+def relaunch(argv: list[str], cwd: str) -> None:
+    """Start a server again (after it stopped listening), detached, without opening a
+    browser: its page is already open and reloads."""
+    import subprocess
+    if "--no-browser" not in argv:
+        argv = [*argv, "--no-browser"]
+    try:
+        out = sys.stdout if sys.stdout and sys.stdout.fileno() >= 0 else subprocess.DEVNULL
+    except (OSError, ValueError, AttributeError):
+        out = subprocess.DEVNULL
+    kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
+          if os.name == "nt" else {"start_new_session": True})
+    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
+                     close_fds=True, cwd=cwd, **kw)
+
+
+def own_argv() -> list[str]:
+    """This process's command line."""
+    return list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+
+
 def write_ready_file(path: Path, info: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(path.name + ".tmp")

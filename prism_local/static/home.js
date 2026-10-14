@@ -42,6 +42,7 @@ async function load() {
   const r = await api("/api/projects").catch(() => null);
   if (!r || r._status !== 200) return;
   delete r._status;
+  showUpdate(r.updated);
   const sig = JSON.stringify(r);
   if (sig === H.sig || H.dragging) return;   // unchanged: keep the DOM (hover, focus) as it is
   H.sig = sig;
@@ -49,6 +50,26 @@ async function load() {
   H.defaultParent = r.default_parent; H.loaded = true;
   render();
 }
+// prism-local was updated in the background (selfupdate.py) while this page's server ran.
+function showUpdate(updated) {
+  const b = $("#btn-restart");
+  if (updated && b.hidden) toast("prism-local was updated. Click “Update: restart” to use the new version.");
+  b.hidden = !updated;
+}
+$("#btn-restart").onclick = async () => {
+  const b = $("#btn-restart"); b.disabled = true; b.textContent = "restarting…";
+  const before = await api("/api/ping").catch(() => null);
+  const r = await api("/api/restart", {}).catch(() => ({ error: "Home server not reachable" }));
+  if (!r.error && before) {
+    for (let i = 0; i < 80; i++) {           // the new server listens within a few seconds
+      await new Promise((res) => setTimeout(res, 500));
+      const p = await fetch("/api/ping", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
+      if (p && p.pid !== before.pid) return location.reload();
+    }
+  }
+  b.disabled = false; b.textContent = "Update: restart";
+  toast(r.error || "The Home page did not come back. Open prism-local again.", true);
+};
 async function loadGit(p) {
   if (!p.exists) return;
   const r = await api("/api/git?id=" + encodeURIComponent(p.id)).catch(() => null);

@@ -44,6 +44,10 @@ from proc import NO_WINDOW  # noqa: E402
 from texutil import tex_title  # noqa: E402
 
 PRESENCE = Presence()
+# Like the editor, the Home page keeps running the code it started with; once prism-local
+# is updated, the page offers a restart (/api/restart) on the same command line.
+STARTED_CODE = httpbase.code_stamp()
+RESTART: dict = {"server": None, "again": False}
 MAX_SCAN = 3000
 BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -1314,7 +1318,8 @@ class Handler(httpbase.Handler):
                 return self._json({"app": "prism-home", "pid": os.getpid(),
                                    "pages": PRESENCE.count()})
             if path == "/api/projects":
-                return self._json(list_projects())
+                return self._json({**list_projects(),
+                                   "updated": httpbase.code_stamp() > STARTED_CODE + 1})
             if path == "/api/settings":
                 return self._json({"settings": load_settings(),
                                    "github": gh_status(refresh=q.get("refresh") == "1"),
@@ -1374,6 +1379,12 @@ class Handler(httpbase.Handler):
                 return self._json(change_tag(body))
             if path == "/api/tags/remove":
                 return self._json(remove_tag(str(body["name"])))
+            if path == "/api/restart":
+                if RESTART["server"] is None:
+                    return self._err(409, "not ready to restart")
+                RESTART["again"] = True
+                threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+                return self._json({"ok": True})
             if path == "/api/projects/open":
                 r = open_project(body["id"])
                 return self._json(r, 502 if "error" in r else 200)
@@ -1428,15 +1439,20 @@ def main():
     start_fetch_all()                   # what changed on GitHub since last time
     threading.Thread(target=selfupdate.update, daemon=True).start()   # prism-local itself
     httpbase.stop_on_signals(srv)
+    RESTART["server"] = srv
     try:
         srv.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         srv.server_close()
-        if a.ready_file:
+        if a.ready_file:            # first, so that the new server can start at once
             httpbase.remove_ready_file(a.ready_file)
-        httpbase.log("stopped")
+        if RESTART["again"]:
+            httpbase.relaunch(httpbase.own_argv(), str(Path.home()))
+            httpbase.log("restarting with the updated code")
+        else:
+            httpbase.log("stopped")
 
 
 if __name__ == "__main__":

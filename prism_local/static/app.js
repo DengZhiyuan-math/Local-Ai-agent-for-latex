@@ -525,6 +525,7 @@ async function poll() {
   }
   if (anyChange || changed) loadSymbols();
   if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
+  if (r.updated && $("#btn-restart").hidden) toast("prism-local was updated: click “Update: restart” to use the new version");
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
   if (r.sync) renderSync(r.sync);

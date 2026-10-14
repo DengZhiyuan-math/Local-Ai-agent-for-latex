@@ -475,17 +475,7 @@ def snippets_file() -> Path:
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
 # command line, on the same port, and the page reloads.
-CODE_DIR = Path(__file__).resolve().parent
-
-
-def code_stamp() -> float:
-    try:
-        return max(p.stat().st_mtime for p in (*CODE_DIR.glob("*.py"), *(CODE_DIR / "static").glob("*.*")))
-    except (OSError, ValueError):
-        return 0.0
-
-
-STARTED_CODE = code_stamp()
+STARTED_CODE = httpbase.code_stamp()
 STARTED_AT = time.time()                 # tells the page when a new server answers
 RESTART: dict = {"server": None, "again": False, "move_to": None, "args": None, "port": None}
 # A folder rename that did not work (in use?): the server came back at the old folder.
@@ -531,20 +521,9 @@ def move_argv(new: Path) -> list[str]:
 def relaunch() -> None:
     """Start this server again with the same command line (after it stopped listening),
     or, after a rename, for the renamed folder (move_argv)."""
-    argv = list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
-    if RESTART["move_to"] is not None:
-        argv = move_argv(RESTART["move_to"])
-    if "--no-browser" not in argv:
-        argv.append("--no-browser")           # the page is already open
-    try:
-        out = sys.stdout if sys.stdout and sys.stdout.fileno() >= 0 else subprocess.DEVNULL
-    except (OSError, ValueError, AttributeError):
-        out = subprocess.DEVNULL
-    kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
-          if os.name == "nt" else {"start_new_session": True})
+    argv = move_argv(RESTART["move_to"]) if RESTART["move_to"] is not None else httpbase.own_argv()
     # Not from inside the project's folder: a process working there keeps it from being renamed.
-    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                     close_fds=True, cwd=str(ROOT.parent), **kw)
+    httpbase.relaunch(argv, str(ROOT.parent))
 
 
 def stale_document() -> str | None:
@@ -838,7 +817,7 @@ class Handler(httpbase.Handler):
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
                                "move_error": MOVE["error"], "files": files, "order": document_order(),
                                "pdf_main": CFG.main, "pdf_mtime": mtime(CFG.pdf) if CFG.pdf.exists() else None,
-                               "updated": code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
+                               "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
             import hub                  # the Home page's GitHub helpers
@@ -1104,7 +1083,7 @@ def main():
     httpbase.stop_on_signals(srv)
     RESTART.update(server=srv, args=a, port=port)
     GITSYNC.start()
-    # Started from a terminal, not the launcher: update now; the editor then offers a restart.
+    # Update prism-local in the background; the editor then offers a restart.
     threading.Thread(target=selfupdate.update, daemon=True).start()
     try:
         srv.serve_forever()
