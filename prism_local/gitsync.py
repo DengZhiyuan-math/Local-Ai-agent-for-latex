@@ -579,8 +579,10 @@ class GitSync:
                         interactive=manual)
 
     def _remote_state(self) -> None:
-        self.has_remote = bool(self.git("remote", timeout=20).stdout.strip())
         self.validate_target()
+        # A target names one of the repository's remotes (_target checked it, and looks
+        # again when the configuration changes): only without one is git asked.
+        self.has_remote = bool(self.target) or bool(self.git("remote", timeout=20).stdout.strip())
         self.upstream = (f"{self.target['remote']}/{self.target['branch_ref'].removeprefix('refs/heads/')}"
                          if self.target else None)
         if self.upstream and self.git("rev-parse", "--verify", self.tracking_ref).returncode == 0:
@@ -709,11 +711,28 @@ class GitSync:
         if not now:
             return False
         was = self.git("reflog", "show", "--format=%H", "-n", "20", ref, timeout=20).stdout.split()
-        # Positions it had that are no longer in its history (newest first).
-        lost = [c for c in dict.fromkeys(was) if c != now
-                and self.git("cat-file", "-e", f"{c}^{{commit}}", timeout=20).returncode == 0
-                and self.git("merge-base", "--is-ancestor", c, now, timeout=20).returncode != 0]
+        # Positions it had that are no longer in its history (newest first). Those the last
+        # look found in the history of its tip then are still in it while that tip is (a
+        # fetch that only added commits): then only the newer positions are looked at.
+        seen_ref, seen_tip, kept = getattr(self, "_in_history", (None, None, frozenset()))
+        if seen_ref != ref or (seen_tip != now and self.git(
+                "merge-base", "--is-ancestor", seen_tip, now, timeout=20).returncode != 0):
+            kept = frozenset()
+        elif seen_tip != now:
+            kept |= {seen_tip}
+        lost, ok = [], set()
+        for c in dict.fromkeys(was):
+            if c == now:
+                continue
+            if c in kept:
+                ok.add(c)
+            elif self.git("cat-file", "-e", f"{c}^{{commit}}", timeout=20).returncode == 0:
+                if self.git("merge-base", "--is-ancestor", c, now, timeout=20).returncode == 0:
+                    ok.add(c)
+                else:
+                    lost.append(c)
         if not lost:
+            self._in_history = (ref, now, frozenset(ok))
             return False
         tip = lost[0]                            # the newest position it had: it holds the rest
         dropped = self.git("rev-list", "--count", f"{now}..{tip}", timeout=20).stdout.strip()

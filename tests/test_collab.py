@@ -576,6 +576,39 @@ class Collaboration(unittest.TestCase):
         self.assertIn("Rewritten first", text)
         self.assertSafe()                     # every commit seen before the rewrite is back
 
+    def test_positions_seen_in_the_history_are_not_looked_at_again(self):
+        """A pull checks the positions GitHub's branch had (its reflog) for a rewrite. Those
+        found in its history stay there while it only moves on: an idle pull checks none, a
+        pull bringing in commits only that its old tip is in the new history. After a rewrite
+        every position is checked again, and the dropped commit is put back."""
+        for i in range(3):
+            self.write("A", "main.tex", PAPER.replace("Third", f"A's {i}"))
+            self.save("A")
+            self.pull("B")
+        _, gb = self.people["B"]
+        calls = []
+        real = gb.git
+
+        def counted(*args, **kw):
+            calls.append(" ".join(args[:2]))
+            return real(*args, **kw)
+        gb.git = counted
+        self.pull("B")
+        self.assertEqual(calls.count("cat-file -e"), 0, "nothing new: no position checked")
+        self.write("A", "main.tex", PAPER.replace("Third", "A's last"))
+        self.save("A")
+        calls.clear()
+        self.pull("B")
+        self.assertEqual((calls.count("cat-file -e"), calls.count("merge-base --is-ancestor")), (0, 1))
+        self.assertIn("A's last", self.read("B", "main.tex"))
+        self.rewrite_remote()
+        calls.clear()
+        self.pull("B")
+        self.assertGreater(calls.count("cat-file -e"), 3, "after a rewrite: every position")
+        self.assertIn("rewrote the history", gb.notice or "")
+        self.assertIn("A's last", self.remote_file("main.tex"))
+        self.assertSafe()
+
     def test_rewrite_put_back_after_a_fetch_in_between(self):
         """The Home page's background check fetched first: the old position is only in git's
         log of the remote branch, and that is enough."""
