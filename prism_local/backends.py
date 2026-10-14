@@ -160,6 +160,23 @@ class Job:
             self.events.append(ev)
             self.cond.notify_all()
 
+    @property
+    def may_compile(self) -> bool:
+        """Whether the turn has the editor's compile tool: an Edit turn, with the editor's server."""
+        return self.mode == "edit" and bool(self.server_url)
+
+    def tool(self, tid, name, summary="", **place) -> None:
+        """A tool the agent called (the event's form is kept here, whatever shape the
+        backend's own output had): its id, its name, a summary of its input, and where it
+        works when that is known (`place`: "path", "line")."""
+        self.emit({"t": "tool", "id": "" if tid is None else str(tid), "name": str(name or "tool"),
+                   "summary": str(summary or "")[:200], **place})
+
+    def tool_result(self, tid, error, preview="") -> None:
+        """How the tool call `tid` ended: whether it failed, the start of its output."""
+        self.emit({"t": "tool_result", "id": "" if tid is None else str(tid), "error": bool(error),
+                   "preview": str(preview or "")[:300]})
+
     def wait_events(self, after: int, timeout: float) -> tuple[list[dict], bool]:
         with self.cond:
             if len(self.events) <= after and not self.done:
@@ -185,6 +202,7 @@ class Backend:
     skills = False                    # offers skills / slash commands (/api/agent/commands)
     usage_limits = False              # reports subscription usage limits (/api/agent/usage)
     input_types = ("text",)
+    rate: dict | None = None          # the usage limits last seen (usage_limits)
 
     def __init__(self, pid: str, spec: dict | None = None):
         spec = spec or {}
@@ -253,6 +271,11 @@ class Backend:
 
     def commands(self, root: Path, refresh: bool = False) -> dict:
         return {"skills": [], "commands": [], "terminal_only": []}
+
+    def account(self, root: Path, fresh: bool = False) -> dict | None:
+        """The account the backend would use ({"account", "allowed", "problem"}); None: it
+        has none to show (an API key from the environment)."""
+        return None
 
     def info(self) -> dict:
         why = self.unavailable()

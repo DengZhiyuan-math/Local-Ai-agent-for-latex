@@ -114,7 +114,7 @@ class ChangeCoverage(unittest.TestCase):
             self.assertEqual(outside.read_bytes(), b"private")
 
     def test_large_file_changes_are_detected_and_marked_as_not_undoable(self):
-        with tempfile.TemporaryDirectory() as tmp, mock.patch("agent.MAX_SNAPSHOT_FILE", 4):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch("snapshot.MAX_FILE", 4):
             root = Path(tmp)
             (root / "large.bin").write_bytes(b"old-content")
 

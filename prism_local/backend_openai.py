@@ -149,7 +149,7 @@ class OpenAICompat(Backend):
                 content[0]["text"] += f"\n\n[Attached text: {rel}]\n{text}"
         msgs.append({"role": "user", "content": content if len(content) > 1 else content[0]["text"]})
         tools = READ_TOOLS + (WRITE_TOOLS if job.mode == "edit" else [])
-        if job.mode == "edit" and job.server_url:
+        if job.may_compile:
             tools = tools + [COMPILE_TOOL]
         usage = {"in": 0, "out": 0}
         denials: list[str] = []
@@ -284,8 +284,7 @@ class OpenAICompat(Backend):
         except ValueError:
             args = None
         summary = (args or {}).get("path") or (args or {}).get("pattern") or ""
-        job.emit({"t": "tool", "id": c["id"], "name": TOOL_LABELS.get(name, name),
-                  "summary": str(summary)[:200]})
+        job.tool(c["id"], TOOL_LABELS.get(name, name), summary)
         try:
             if args is None:
                 raise ToolError("the arguments are not a JSON object")
@@ -295,7 +294,7 @@ class OpenAICompat(Backend):
             out, err = f"Error: {e}", True
         except (KeyError, TypeError) as e:
             out, err = f"Error: missing or bad argument {e}", True
-        job.emit({"t": "tool_result", "id": c["id"], "error": err, "preview": out[:300]})
+        job.tool_result(c["id"], err, out)
         return out
 
     @staticmethod
@@ -308,7 +307,7 @@ class OpenAICompat(Backend):
 
     def tool(self, job: Job, name: str, args: dict, denials: list[str]) -> str:
         if name == "compile":
-            if job.mode != "edit" or not job.server_url:
+            if not job.may_compile:
                 raise ToolError("compiling is not available in this turn")
             try:
                 r = mcp_compile.build(job.server_url, bool(args.get("clean")))

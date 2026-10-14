@@ -269,7 +269,7 @@ class DeepCode(Backend):
         previous = settings.get("permissions") or {}
         settings["permissions"] = {**previous, "deny": list(dict.fromkeys(previous.get("deny", []) + deny))}
         settings["mcpServers"] = {"prism": mcp_compile.config(job.server_url)} \
-            if job.mode == "edit" and job.server_url else {}
+            if job.may_compile else {}
         # A project overlay cannot remove user MCP servers because Deep Code merges them.
         # Deny their tool category unless the editor compile server is the only one.
         inherited = user_settings().get("mcpServers") or {}
@@ -387,8 +387,7 @@ class DeepCode(Backend):
                 if isinstance(args, dict):
                     summary = str(args.get("path") or args.get("file_path") or args.get("command")
                                   or args.get("pattern") or args.get("query") or "")
-                job.emit({"t": "tool", "id": cid,
-                          "name": name, "summary": summary[:200]})
+                job.tool(cid, name, summary)
             if m.get("role") == "tool":
                 content = m.get("content")
                 try:
@@ -396,5 +395,4 @@ class DeepCode(Backend):
                 except (TypeError, ValueError):
                     result = {}
                 failed = isinstance(result, dict) and (result.get("ok") is False or bool(result.get("error")))
-                job.emit({"t": "tool_result", "id": str(m.get("tool_call_id") or params.get("tool_call_id") or ""),
-                          "error": failed, "preview": str(content)[:300] if content else ""})
+                job.tool_result(m.get("tool_call_id") or params.get("tool_call_id") or "", failed, content)

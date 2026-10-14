@@ -436,7 +436,7 @@ class ClaudeCode(CliBackend):
                "--append-system-prompt", SYSTEM_APPEND]
         allowed = self.scope_rules(job.scope) if job.scope else []
         cmd += ["--strict-mcp-config"]
-        if job.server_url and job.mode == "edit":
+        if job.may_compile:
             # The compile tool (mcp_compile.py): the editor's own build, no shell needed.
             import mcp_compile
             cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": mcp_compile.config(job.server_url)}})]
@@ -522,13 +522,9 @@ class ClaudeCode(CliBackend):
                 elif block.get("type") == "tool_use":
                     if _loads_compile_tool(block):
                         continue
-                    job.emit({"t": "tool", "id": block.get("id"),
-                              "name": "Compile" if block.get("name") == COMPILE_TOOL
-                              else block.get("name"),
-                              "summary": _summarize_tool(block.get("name", ""),
-                                                         block.get("input") or {}, job.root),
-                              **_tool_place(block.get("name", ""), block.get("input") or {},
-                                            job.root)})
+                    name, args = block.get("name", ""), block.get("input") or {}
+                    job.tool(block.get("id"), "Compile" if name == COMPILE_TOOL else name,
+                             _summarize_tool(name, args, job.root), **_tool_place(name, args, job.root))
         elif t == "user" and d.get("parent_tool_use_id") is None:
             for block in (d.get("message") or {}).get("content", []):
                 if isinstance(block, dict) and block.get("type") == "tool_result":
@@ -536,9 +532,7 @@ class ClaudeCode(CliBackend):
                     if isinstance(content, list):
                         content = " ".join(c.get("text", "") for c in content
                                            if isinstance(c, dict))
-                    job.emit({"t": "tool_result", "id": block.get("tool_use_id"),
-                              "error": bool(block.get("is_error")),
-                              "preview": str(content or "")[:300]})
+                    job.tool_result(block.get("tool_use_id"), block.get("is_error"), content)
         elif t == "rate_limit_event" and d.get("rate_limit_info"):
             self.rate = {**d["rate_limit_info"], "at": time.time()}
             job.emit({"t": "rate", "rate": self.rate})

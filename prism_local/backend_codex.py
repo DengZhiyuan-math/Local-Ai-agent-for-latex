@@ -145,7 +145,7 @@ class Codex(CliBackend):
         for setting in self.permission_config(job) + ['approval_policy="never"',
                 'web_search="disabled"', "features.apps=false", "mcp_servers={}"]:
             cmd += ["-c", setting]
-        if job.mode == "edit" and job.server_url:
+        if job.may_compile:
             cfg = mcp_compile.config(job.server_url)
             cmd += ["-c", f"mcp_servers.prism.command={json.dumps(cfg['command'])}",
                     "-c", f"mcp_servers.prism.args={json.dumps(cfg['args'])}",
@@ -199,7 +199,7 @@ class Codex(CliBackend):
         def tool(name: str, summary: str) -> None:
             if iid not in seen:
                 seen.add(iid)
-                job.emit({"t": "tool", "id": iid, "name": name, "summary": summary[:200]})
+                job.tool(iid, name, summary)
 
         if kind == "agent_message" and completed and item.get("text"):
             job.emit({"t": "message_start"})
@@ -208,28 +208,26 @@ class Codex(CliBackend):
             tool("Bash", item.get("command") or "")
             if completed:
                 code = item.get("exit_code")
-                job.emit({"t": "tool_result", "id": iid,
-                          "error": item.get("status") == "failed" or code not in (0, None),
-                          "preview": str(item.get("aggregated_output") or "")[:300]})
+                job.tool_result(iid, item.get("status") == "failed" or code not in (0, None),
+                                item.get("aggregated_output"))
         elif kind == "file_change":
-            paths = [_rel(c.get("path", ""), job.root) for c in item.get("changes") or []]
+            changes = item.get("changes") if isinstance(item.get("changes"), list) else []
+            paths = [_rel(c.get("path", ""), job.root) for c in changes if isinstance(c, dict)]
             tool("Edit", ", ".join(paths))
             if completed:
-                job.emit({"t": "tool_result", "id": iid, "error": item.get("status") == "failed",
-                          "preview": ""})
+                job.tool_result(iid, item.get("status") == "failed")
         elif kind == "mcp_tool_call":
             tool(f"{item.get('server', '')}.{item.get('tool', '')}", "")
             if completed:
-                result = item.get("result") or {}
+                result = item.get("result") if isinstance(item.get("result"), dict) else {}
+                content = result.get("content") if isinstance(result.get("content"), list) else []
                 failed = item.get("status") == "failed" or bool(item.get("error")) or \
                     bool(result.get("isError") or result.get("is_error"))
-                preview = "\n".join(c.get("text", "") for c in result.get("content", [])
-                                    if isinstance(c, dict))
-                job.emit({"t": "tool_result", "id": iid, "error": failed,
-                          "preview": preview[:300]})
+                job.tool_result(iid, failed, "\n".join(str(c.get("text", "")) for c in content
+                                                       if isinstance(c, dict)))
         elif kind == "web_search":
             tool("WebSearch", item.get("query") or "")
             if completed:
-                job.emit({"t": "tool_result", "id": iid, "error": False, "preview": ""})
+                job.tool_result(iid, False)
         elif kind == "error" and completed:
             job.emit({"t": "error", "message": item.get("message") or "Codex error"})

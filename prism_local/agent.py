@@ -3,61 +3,30 @@
 A chat turn runs on one of several AI backends (backends.py): the Claude Code CLI,
 the Codex CLI, or an OpenAI-compatible API such as DeepSeek. This module does the
 part that is the same for all of them: it checks the request, states the turn's
-file scope, snapshots project files before the turn, reports per-file diffs
-afterwards and can undo the turn.
+file scope, keeps the project's files before and after the turn (snapshot.py), reports
+per-file diffs afterwards and can undo the turn.
 """
 from __future__ import annotations
 
-import difflib
-import hashlib
 import itertools
 import json
-import os
 import re
-import stat
 import threading
 import time
 from pathlib import Path
-from dataclasses import dataclass, field
 from typing import Callable
 
 from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
-from fsutil import project_path, write_bytes
+from fsutil import project_path
 import registry
+import snapshot
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
 MAX_TURNS = 50          # turns kept in memory for their events and Undo
-MAX_SNAPSHOT_FILE = 25 * 1024 * 1024
-MAX_SNAPSHOT_BYTES = 100 * 1024 * 1024
 UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files (a slow hook) before saying so
-
-
-@dataclass(frozen=True)
-class FileState:
-    data: bytes | None = field(compare=False)
-    mode: int
-    link: str | None = None
-    digest: str | None = None
-
-
-def file_state(path: Path, budget: int) -> FileState:
-    info = path.lstat()
-    mode = stat.S_IMODE(info.st_mode)
-    if stat.S_ISLNK(info.st_mode):
-        return FileState(b"", mode, link=os.readlink(path))
-    if not stat.S_ISREG(info.st_mode):
-        raise OSError("not a regular file")
-    if info.st_size <= min(MAX_SNAPSHOT_FILE, budget):
-        data = path.read_bytes()
-        return FileState(data, mode, digest=hashlib.sha256(data).hexdigest())
-    digest = hashlib.sha256()
-    with path.open("rb") as f:
-        for chunk in iter(lambda: f.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return FileState(None, mode, digest=digest.hexdigest())
 
 
 class AgentManager:
@@ -92,56 +61,11 @@ class AgentManager:
                 "project_key": registry.project_key(root), "root": str(root),
                 "providers": [b.info() for b in self.backends.values()]}
 
-    # ------------------------------------------------------------ snapshots
-    # Files are kept as bytes: Undo puts back exactly what was there (line ends, encoding),
-    # and a file that is not UTF-8 cannot stop a turn.
-    def _snapshot(self, job: Job) -> dict[str, FileState]:
-        root, snap, budget = job.root, {}, MAX_SNAPSHOT_BYTES
-        def error(exc):
-            job.snapshot_issues.add(str(exc))
-        # The navigation catalog is not a change catalog. Include binary files, hidden
-        # files and excluded directories. Never follow directory links or enter .git.
-        for directory, dirs, files in os.walk(root, followlinks=False, onerror=error):
-            parent = Path(directory)
-            links = [d for d in dirs if (parent / d).is_symlink() and d != ".git"]
-            dirs[:] = sorted(d for d in dirs if d != ".git" and d not in links)
-            for name in sorted(files + links):
-                if name == ".git":
-                    continue
-                path = parent / name
-                rel = path.relative_to(root).as_posix()
-                try:
-                    # Record link metadata without reading its target, including external
-                    # and broken links. Regular files use the same path check as API reads.
-                    if not path.is_symlink():
-                        project_path(root, rel)
-                    state = file_state(path, budget)
-                    snap[rel] = state
-                    budget -= len(state.data or b"")
-                except (OSError, ValueError, RuntimeError) as exc:
-                    job.snapshot_issues.add(f"{rel}: {exc}")
-        return snap
-
-    @staticmethod
-    def _diff(rel: str, a: FileState | None, b: FileState | None) -> str:
-        if any(s and s.link is not None for s in (a, b)):
-            return f"Link changed: {a.link if a else '(absent)'} -> {b.link if b else '(absent)'}\n"
-        if any(s and s.data is None for s in (a, b)):
-            return "File changed; content exceeds the Undo snapshot limit.\n"
-        ad, bd = a.data if a else b"", b.data if b else b""
-        try:
-            for data in (ad, bd):
-                data.decode("utf-8")
-                if b"\x00" in data:
-                    raise UnicodeError
-        except UnicodeError:
-            return f"Binary file changed ({len(ad)} -> {len(bd)} bytes).\n"
-        text = lambda d: d.decode("utf-8", "replace").replace("\r\n", "\n")  # noqa: E731
-        diff = "".join(difflib.unified_diff(
-            text(ad).splitlines(keepends=True), text(bd).splitlines(keepends=True),
-            fromfile=f"a/{rel}" if a is not None else "/dev/null",
-            tofile=f"b/{rel}" if b is not None else "/dev/null", n=2))
-        return diff or f"(line ends, encoding or file permissions of {rel} changed)\n"
+    def _snapshot(self, job: Job) -> dict:
+        """The project's files now (snapshot.take); what could not be looked at is noted."""
+        files, issues = snapshot.take(job.root)
+        job.snapshot_issues |= issues
+        return files
 
     def _writable(self, job: Job, rel: str) -> bool:
         if job.mode != "edit":
@@ -257,28 +181,21 @@ class AgentManager:
             job.after = self._snapshot(job)
             with self.lock:
                 job.sealed = True
-                self._rebase(job)
+                snapshot.rebase(job.before, job.rebased, job.rebased_folders)
             # Ask is read-only: a backend without a read-only mode may change nothing.
             read_only = job.mode == "ask" and not backend.read_only_ask
-            out_of_scope = [rel for rel in sorted(set(job.before) | set(job.after))
-                            if (read_only or (job.scope and rel not in job.scope))
-                            and job.before.get(rel) != job.after.get(rel)]
+            out_of_scope = [rel for rel in snapshot.changed_paths(job.before, job.after)
+                            if read_only or (job.scope and rel not in job.scope)]
             reverted = []
             if out_of_scope and (read_only or not backend.enforces_scope):
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
-                reverted = self._restore(job, out_of_scope)
+                reverted = snapshot.restore(job.root, job.before, job.after, out_of_scope)
                 job.after = self._snapshot(job)
         finally:
             if held:
                 self.writes.release()
-        changed = []
-        for rel in sorted(set(job.before) | set(job.after)):
-            a, b = job.before.get(rel), job.after.get(rel)
-            if a != b:
-                changed.append({"path": rel, "diff": self._diff(rel, a, b),
-                                "created": a is None, "deleted": b is None,
-                                "undoable": not any(s and s.data is None for s in (a, b))})
+        changed = snapshot.changes(job.before, job.after)
         # Undo needs only the files this turn changed: keep just those in memory.
         keep = [c["path"] for c in changed]
         job.before = {r: job.before.get(r) for r in keep}
@@ -321,8 +238,19 @@ class AgentManager:
         # The probe is a (tiny) model call, so it passes the same check as a turn.
         bad = backend.preflight(self.root_fn())
         if bad:
-            return {"error": bad, "rate": getattr(backend, "rate", None)}
+            return {"error": bad, "rate": backend.rate}
         return backend.probe_rate()
+
+    def account(self, provider: str | None, root: Path, fresh: bool = False) -> dict:
+        """Which account the provider would use, where it has one (Claude); else none."""
+        backend = self.backend(provider)
+        return (backend.account(root, fresh=fresh) if backend else None) or {"account": None}
+
+    def events(self, jid: int, after: int, timeout: float) -> tuple[list[dict], bool] | None:
+        """A turn's events from number `after` on, waiting up to `timeout` seconds for new
+        ones, and whether it is done; None for a turn not known (an old one, a restart)."""
+        job = self.jobs.get(jid)
+        return job.wait_events(after, timeout) if job else None
 
     def stop(self, jid: int) -> dict:
         job = self.jobs.get(jid)
@@ -364,34 +292,14 @@ class AgentManager:
                 folders.append(rel.rstrip("/") + "/")
                 for f in p.rglob("*"):
                     if f.is_file() or f.is_symlink():
-                        states[f.relative_to(job.root).as_posix()] = self._state(f)
+                        states[f.relative_to(job.root).as_posix()] = snapshot.state_of(f)
             else:
-                states[rel] = self._state(p)
+                states[rel] = snapshot.state_of(p)
         with self.lock:
             if job.sealed:
                 return
             job.rebased.update(states)
             job.rebased_folders.update(folders)
-
-    @staticmethod
-    def _state(p: Path) -> FileState | None:
-        try:
-            return file_state(p, MAX_SNAPSHOT_FILE)
-        except OSError:
-            return None                  # gone, or not a file
-
-    @staticmethod
-    def _rebase(job: Job) -> None:
-        """Take what the editor wrote during the turn as the turn's starting point."""
-        for folder in job.rebased_folders:       # its files, also those gone since
-            for rel in [r for r in job.before if r.startswith(folder)]:
-                if rel not in job.rebased:
-                    job.before.pop(rel)
-        for rel, state in job.rebased.items():
-            if state is None:
-                job.before.pop(rel, None)
-            else:
-                job.before[rel] = state
 
     def shutdown(self) -> None:
         """Stop a turn that is still running when the server exits."""
@@ -399,53 +307,16 @@ class AgentManager:
         if job and not job.done:
             self.stop(job.id)
 
-    def _restore(self, job: Job, rels) -> list[str]:
-        """Put `rels` back as they were before `job`, where they still match its result."""
-        root, restored = job.root, []
-        for rel in rels:
-            a, b = job.before.get(rel), job.after.get(rel)
-            p = root / rel
-            try:
-                # Do not follow a parent directory that was replaced by an external link.
-                parent = p.parent.resolve()
-                if parent != root and root not in parent.parents:
-                    continue
-                if ".git" in parent.relative_to(root).parts:
-                    continue
-                cur = file_state(p, MAX_SNAPSHOT_BYTES) if p.exists() or p.is_symlink() else None
-            except (OSError, ValueError, RuntimeError):
-                continue                 # cannot tell what is there now; leave it
-            if cur != b or any(s and s.data is None for s in (a, b)):
-                continue                 # edited again since; never clobber
-            try:
-                if a is None:
-                    p.unlink()
-                elif a.link is not None:
-                    if p.exists() or p.is_symlink():
-                        p.unlink()
-                    p.parent.mkdir(parents=True, exist_ok=True)
-                    p.symlink_to(a.link)
-                else:
-                    if p.is_symlink():
-                        p.unlink()
-                    write_bytes(p, a.data)
-                    p.chmod(a.mode)
-            except OSError:
-                continue                 # locked by another program: reported as not restored
-            restored.append(rel)
-        return restored
-
     def undo(self, turn: int) -> dict:
         """Restore files changed in `turn`, only where they still match the turn's result."""
         job = self.turns.get(turn)
         if not job:
             return {"error": "unknown turn"}
-        rels = [rel for rel in sorted(set(job.before) | set(job.after))
-                if job.before.get(rel) != job.after.get(rel)]
+        rels = snapshot.changed_paths(job.before, job.after)
         if not self.writes.acquire(timeout=UNDO_WAIT):
             return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
         try:
-            restored = self._restore(job, rels)
+            restored = snapshot.restore(job.root, job.before, job.after, rels)
         finally:
             self.writes.release()
         if restored:

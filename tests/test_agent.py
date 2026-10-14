@@ -519,11 +519,11 @@ class Snapshots(unittest.TestCase):
             done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
             lock, seen = threading.RLock(), {}
             m.writes = lock
-            real = m._restore
+            real = agent.snapshot.restore
 
-            def restore(job, rels):
+            def restore(*args):
                 seen["restore"] = lock._is_owned()
-                return real(job, rels)
+                return real(*args)
 
             def free():                      # as a sync's merge, on its own thread
                 seen["commit"] = lock.acquire(timeout=1)
@@ -535,8 +535,9 @@ class Snapshots(unittest.TestCase):
                 t.start()
                 t.join()
 
-            m._restore, m.on_changed = restore, changed
-            self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
+            m.on_changed = changed
+            with mock.patch.object(agent.snapshot, "restore", restore):
+                self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertTrue(seen["restore"], "Undo writes holding the save lock")
             self.assertTrue(seen["commit"], "and lets go of it before the commit")
             self.assertEqual((root / "a.tex").read_bytes(), b"one\n")
@@ -609,7 +610,7 @@ class Snapshots(unittest.TestCase):
                     return {"exit": 0}
 
             m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
-            with mock.patch.object(m, "_diff", side_effect=MemoryError("too big")):
+            with mock.patch.object(agent.snapshot, "changes", side_effect=MemoryError("too big")):
                 done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
             self.assertTrue(done.get("is_error"))
             self.assertFalse(m.busy())
@@ -658,6 +659,22 @@ class Snapshots(unittest.TestCase):
         st = backend.run(job)
         self.assertEqual(st["exit"], 3)
         self.assertIn("not logged in", st["stderr"])
+
+    def test_tool_events_have_one_form_whatever_the_cli_printed(self):
+        """A CLI's output of a shape not expected (a result that is text, not an object; a
+        list that is not one) is shown as it can be: the handler raising would end the turn."""
+        job, st, codex = job_for(root=Path(".")), {}, Codex("codex")
+        for item in ({"type": "mcp_tool_call", "id": 1, "result": "text, not an object"},
+                     {"type": "mcp_tool_call", "id": "2", "result": {"content": "not a list"}},
+                     {"type": "file_change", "id": "3", "changes": "not a list"},
+                     {"type": "command_execution", "id": "4", "command": "ls", "exit_code": 2,
+                      "aggregated_output": "x" * 1000}):
+            codex.handle({"type": "item.completed", "item": item}, job, st)
+        tools = [e for e in job.events if e["t"] == "tool"]
+        results = [e for e in job.events if e["t"] == "tool_result"]
+        self.assertEqual([e["id"] for e in tools], ["1", "2", "3", "4"])
+        self.assertTrue(all(isinstance(e["preview"], str) and len(e["preview"]) <= 300 for e in results))
+        self.assertEqual([e["error"] for e in results], [False, False, False, True])
 
     def test_undo_while_git_holds_the_files_says_busy(self):
         """git holding the files long (a repository's slow hook): Undo says so after a moment,

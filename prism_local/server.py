@@ -960,19 +960,15 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/events":
             if q.get("project_key") != registry.project_key(ROOT):
                 return self._err(409, "This page belongs to another project. Reopen the project's editor.")
-            job = AGENT.jobs.get(int(q["job"]))
-            if not job:
+            got = AGENT.events(int(q["job"]), int(q.get("after", 0)), 20.0)
+            if got is None:
                 return self._err(404, "unknown job")
-            evs, done = job.wait_events(int(q.get("after", 0)), 20.0)
-            return self._json({"events": evs, "done": done})
+            return self._json({"events": got[0], "done": got[1]})
         if path == "/api/agent/commands":
             r = AGENT.commands(q.get("provider") or None, refresh=q.get("refresh") == "1")
             return self._json(r, 502 if "error" in r else 200)
         if path == "/api/agent/account":
-            b = AGENT.backend(q.get("provider") or None)
-            if b is None or not hasattr(b, "account"):
-                return self._json({"account": None})
-            return self._json(b.account(ROOT, fresh=q.get("fresh") == "1"))
+            return self._json(AGENT.account(q.get("provider") or None, ROOT, fresh=q.get("fresh") == "1"))
         if path == "/api/agent/info":
             return self._json(AGENT.info())
         if path == "/api/symbols":
@@ -1087,7 +1083,7 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/undo":
             return self._json(AGENT.undo(int(body["turn"])))
         if path == "/api/build":
-            if body.get("by") == "agent" and (not AGENT.active or AGENT.active.mode != "edit" or AGENT.active.done):
+            if body.get("by") == "agent" and not AGENT.editing():
                 return self._err(403, "Agent compilation is available only during an Edit turn")
             r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")), body.get("active"))
             if body.get("by") == "agent" and not r.get("busy"):
