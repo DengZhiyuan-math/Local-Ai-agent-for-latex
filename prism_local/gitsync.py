@@ -35,9 +35,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 import keepboth
 import registry
-from gitenv import git_env
+import gitenv
 from fsutil import write_bytes
-from proc import NO_WINDOW
 
 IDLE = 120               # seconds without an edit before an autosave commit
 MAX_WAIT = 600           # ... but at the latest this long after the first change
@@ -126,12 +125,10 @@ def install_guard(git_dir: Path) -> bool:
     """Put GUARD in the repository's hooks, unless it has a pre-push hook of its own or
     uses a hooks folder of its own (core.hooksPath). True when the guard is in place."""
     try:
-        r = subprocess.run(["git", "config", "--get", "core.hooksPath"], cwd=git_dir, capture_output=True,
-                           text=True, timeout=20, env=git_env(), **NO_WINDOW)
+        r = gitenv.git(git_dir, "config", "--get", "core.hooksPath", timeout=20)
         if r.stdout.strip():
             return False
-        r = subprocess.run(["git", "rev-parse", "--git-path", "hooks"], cwd=git_dir,
-                           capture_output=True, text=True, timeout=20, env=git_env(), **NO_WINDOW)
+        r = gitenv.git(git_dir, "rev-parse", "--git-path", "hooks", timeout=20)
         if r.returncode:
             return False
         hook = (git_dir / r.stdout.strip()).resolve() / "pre-push"
@@ -158,9 +155,7 @@ def record_move(old: Path, new: Path) -> str | None:
     commit the move there (its own repository needs nothing: its paths do not change).
     Returns the commit message, or None."""
     def git(*args, cwd=new):
-        return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=60, env=git_env(),
-                              **NO_WINDOW)
+        return gitenv.git(cwd, *args)
     try:
         r = git("rev-parse", "--show-toplevel")
         if r.returncode != 0:
@@ -215,9 +210,7 @@ class GitSync:
     # ------------------------------------------------------------ git
     def git(self, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
         """git at the repository's top: paths are relative to it (see rel())."""
-        r = subprocess.run(["git", "--no-optional-locks", *args], cwd=self.top or self.root_fn(), capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout,
-                              env=git_env(), **NO_WINDOW)
+        r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout)
         if args[0] in ("push", "fetch"):
             print(json.dumps({"event": "git_sync", "git_top": str(self.top),
                               "target": public_target(self.target), "stage": args[0],
@@ -699,8 +692,7 @@ class GitSync:
         return files
 
     def _blob(self, spec: str) -> bytes:
-        r = subprocess.run(["git", "show", spec], cwd=self.top or self.root_fn(), capture_output=True,
-                           timeout=60, env=git_env(), **NO_WINDOW)
+        r = gitenv.git(self.top or self.root_fn(), "show", spec, binary=True)
         if r.returncode != 0:
             raise RuntimeError(f"git show {spec}: " + r.stderr.decode("utf-8", "replace").strip())
         return r.stdout

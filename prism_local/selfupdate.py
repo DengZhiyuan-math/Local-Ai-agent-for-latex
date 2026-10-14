@@ -18,19 +18,16 @@ import time
 from pathlib import Path
 
 import registry
-from gitenv import git_env
+import gitenv
 
 APP_DIR = Path(__file__).resolve().parent.parent
 EVERY = 300                      # seconds between two checks
 FETCH_TIMEOUT = 20
-NO_WINDOW = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
 IN_PROGRESS = ("MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "rebase-merge", "rebase-apply")
 
 
 def _git(repo: Path, *args: str, timeout: float = 30) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=timeout,
-                          stdin=subprocess.DEVNULL, env=git_env(), **NO_WINDOW)
+    return gitenv.git(repo, *args, timeout=timeout)
 
 
 def _out(r: subprocess.CompletedProcess) -> str:

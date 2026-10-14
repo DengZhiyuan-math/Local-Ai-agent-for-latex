@@ -18,11 +18,10 @@ markers 80 characters long that no line of a paper starts with.
 """
 from __future__ import annotations
 
-import subprocess
 import tempfile
 from pathlib import Path
 
-from proc import NO_WINDOW
+import gitenv
 
 MARK = "[prism-local]"
 TEX_LIKE = (".tex", ".sty", ".cls", ".ltx", ".dtx", ".bbx", ".cbx", ".tikz", ".def", ".cfg", ".clo")
@@ -41,9 +40,8 @@ def merge_file(ours: str, base: str, theirs: str) -> str:
             p = Path(d) / name
             p.write_bytes(text.encode("utf-8"))
             paths.append(str(p))
-        r = subprocess.run(["git", "merge-file", "-p", f"--marker-size={SIZE}",
-                            "-L", "ours", "-L", "base", "-L", "theirs", *paths],
-                           capture_output=True, timeout=60, **NO_WINDOW)
+        r = gitenv.git(d, "merge-file", "-p", f"--marker-size={SIZE}",
+                       "-L", "ours", "-L", "base", "-L", "theirs", *paths, binary=True)
     if r.returncode < 0 or r.returncode >= 127:
         raise MergeError(r.stderr.decode("utf-8", "replace").strip() or "git merge-file failed")
     return r.stdout.decode("utf-8")

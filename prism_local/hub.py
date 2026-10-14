@@ -16,6 +16,7 @@ state-changing request, and uses the Python standard library only.
 """
 from __future__ import annotations
 
+import gitenv
 from gitenv import git_env
 
 import argparse
@@ -169,9 +170,8 @@ def git_info(root: Path) -> dict | None:
     """Branch and changes of the project's repository: its own, or one shared by a folder of
     projects (then the changes are the project's own). A project folder inside some other
     repository (such as prism-local's) has none to sync with: report which one."""
-    def git(*args):      # read-only, and never holding .git/index.lock (see server.git)
-        return subprocess.run(["git", "--no-optional-locks", *args], cwd=root, capture_output=True,
-                              text=True, encoding="utf-8", errors="replace", timeout=8, env=git_env(), **NO_WINDOW)
+    def git(*args):
+        return gitenv.git(root, *args, timeout=8)
     # Git finds a repository only through a .git in the folder or one above it (git_env
     # drops GIT_DIR and the like): without one, there is no repository, and no git to run.
     if not any((p / ".git").exists() for p in (root, *root.parents)):
@@ -405,9 +405,7 @@ inside = registry.inside
 
 def repo_top(p: Path) -> Path | None:
     try:
-        r = subprocess.run(["git", "--no-optional-locks", "rev-parse", "--show-toplevel"], cwd=p,
-                           capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           timeout=20, env=git_env(), **NO_WINDOW)
+        r = gitenv.git(p, "rev-parse", "--show-toplevel", timeout=20)
     except (OSError, subprocess.SubprocessError):
         return None
     return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
@@ -619,9 +617,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
             raise ValueError(f"{root.name} is a git worktree or submodule; set it up by hand")
         if dot.is_dir() and r["kind"] == "own":
             ref = f"refs/prism/imported/{r['id']}"
-            got = subprocess.run(["git", "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}"], cwd=top,
-                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                 timeout=300, env=git_env(), **NO_WINDOW)
+            got = gitenv.git(top, "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}", timeout=300)
             if got.returncode == 0:
                 imports.append(run_git(top, "rev-parse", ref).stdout.strip())
             if (root / SPLIT_BACKUP).exists():
@@ -636,8 +632,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         run_git(top, "rm", "-q", "--cached", "--", *big)
         report.append("Not committed, too large for GitHub: " + ", ".join(big))
     tree = run_git(top, "write-tree").stdout.strip()
-    head = subprocess.run(["git", "rev-parse", "-q", "--verify", "HEAD^{commit}"], cwd=top, capture_output=True,
-                          text=True, env=git_env(), **NO_WINDOW).stdout.strip()
+    head = gitenv.git(top, "rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
     old_tree = run_git(top, "rev-parse", "HEAD^{tree}").stdout.strip() if head else None
     if imports or tree != old_tree:
         parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
@@ -904,9 +899,7 @@ def repo_name(folder: str) -> str:
 
 
 def run_git(root: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", *args], cwd=root, capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=timeout, check=True,
-                          env=git_env(), **NO_WINDOW)
+    return gitenv.git(root, *args, timeout=timeout, check=True)
 
 
 def git_init(root: Path) -> None:
@@ -1031,8 +1024,7 @@ def publish_info(root: Path) -> dict:
         info["name"] = repo_name(top.name)
     for d, what in PRIVATE_DIRS.items():
         if (root / d).is_dir():
-            ignored = top is not None and subprocess.run(
-                ["git", "check-ignore", "-q", d + "/"], cwd=root, capture_output=True, env=git_env(), **NO_WINDOW).returncode == 0
+            ignored = top is not None and gitenv.git(root, "check-ignore", "-q", d + "/", timeout=20).returncode == 0
             info["private_dirs"].append({"dir": d, "what": what, "ignored": ignored})
     return info
 

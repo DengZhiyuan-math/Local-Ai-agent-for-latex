@@ -14,7 +14,7 @@ Optional per-project settings live in PROJECT_DIR/prism.json (see README).
 """
 from __future__ import annotations
 
-from gitenv import git_env
+import gitenv
 
 import argparse
 import fnmatch
@@ -30,7 +30,7 @@ import webbrowser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from agent import NO_WINDOW, AgentManager  # noqa: E402
+from agent import AgentManager  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
@@ -199,11 +199,8 @@ def list_files(*, editable_only: bool = True) -> list[str]:
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
-    """Read-only git in the project. --no-optional-locks: the editor asks every two
-    seconds, and must never hold .git/index.lock when a git command of yours starts."""
-    return subprocess.run(["git", "--no-optional-locks", *args], cwd=ROOT, capture_output=True,
-                          text=True, encoding="utf-8", errors="replace", timeout=timeout, env=git_env(),
-                          **NO_WINDOW)
+    """Read-only git in the project (gitenv.git)."""
+    return gitenv.git(ROOT, *args, timeout=timeout)
 
 
 _GIT_PREFIX: dict = {}
