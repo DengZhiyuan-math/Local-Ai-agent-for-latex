@@ -48,6 +48,7 @@ import os
 import shutil
 import subprocess
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
@@ -146,6 +147,11 @@ class Job:
         self.writable: Callable[[str], bool] = lambda rel: False
         self.before: dict = {}     # file contents and metadata around the turn
         self.after: dict = {}
+        # What the editor wrote during the turn (AgentManager.server_wrote): the turn's
+        # starting point for those files, folded into `before` once it ends (sealed).
+        self.rebased: dict = {}
+        self.rebased_folders: set[str] = set()
+        self.sealed = False
         self.snapshot_issues: set[str] = set()
         self.attachments: list[str] = []
 
@@ -278,28 +284,53 @@ class CliBackend(Backend):
     def run(self, job: Job) -> dict:
         cmd, stdin = self.command(job)
         st: dict = {}
-        stderr_lines: list[str] = []
-        # The prompt goes through stdin so it can never be parsed as a flag. TREE: Stop
-        # also ends the commands the CLI started.
-        job.proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                    text=True, encoding="utf-8", errors="replace", bufsize=1,
-                                    env=agent_env(), **TREE)
-        job.proc.stdin.write(stdin)
-        job.proc.stdin.close()
-        threading.Thread(target=lambda: stderr_lines.extend(job.proc.stderr), daemon=True).start()
-        for line in job.proc.stdout:
-            try:
-                d = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(d, dict):
-                self.handle(d, job, st)
-        job.proc.wait()
-        st["exit"] = job.proc.returncode
+        with cli_process(job, cmd, stdin, agent_env(), bufsize=1) as (proc, stderr_lines):
+            if proc is None:
+                return st                        # stopped before it started
+            for line in proc.stdout:
+                try:
+                    d = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(d, dict):
+                    self.handle(d, job, st)
+            proc.wait()
+        st["exit"] = proc.returncode
         if st["exit"] != 0 or st.get("is_error"):
             st["stderr"] = "".join(stderr_lines)[-2000:]
         return st
+
+
+@contextmanager
+def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
+    """A turn's CLI, its input `stdin` (the prompt goes through stdin so it can never be
+    parsed as a flag). Yields (process, its stderr lines so far); (None, []) when Stop was
+    pressed before it started, so it never starts. Stop pressed while it starts still ends
+    it. Its stderr is read from the start: a CLI that exits at once (stdin then cannot be
+    written) still says why. And however the with-block is left (a handler raising on a
+    line it did not expect), the CLI and the commands it started (TREE) are ended: none
+    goes on writing the files after its turn."""
+    if job.cancel.is_set():
+        yield None, []
+        return
+    err: list[str] = []
+    proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
+                            env=env, **TREE, **popen)
+    job.proc = proc
+    try:
+        if job.cancel.is_set():                  # Stop came while it started
+            kill_tree(proc)
+        threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True).start()
+        try:
+            proc.stdin.write(stdin)
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass                                 # it has exited: its stderr says why
+        yield proc, err
+    finally:
+        if proc.poll() is None:
+            kill_tree(proc)
 
 
 # ---------------------------------------------------------------- registry

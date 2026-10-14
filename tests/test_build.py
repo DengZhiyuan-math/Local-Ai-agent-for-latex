@@ -7,6 +7,7 @@ build: resolved citations and references, a bibliography, an index.
 """
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import threading
@@ -230,6 +231,37 @@ class Platform(unittest.TestCase):
             time.sleep(0.05)
         else:
             self.fail("the grandchild still runs")
+
+    def test_a_program_left_behind_does_not_hold_the_build(self):
+        """A program the build started outlives the kill (re-parented, so taskkill /T and
+        the process group miss it) and keeps the output pipe open: the build still ends,
+        KILL_GRACE after its time limit, or BUILD_LOCK would be held for good."""
+        d = tmpdir()
+        pidfile = d / "left.pid"
+        (d / "left.py").write_text("import time; time.sleep(30)\n", encoding="utf-8")
+        (d / "inter.py").write_text(
+            "import os, subprocess, sys\n"
+            "kw = {} if os.name == 'nt' else {'start_new_session': True}\n"
+            f"p = subprocess.Popen([sys.executable, {str(d / 'left.py')!r}], stdout=sys.stdout, "
+            "stderr=sys.stderr, **kw)\n"
+            f"open({str(pidfile)!r}, 'w').write(str(p.pid))\n", encoding="utf-8")
+        (d / "child.py").write_text(
+            "import subprocess, sys, time\n"
+            f"subprocess.run([sys.executable, {str(d / 'inter.py')!r}], stdout=sys.stdout, stderr=sys.stderr)\n"
+            "time.sleep(60)\n", encoding="utf-8")
+        runner = build.Runner(timeout=2)
+        started = time.monotonic()
+        try:
+            with mock.patch.object(build, "KILL_GRACE", 1.0), self.assertRaises(build.Stopped):
+                runner.run([sys.executable, str(d / "child.py")], d)
+        finally:
+            if pidfile.exists() and pidfile.read_text():
+                try:
+                    os.kill(int(pidfile.read_text()), signal.SIGTERM)
+                except OSError:
+                    pass
+        self.assertTrue(runner.timed_out)
+        self.assertLess(time.monotonic() - started, 15, "ended without waiting for it")
 
     def test_a_program_that_cannot_start_is_explained(self):
         root = project({"main.tex": "\\documentclass{article}\\begin{document}x\\end{document}"})

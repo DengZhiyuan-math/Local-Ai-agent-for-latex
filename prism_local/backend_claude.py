@@ -89,8 +89,12 @@ _STARTED_CONFIG_DIR = os.environ.setdefault(
 def use_config_dir() -> None:
     """Point Claude Code at the profile folder of "claude_config_dir" in Home → Settings
     (empty: as started). Every `claude` this process starts inherits it, so the panel can
-    use another login than the terminal. Read again before each check: no restart needed."""
-    data = registry.read_json(registry.state_dir() / "settings.json") or {}
+    use another login than the terminal. Read again before each check: no restart needed.
+    Settings that cannot be read change nothing (the turn is refused, see allowed_account)."""
+    try:
+        data = registry.read_state(registry.state_dir() / "settings.json")
+    except registry.StateUnreadable:
+        return
     cfg = str(data.get("claude_config_dir") or "").strip()
     cfg = str(Path(cfg).expanduser()) if cfg else _STARTED_CONFIG_DIR
     if cfg:
@@ -169,9 +173,15 @@ def claude_account(exe: str | None, root: Path | None = None, max_age: float = 3
 
 
 def allowed_account() -> str:
-    """The only Claude account prism-local may use (Home → Settings); empty: any."""
-    data = registry.read_json(registry.state_dir() / "settings.json") or {}
+    """The only Claude account prism-local may use (Home → Settings); empty: any. Raises
+    registry.StateUnreadable when the settings cannot be read: then it is not known."""
+    data = registry.read_state(registry.state_dir() / "settings.json")
     return str(data.get("claude_account") or "").strip()
+
+
+def unknown_account(e: Exception) -> str:
+    return (f"The settings could not be read ({e}), so it is not known which Claude account "
+            "Home → Settings allows. Nothing was sent.")
 
 
 def account_problem(info: dict, allowed: str) -> str | None:
@@ -395,12 +405,19 @@ class ClaudeCode(CliBackend):
 
     def account(self, root: Path | None, fresh: bool = False) -> dict:
         info = claude_account(self.bin(), root, max_age=0 if fresh else ACCOUNT_TTL)
-        allowed = allowed_account()
+        try:
+            allowed = allowed_account()
+        except registry.StateUnreadable as e:          # not known: no turn runs
+            return {"account": info, "allowed": None, "problem": unknown_account(e)}
         return {"account": info, "allowed": allowed, "problem": account_problem(info, allowed)}
 
     def preflight(self, root: Path) -> str | None:
         # Checked afresh before every turn when an account is set in Home → Settings.
-        return self.account(root, fresh=True)["problem"] if allowed_account() else None
+        try:
+            allowed = allowed_account()
+        except registry.StateUnreadable as e:
+            return unknown_account(e)
+        return self.account(root, fresh=True)["problem"] if allowed else None
 
     @staticmethod
     def scope_rules(scope: list[str]) -> list[str]:

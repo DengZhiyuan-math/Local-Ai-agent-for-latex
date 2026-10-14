@@ -31,12 +31,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
+import gitsync  # noqa: E402
 from gitsync import FilesLock, GitSync  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
+# The Home page's GitHub helpers (Publish). Imported here, at the start: imported at the
+# first use, after a self-update had pulled new code, it would be the new hub.py next to
+# the old versions of the modules it uses.
+import hub  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 
@@ -70,13 +75,11 @@ class Config:
             except (OSError, ValueError) as e:
                 data = {}
                 problems.append(f"prism.json cannot be used ({e}); the defaults apply.")
-        self.project_main = str(data.get("main") or self._guess_main())
+        self.project_main = str(data.get("main") or build.guess_main(self.root) or "main.tex")
         self.main = main or self.project_main
-        outdir = str(data.get("outdir") or "build").replace("\\", "/").strip("/") or "build"
-        if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
-            problems.append("outdir must be a folder inside the project; build is used.")
-            outdir = "build"
-        self.outdir = outdir
+        self.outdir, problem = build.output_folder(data.get("outdir"))
+        if problem:
+            problems.append(problem)
         lists = {k: data.get(k) for k in ("files", "exclude")}
         for k, v in lists.items():
             if v is not None and not (isinstance(v, list) and all(isinstance(g, str) for g in v)):
@@ -105,13 +108,6 @@ class Config:
         self.pdf = out / f"{stem}.pdf"
         self.log = out / f"{stem}.log"
         self.synctex = out / f"{stem}.synctex.gz"
-
-    def _guess_main(self) -> str:
-        if (self.root / "main.tex").is_file():
-            return "main.tex"
-        cands = [p for p in sorted(self.root.glob("*.tex")) if not p.name.startswith("._")
-                 and build.is_document(p.read_text(encoding="utf-8", errors="replace")[:5000])]
-        return cands[0].name if cands else "main.tex"
 
     def expand(self, cmd: list[str] | str) -> list[str] | str:
         sub = lambda a: str(a).replace("{main}", self.main).replace("{outdir}", self.outdir)  # noqa: E731
@@ -338,10 +334,16 @@ def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> 
     if not SAVE_LOCK.acquire(timeout=SAVE_WAIT):
         return {"busy": True, "error": "git is busy with the files; saving as soon as it is done"}, 503
     try:
+        if AGENT.editing():
+            # Its turn's diff and Undo would take your text for the agent's (also from a
+            # page that did not see the turn start, or was reloaded during it).
+            return {"busy": True, "error": "the agent is editing the files; your edits are "
+                                           "saved when its turn ends"}, 503
         if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
                 and not force:
             return {"conflict": True, "mtime": mtime(p)}, 409
         write_bytes(p, with_line_ends_of(content, p).encode("utf-8"))
+        AGENT.server_wrote([p.relative_to(ROOT).as_posix()])     # yours, not an Ask turn's
         return {"ok": True, "mtime": mtime(p)}, 200
     finally:
         SAVE_LOCK.release()
@@ -543,6 +545,7 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
                     pass
                 continue
             write_bytes(p, data)
+            AGENT.server_wrote([p.relative_to(ROOT).as_posix()])     # yours, not a turn's
             return rel
     finally:
         SAVE_LOCK.release()
@@ -634,12 +637,39 @@ def move_argv(new: Path) -> list[str]:
     return argv
 
 
-def relaunch() -> None:
+def relaunch() -> list[str]:
     """Start this server again with the same command line (after it stopped listening),
-    or, after a rename, for the renamed folder (move_argv)."""
+    or, after a rename, for the renamed folder (move_argv). Returns that command line."""
     argv = move_argv(RESTART["move_to"]) if RESTART["move_to"] is not None else httpbase.own_argv()
     # Not from inside the project's folder: a process working there keeps it from being renamed.
     httpbase.relaunch(argv, str(ROOT.parent))
+    return argv
+
+
+def hold_instance(ready_file: str | None) -> registry.FileLock | None:
+    """During a restart, the project's instance lock (registry.ensure_server takes it before
+    it starts a server): the Home page or the launcher opening the project meanwhile waits
+    for the new server, instead of starting a second one next to it."""
+    if not ready_file:
+        return None
+    lock = registry.FileLock(Path(ready_file).with_suffix(".lock"), timeout=10)
+    try:
+        return lock.__enter__()
+    except (TimeoutError, OSError):
+        return None                     # one is opening it right now: it finds the new one
+
+
+def wait_for_successor(argv: list[str], timeout: float = 30) -> None:
+    """Until the server `argv` started has written its instance file and answers."""
+    if "--ready-file" not in argv:
+        return
+    ready = Path(argv[argv.index("--ready-file") + 1])
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        info = registry.read_json(ready)
+        if info and info.get("pid") != os.getpid() and registry.ping(str(info.get("url") or ""), timeout=1):
+            return
+        time.sleep(0.2)
 
 
 def stale_document() -> str | None:
@@ -755,6 +785,7 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
         finally:
             RUNNING["pdf"] = None
             CFG = cfg
+            AGENT.server_wrote([cfg.outdir])    # a build's output is no agent turn's change
         if cfg.error:
             r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
         pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
@@ -1005,7 +1036,6 @@ class Handler(httpbase.Handler):
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
-            import hub                  # the Home page's GitHub helpers
             return self._json(hub.publish_info(ROOT))
         if path == "/api/git/theirs":            # GitHub's version, after a clash
             resolve(q["path"])
@@ -1096,10 +1126,9 @@ class Handler(httpbase.Handler):
         if path == "/api/git/publish":
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
-            import hub
             with GITSYNC.lock:
                 r = hub.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
-                                        list(body.get("leave_out") or []))
+                                        list(body.get("leave_out") or []), files_lock=SAVE_LOCK)
             GITSYNC.recheck()                   # a repository exists now
             return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)
         if path == "/api/git/recheck":
@@ -1207,8 +1236,11 @@ def finish_move(old: Path, new: Path) -> Path:
     except OSError as e:
         MOVE.update(error=f"The folder was not renamed: {e}", **{"from": str(old)})
         return old
-    from gitsync import record_move
-    record_move(old, new)
+    try:
+        gitsync.record_move(old, new)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        MOVE["error"] = (f"The folder was renamed, but the rename could not be committed ({e}). "
+                         "Commit it from a terminal, so the other copies of the repository get it.")
     MOVE["from"] = str(old)
     return new
 
@@ -1276,18 +1308,25 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        srv.server_close()
-        if a.ready_file:            # first, so that a new server can start at once
-            httpbase.remove_ready_file(a.ready_file)
-        stop_build()
-        AGENT.shutdown()
-        GITSYNC.flush()                 # what is left is committed and pushed
-        if RESTART["again"]:
-            relaunch()                  # first: nothing after it may keep the restart from happening
-            httpbase.log(f"restarting in {RESTART['move_to']}" if RESTART["move_to"]
-                         else "restarting with the updated code")
-        else:
-            httpbase.log("stopped")
+        handover = hold_instance(a.ready_file) if RESTART["again"] else None
+        try:
+            srv.server_close()
+            if a.ready_file:            # first, so that a new server can start at once
+                httpbase.remove_ready_file(a.ready_file)
+            stop_build()
+            AGENT.shutdown()
+            GITSYNC.flush()             # what is left is committed and pushed
+            if RESTART["again"]:
+                argv = relaunch()       # first: nothing after it may keep the restart from happening
+                httpbase.log(f"restarting in {RESTART['move_to']}" if RESTART["move_to"]
+                             else "restarting with the updated code")
+                if handover:
+                    wait_for_successor(argv)
+            else:
+                httpbase.log("stopped")
+        finally:
+            if handover:
+                handover.__exit__(None, None, None)
 
 
 if __name__ == "__main__":

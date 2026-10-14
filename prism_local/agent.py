@@ -186,6 +186,8 @@ class AgentManager:
             if self.active and not self.active.done:
                 return {"error": "The agent is still working on the previous message."}
             job = Job(next(self.ids))
+            # Set before the turn counts as running: editing() and server_wrote() read them.
+            job.mode, job.root = mode if mode in ("edit", "ask") else "ask", root
             self.jobs[job.id] = job
             self.active = job
         job.scope = scope if mode == "edit" and scope else None
@@ -216,8 +218,14 @@ class AgentManager:
             self.on_start()                      # your edits so far, committed apart
         except Exception:  # noqa: BLE001 — a failed commit must not stop the turn
             pass
-        job.before = self._snapshot(job)
-        threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
+        try:
+            job.before = self._snapshot(job)
+            threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
+        except Exception as e:  # noqa: BLE001 — a turn that cannot start must not stay "running"
+            with job.cond:
+                job.done = True
+                job.cond.notify_all()
+            return {"error": f"The turn could not start: {type(e).__name__}: {e}"}
         return {"job": job.id, "provider": backend.id, "model": job.model}
 
     def _run(self, job: Job, backend: Backend) -> None:
@@ -227,9 +235,29 @@ class AgentManager:
         except Exception as e:  # noqa: BLE001 — report anything to the UI
             job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
             res = {"is_error": True}
+        try:
+            self._finish(job, backend, res, t0)
+        except Exception as e:  # noqa: BLE001 — the turn ends whatever happens
+            job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
+            job.emit({"t": "done", "turn": job.id, "provider": job.provider, "changed": [],
+                      "is_error": True, "session_id": res.get("session_id") or job.session_id})
         finally:
-            time.sleep(0.2)
+            with job.cond:
+                job.done = True
+                job.cond.notify_all()
+
+    def _finish(self, job: Job, backend: Backend, res: dict, t0: float) -> None:
+        """After the backend: what the turn changed, reverted where it may not, reported."""
+        time.sleep(0.2)
+        # What the editor wrote meanwhile (your saves, uploads, builds) is not the turn's:
+        # taken as it was then. The files are held while looked at and reverted (a sync's
+        # merge holds them too); a hold that cannot be had in time does not stop the turn.
+        held = self.writes.acquire(timeout=UNDO_WAIT)
+        try:
             job.after = self._snapshot(job)
+            with self.lock:
+                job.sealed = True
+                self._rebase(job)
             # Ask is read-only: a backend without a read-only mode may change nothing.
             read_only = job.mode == "ask" and not backend.read_only_ask
             out_of_scope = [rel for rel in sorted(set(job.before) | set(job.after))
@@ -241,43 +269,43 @@ class AgentManager:
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = self._restore(job, out_of_scope)
                 job.after = self._snapshot(job)
-            changed = []
-            for rel in sorted(set(job.before) | set(job.after)):
-                a, b = job.before.get(rel), job.after.get(rel)
-                if a != b:
-                    changed.append({"path": rel, "diff": self._diff(rel, a, b),
-                                    "created": a is None, "deleted": b is None,
-                                    "undoable": not any(s and s.data is None for s in (a, b))})
-            # Undo needs only the files this turn changed: keep just those in memory.
-            keep = [c["path"] for c in changed]
-            job.before = {r: job.before.get(r) for r in keep}
-            job.after = {r: job.after.get(r) for r in keep}
-            self.turns[job.id] = job
-            with self.lock:
-                while len(self.turns) > MAX_TURNS:
-                    self.turns.pop(next(iter(self.turns)))
-                while len(self.jobs) > MAX_TURNS and next(iter(self.jobs)) != job.id:
-                    self.jobs.pop(next(iter(self.jobs)))
-            ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
-                  "exit": res.get("exit"), "scope": job.scope,
-                  "snapshot_issues": sorted(job.snapshot_issues),
-                  "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],
-                  "out_of_scope": [r for r in out_of_scope if r not in reverted],
-                  "reverted": reverted,
-                  "session_id": res.get("session_id") or job.session_id,
-                  "duration": res.get("duration") or int((time.time() - t0) * 1000)}
-            for k in ("cost", "billing", "usage", "context", "is_error", "subtype", "denials", "denied", "stderr"):
-                if res.get(k) is not None:
-                    ev[k] = res[k]
-            if changed:
-                try:
-                    self.on_changed([c["path"] for c in changed], job.prompt)
-                except Exception:  # noqa: BLE001
-                    pass
-            job.emit(ev)
-            with job.cond:
-                job.done = True
-                job.cond.notify_all()
+        finally:
+            if held:
+                self.writes.release()
+        changed = []
+        for rel in sorted(set(job.before) | set(job.after)):
+            a, b = job.before.get(rel), job.after.get(rel)
+            if a != b:
+                changed.append({"path": rel, "diff": self._diff(rel, a, b),
+                                "created": a is None, "deleted": b is None,
+                                "undoable": not any(s and s.data is None for s in (a, b))})
+        # Undo needs only the files this turn changed: keep just those in memory.
+        keep = [c["path"] for c in changed]
+        job.before = {r: job.before.get(r) for r in keep}
+        job.after = {r: job.after.get(r) for r in keep}
+        self.turns[job.id] = job
+        with self.lock:
+            while len(self.turns) > MAX_TURNS:
+                self.turns.pop(next(iter(self.turns)))
+            while len(self.jobs) > MAX_TURNS and next(iter(self.jobs)) != job.id:
+                self.jobs.pop(next(iter(self.jobs)))
+        ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
+              "exit": res.get("exit"), "scope": job.scope,
+              "snapshot_issues": sorted(job.snapshot_issues),
+              "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],
+              "out_of_scope": [r for r in out_of_scope if r not in reverted],
+              "reverted": reverted,
+              "session_id": res.get("session_id") or job.session_id,
+              "duration": res.get("duration") or int((time.time() - t0) * 1000)}
+        for k in ("cost", "billing", "usage", "context", "is_error", "subtype", "denials", "denied", "stderr"):
+            if res.get(k) is not None:
+                ev[k] = res[k]
+        if changed:
+            try:
+                self.on_changed([c["path"] for c in changed], job.prompt)
+            except Exception:  # noqa: BLE001
+                pass
+        job.emit(ev)
 
     # ------------------------------------------------------------ backend extras
     def commands(self, provider: str | None, refresh: bool = False) -> dict:
@@ -314,6 +342,56 @@ class AgentManager:
     def busy(self) -> bool:
         job = self.active
         return bool(job and not job.done)
+
+    def editing(self) -> bool:
+        """An Edit turn runs: the agent writes the files, and the editor must not (its turn's
+        diff and Undo would take your text for the agent's). Saves wait for its end."""
+        job = self.active
+        return bool(job and not job.done and job.mode == "edit")
+
+    def server_wrote(self, paths: list[str]) -> None:
+        """The editor wrote these project paths (a save, an upload, a build's output folder),
+        not the agent: a running turn takes them as they are now, so it neither reports them
+        as its changes, nor reverts them, nor lets its Undo put them back."""
+        with self.lock:
+            job = self.active
+            if not job or job.done or job.sealed:
+                return
+        states, folders = {}, []
+        for rel in paths:
+            p = job.root / rel
+            if p.is_dir() and not p.is_symlink():
+                folders.append(rel.rstrip("/") + "/")
+                for f in p.rglob("*"):
+                    if f.is_file() or f.is_symlink():
+                        states[f.relative_to(job.root).as_posix()] = self._state(f)
+            else:
+                states[rel] = self._state(p)
+        with self.lock:
+            if job.sealed:
+                return
+            job.rebased.update(states)
+            job.rebased_folders.update(folders)
+
+    @staticmethod
+    def _state(p: Path) -> FileState | None:
+        try:
+            return file_state(p, MAX_SNAPSHOT_FILE)
+        except OSError:
+            return None                  # gone, or not a file
+
+    @staticmethod
+    def _rebase(job: Job) -> None:
+        """Take what the editor wrote during the turn as the turn's starting point."""
+        for folder in job.rebased_folders:       # its files, also those gone since
+            for rel in [r for r in job.before if r.startswith(folder)]:
+                if rel not in job.rebased:
+                    job.before.pop(rel)
+        for rel, state in job.rebased.items():
+            if state is None:
+                job.before.pop(rel, None)
+            else:
+                job.before[rel] = state
 
     def shutdown(self) -> None:
         """Stop a turn that is still running when the server exits."""

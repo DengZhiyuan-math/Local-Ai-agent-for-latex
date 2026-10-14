@@ -65,6 +65,32 @@ class Registry(TempState):
         self.assertEqual(len(projects), 1)
         self.assertGreater(projects[0]["opened"], first)
 
+    def test_a_damaged_project_list_is_never_written_back_empty(self):
+        """projects.json damaged (a hand edit) or held by another program: opening a project
+        must not take it for empty and write back a list with that one project."""
+        state = Path(os.environ["PRISM_STATE_DIR"])
+        state.mkdir(parents=True, exist_ok=True)
+        damaged = b'{"projects": [{"path": "C:/papers/a"}, '
+        (state / "projects.json").write_bytes(damaged)
+        with self.assertRaises(registry.StateUnreadable):
+            registry.touch(PROJECT)
+        registry.safe_touch(PROJECT)                     # what an editor's start does
+        self.assertEqual((state / "projects.json").read_bytes(), damaged, "left as it was")
+
+    def test_damaged_settings_are_kept_and_the_claude_account_is_not_lifted(self):
+        """settings.json damaged: saving a setting does not replace it with the defaults,
+        and a turn does not run as if no Claude account were set."""
+        import backend_claude
+        state = Path(os.environ["PRISM_STATE_DIR"])
+        state.mkdir(parents=True, exist_ok=True)
+        damaged = b'{"claude_account": "me@example.com", '
+        (state / "settings.json").write_bytes(damaged)
+        with self.assertRaises(registry.StateUnreadable):
+            hub.save_settings({"git_init": True})
+        self.assertEqual((state / "settings.json").read_bytes(), damaged, "left as it was")
+        problem = backend_claude.ClaudeCode("claude").preflight(PROJECT)
+        self.assertIn("Nothing was sent", problem or "")
+
     def test_project_key_is_stable(self):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 
@@ -83,11 +109,39 @@ class FolderDialog(unittest.TestCase):
 class Instances(TempState):
     """An instance file goes only when its server has ended, not when it is slow."""
 
+    def silent(self) -> str:
+        """The address of a server that takes connections but does not answer (busy)."""
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        s.listen(5)
+        self.addCleanup(s.close)
+        return f"http://127.0.0.1:{s.getsockname()[1]}/"
+
+    def closed(self) -> str:
+        """An address nothing listens at."""
+        import socket
+        s = socket.socket()
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+        return f"http://127.0.0.1:{port}/"
+
     def test_a_live_server_that_does_not_answer_keeps_its_file(self):
         inst = registry.instance_file("slow")
-        registry.write_json(inst, {"pid": os.getpid(), "url": "http://127.0.0.1:9/"})
+        registry.write_json(inst, {"pid": os.getpid(), "url": self.silent()})
         self.assertIsNone(registry.running_instance(inst, timeout=0.3))
         self.assertTrue(inst.exists())
+
+    def test_nothing_listening_at_its_address_is_a_server_gone(self):
+        """Where the system cannot say when a process started (macOS), a new process given
+        an ended server's pid passes the process check; but nothing listens at the server's
+        address any more: its file goes, and the project can be opened again."""
+        inst = registry.instance_file("gone")
+        registry.write_json(inst, {"pid": os.getpid(), "url": self.closed()})      # a live pid
+        with mock.patch.object(registry, "process_started", return_value=None):
+            self.assertIsNone(registry.running_instance(inst, timeout=5))
+        self.assertFalse(inst.exists())
 
     def test_the_file_of_a_server_that_ended_is_removed(self):
         ended = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -113,10 +167,10 @@ class Instances(TempState):
         self.assertTrue(registry.server_alive(os.getpid(), started))
         self.assertFalse(registry.server_alive(os.getpid(), started + 1))
         inst = registry.instance_file("slow")
-        registry.write_json(inst, {"pid": os.getpid(), "started": started, "url": "http://127.0.0.1:9/"})
+        registry.write_json(inst, {"pid": os.getpid(), "started": started, "url": self.silent()})
         self.assertIsNone(registry.running_instance(inst, timeout=0.3))
         self.assertTrue(inst.exists(), "the server itself, only slow")
-        registry.write_json(inst, {"pid": os.getpid(), "started": started + 1, "url": "http://127.0.0.1:9/"})
+        registry.write_json(inst, {"pid": os.getpid(), "started": started + 1, "url": self.silent()})
         self.assertIsNone(registry.running_instance(inst, timeout=0.3))
         self.assertFalse(inst.exists(), "another process with its pid")
 
@@ -330,6 +384,30 @@ class FolderSync(TempState):
         self.assertEqual(self.git(repo, "status", "--porcelain"), "", "nothing left over")
         self.assertIn("练习/ex one/main.tex", self.git(repo, "ls-files"))
 
+    def test_a_rename_waits_for_git_and_says_when_it_could_not_commit(self):
+        """Another editor of the shared repository is committing (git's index.lock, for a
+        moment): the rename waits its turn and is committed. When it cannot be, the answer
+        says so: no other editor would commit it (each commits its own project only)."""
+        import threading
+        import gitsync
+        self.assertTrue(hub.apply_sync({"id": self.top["id"], "mode": "shared"})["ok"])
+        repo = self.projects / "Course"
+        pid = {p["name"]: p["id"] for p in hub.list_projects()["projects"]}["ex 1"]
+        lock = repo / ".git" / "index.lock"
+        lock.write_bytes(b"")
+        threading.Timer(1.0, lock.unlink).start()
+        r = hub.rename_project(pid, "ex one", folder=True)
+        self.assertIsNone(r["warning"])
+        self.assertEqual(self.git(repo, "log", "-1", "--format=%s").strip(), "Rename ex 1 to ex one")
+        lock.write_bytes(b"")                  # and this time it stays
+        try:
+            with mock.patch.object(gitsync, "LOCK_WAIT", 0.3):
+                r = hub.rename_project(r["id"], "ex uno", folder=True)
+        finally:
+            lock.unlink()
+        self.assertTrue(r["moved"])
+        self.assertIn("could not be committed", r["warning"] or "")
+
     def test_publish_one_project(self):
         from unittest import mock
         root = self.projects / "ex 1"
@@ -340,7 +418,7 @@ class FolderSync(TempState):
         self.assertEqual([d["dir"] for d in info["private_dirs"]], ["conversations"])
         calls = []
         with mock.patch.object(hub, "create_github_repo",
-                               side_effect=lambda r, o, n: calls.append((r, o, n)) or {"url": "https://github.com/me/" + n}):
+                               side_effect=lambda r, o, n, **kw: calls.append((r, o, n)) or {"url": "https://github.com/me/" + n}):
             r = hub.publish_project(root, "my-ex", leave_out=["conversations"])
         self.assertEqual(r, {"url": "https://github.com/me/my-ex", "created": True})
         self.assertEqual(calls, [(root, "", "my-ex")])
@@ -357,7 +435,7 @@ class FolderSync(TempState):
         root = repo / "练习" / "ex 1"
         self.assertEqual(hub.publish_info(root)["kind"], "shared")
         with mock.patch.object(hub, "create_github_repo",
-                               side_effect=lambda r, o, n: {"url": f"https://github.com/me/{n}", "seen": str(r)}):
+                               side_effect=lambda r, o, n, **kw: {"url": f"https://github.com/me/{n}", "seen": str(r)}):
             r = hub.publish_project(root)
         self.assertEqual((r["seen"], r["url"]), (str(repo), "https://github.com/me/Course"))
 
@@ -416,6 +494,23 @@ class CheckGitHub(TempState):
         g = hub.git_info(mine)
         self.assertEqual((g["behind"], g["fetch_error"]), (1, None))
         self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
+
+    def test_errors_read_while_fetching_never_change_under_the_reader(self):
+        """The cards read the fetch errors (git_info, from other threads) while the fetches
+        run: a dict a reader is going through must not change size under it."""
+        from unittest import mock
+        readers = []
+
+        def fetch_one(top):
+            readers.append(iter(hub.FETCH["errors"].items()))   # a card's request, meanwhile
+            return "could not reach GitHub"
+
+        with mock.patch.object(hub, "fetch_targets", return_value=[self.tmp / "a", self.tmp / "b"]), \
+                mock.patch.object(hub, "fetch_one", fetch_one):
+            hub.fetch_all()
+        for it in readers:
+            list(it)                       # RuntimeError: dictionary changed size during iteration
+        self.assertEqual(len(hub.FETCH["errors"]), 2)
 
 
 class SettingsAndGitHub(TempState):

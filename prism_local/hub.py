@@ -34,6 +34,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import build  # noqa: E402
 import gitsync  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
@@ -63,19 +64,6 @@ def read_prism_json(root: Path) -> dict:
         return {}
 
 
-def guess_main(root: Path) -> str | None:
-    if (root / "main.tex").is_file():
-        return "main.tex"
-    for p in sorted(root.glob("*.tex")):
-        try:
-            if not p.name.startswith("._") and \
-                    "\\documentclass" in p.read_text(encoding="utf-8", errors="replace")[:5000]:
-                return p.name
-        except OSError:
-            pass
-    return None
-
-
 def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
     """How many editable source files the project has, and the newest mtime."""
     count, newest = 0, None
@@ -99,8 +87,8 @@ def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
 
 def pdf_path(root: Path) -> tuple[Path | None, str | None, str]:
     cfg = read_prism_json(root)
-    main = cfg.get("main") or guess_main(root)
-    outdir = str(cfg.get("outdir") or "build").strip("/") or "build"
+    main = cfg.get("main") or build.guess_main(root)     # as the editor reads it
+    outdir = build.output_folder(cfg.get("outdir"))[0]
     if not main:
         return None, None, outdir
     return root / outdir / f"{Path(main).stem}.pdf", main, outdir
@@ -240,10 +228,15 @@ def fetch_one(top: Path) -> str | None:
     """git fetch; an error message, or None."""
     try:
         sync = project_sync(top)
-        with sync.lock:
+        sync.check_repo()
+        # Not while an editor of it is at the repository (one that opened since the list
+        # was made): it fetches by itself, and two fetches at once fail on the refs.
+        with sync.lock, gitsync.repo_lock(sync.git_dir, timeout=0):
             r = sync.fetch()
         if r is None:
             return sync.blocked_reason
+    except gitsync.RepoBusy:
+        return None
     except (OSError, subprocess.SubprocessError) as e:
         return str(e)
     return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "git fetch failed")
@@ -260,7 +253,9 @@ def fetch_all() -> None:
             for top, err in zip(targets, ex.map(fetch_one, targets)):
                 FETCH["done"] += 1
                 if err:
-                    FETCH["errors"][str(top)] = err
+                    # A new dict, never one changed in place: the cards' requests read it
+                    # meanwhile, from other threads.
+                    FETCH["errors"] = {**FETCH["errors"], str(top): err}
         FETCH["at"] = time.time()
     finally:
         FETCH["running"] = False
@@ -823,11 +818,18 @@ def settings_path() -> Path:
 
 
 def load_settings() -> dict:
-    data = registry.read_json(settings_path()) or {}
+    """Raises registry.StateUnreadable rather than taking a damaged file for the defaults."""
+    data = registry.read_state(settings_path())
     return {k: data.get(k, v) for k, v in SETTINGS_DEFAULTS.items()}
 
 
 def save_settings(body: dict) -> dict:
+    # Read, change and write under a lock: two windows saving at once keep both changes.
+    with registry.FileLock(settings_path().with_suffix(".lock"), timeout=10):
+        return _save_settings(body)
+
+
+def _save_settings(body: dict) -> dict:
     cur = load_settings()
     if "default_parent" in body:
         p = str(body["default_parent"] or "").strip().strip('"')
@@ -926,8 +928,10 @@ def git_init(root: Path) -> None:
 GITATTRIBUTES = "* text=auto\n*.pdf binary\n*.png binary\n*.jpg binary\n*.jpeg binary\n"
 
 
-def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
-    """Commit the project and push it to a new private GitHub repository.
+def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=None) -> dict:
+    """Commit the project and push it to a new private GitHub repository. The commit holds
+    the repository and `files_lock` (the editor's save lock, when the editor publishes; else
+    the repository's gitsync.FilesLock): no save lands in the middle of git add.
 
     Returns {"url"} or {"error"}. The project itself is never removed on failure."""
     st = gh_status()
@@ -943,10 +947,12 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
         git_init(root)
         if run_git(root, "remote").stdout.strip():
             return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
-        run_git(root, "add", "-A")
-        _unstage_big(root)
-        if run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
-            run_git(root, "commit", "-q", "-m", "Initial commit")
+        git_dir = Path(run_git(root, "rev-parse", "--absolute-git-dir").stdout.strip())
+        with gitsync.repo_lock(git_dir), files_lock or gitsync.FilesLock(lambda: git_dir):
+            run_git(root, "add", "-A")
+            _unstage_big(root)
+            if run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
+                run_git(root, "commit", "-q", "-m", "Initial commit")
         r = subprocess.run([st["gh"], "repo", "create", full, "--private", "--source", ".",
                             "--remote", "origin"],
                            cwd=root, capture_output=True, text=True, encoding="utf-8",
@@ -954,7 +960,7 @@ def create_github_repo(root: Path, owner: str = "", name: str = "") -> dict:
                            env={**git_env(), "GH_PROMPT_DISABLED": "1"}, **NO_WINDOW)
     except subprocess.CalledProcessError as e:
         return {"error": f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[:400]}"}
-    except (OSError, subprocess.SubprocessError) as e:
+    except (OSError, subprocess.SubprocessError, RuntimeError) as e:   # RepoBusy, too
         return {"error": str(e)}
     if r.returncode != 0:
         return {"error": (r.stderr or r.stdout).strip()[:500] or "gh repo create failed"}
@@ -1029,11 +1035,13 @@ def publish_info(root: Path) -> dict:
     return info
 
 
-def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list | None = None) -> dict:
+def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list | None = None,
+                    files_lock=None) -> dict:
     """Give the project a private GitHub repository: git init if needed, a .gitignore
     (build output, LaTeX's auxiliary files, and the folders in `leave_out`), a commit of
     everything, gh repo create, push. A project in a folder's shared repository publishes
-    that repository. Returns {"url", "created"} or {"error"}."""
+    that repository. `files_lock`: see create_github_repo. Returns {"url", "created"} or
+    {"error"}."""
     info = publish_info(root)
     if info["kind"] == "nested":
         return {"error": f"This folder is inside another repository ({info['top']}), which is "
@@ -1054,7 +1062,7 @@ def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list
                 write_bytes(gi, ("\n".join(have + add) + "\n").encode("utf-8"))
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"git init failed: {e}"}
-    r = create_github_repo(target, owner, name or info["name"])
+    r = create_github_repo(target, owner, name or info["name"], files_lock=files_lock)
     if "url" in r:
         tell_editor(root)
     return {**r, "created": "url" in r}
@@ -1224,8 +1232,13 @@ def rename_project(pid: str, name: str, folder: bool) -> dict:
     new = root.parent / new_folder
     change_project(pid, {"name": name})
     registry.move_folder(root, new)
-    gitsync.record_move(root, new)
-    return {"id": registry.project_key(new), "path": str(new), "moved": True}
+    warning = None
+    try:
+        gitsync.record_move(root, new)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        warning = (f"The folder was renamed, but the rename could not be committed ({e}). "
+                   "Commit it from a terminal, so the other copies of the repository get it.")
+    return {"id": registry.project_key(new), "path": str(new), "moved": True, "warning": warning}
 
 
 def remove_project(pid: str) -> dict:

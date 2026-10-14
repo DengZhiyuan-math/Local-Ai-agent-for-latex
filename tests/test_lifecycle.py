@@ -231,6 +231,47 @@ class ServerLifecycle(unittest.TestCase):
         self.addCleanup(lambda: subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
                         if os.name == "nt" else os.kill(pid, 9))
 
+    def test_opening_a_project_while_its_editor_restarts_starts_no_second_one(self):
+        """A restart (after an update): the server stops listening, removes its instance
+        file, commits what is left, and starts its successor. The Home page or the launcher
+        opening the project meanwhile finds that successor; it does not start a second
+        server next to it (two editors of one project, on different ports)."""
+        sys.path.insert(0, str(REPO / "prism_local"))
+        import registry
+        from unittest import mock
+        root = self.copy_project()
+        state = tmpdir() / "state"
+        pids = set()
+
+        def kill_all():
+            for pid in pids:
+                subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True) \
+                    if os.name == "nt" else subprocess.run(["kill", "-9", str(pid)], capture_output=True)
+
+        self.addCleanup(kill_all)
+        with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(state)}):
+            first = registry.ensure_server(root)
+            self.assertTrue(first.get("started"), first)
+            old = request(first["url"], "/api/ping")[1]["pid"]
+            pids.add(old)
+            headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+            self.assertEqual(request(first["url"], "/api/restart", b"{}", headers)[0], 200)
+            opened, new = [], None
+            deadline = time.monotonic() + 40
+            while time.monotonic() < deadline and new is None:
+                r = registry.ensure_server(root)       # the Home page's Open, over and over
+                opened.append(r)
+                if r.get("url"):
+                    try:
+                        pid = request(r["url"], "/api/ping")[1]["pid"]
+                    except OSError:
+                        continue
+                    pids.add(pid)
+                    new = pid if pid != old else None
+        self.assertIsNotNone(new, opened[-3:])
+        self.assertEqual([r for r in opened if r.get("started")], [], "no second server was started")
+        self.assertEqual(pids, {old, new})
+
     def test_exits_when_no_page_ever_connects(self):
         self.start("2,1,5")
         t0 = time.monotonic()

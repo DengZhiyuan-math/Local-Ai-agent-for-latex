@@ -231,6 +231,27 @@ class DeepCodeContract(unittest.TestCase):
             self.assertIn("snippet", prompt)
             self.assertIn("default-model", backend.env(job).values())
 
+    def test_a_settings_overlay_left_by_a_killed_editor_is_put_back(self):
+        """The editor killed during an Ask turn leaves that turn's settings in the project.
+        The next turn puts back what was there before, rather than taking the overlay for
+        the original (its deny rules would then stay for good)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root, state = Path(tmp) / "p", Path(tmp) / "state"
+            settings = root / ".deepcode" / "settings.json"
+            settings.parent.mkdir(parents=True)
+            original = b'{"env": {"API_KEY": "fixture"}}\n'
+            settings.write_bytes(original)
+            backend = DeepCode("deepcode", {"bin": sys.executable})
+            with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(state)}), \
+                    mock.patch("backend_deepcode.user_settings", return_value={}):
+                ask = backend.turn_settings(job_for(root=root, mode="ask"))
+                ask.__enter__()                  # killed here: the turn never ends
+                self.assertNotEqual(settings.read_bytes(), original)
+                with backend.turn_settings(job_for(root=root, mode="edit")):
+                    deny = json.loads(settings.read_text())["permissions"]["deny"]
+                    self.assertNotIn("write-in-cwd", deny, "the Ask turn's rules are gone")
+                self.assertEqual(settings.read_bytes(), original)
+
 
 class VisualAttachments(unittest.TestCase):
     def test_api_receives_image_content_and_unsupported_inputs_are_rejected(self):

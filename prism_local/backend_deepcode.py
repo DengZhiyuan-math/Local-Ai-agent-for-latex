@@ -21,21 +21,21 @@ Scope uses post-turn restoration and is reported as such; it is not a sandbox.
 """
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
 import re
 import shutil
-import subprocess
-import threading
 import time
 from pathlib import Path
 from contextlib import contextmanager
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, TREE, Backend, Job, agent_env, executable, find_bin
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, agent_env, cli_process, executable, find_bin
 from fsutil import project_path, write_bytes
 from gitenv import selects_repository
 import mcp_compile
+import registry
 import sessionmeta
 
 PACKAGE = "@vegamo/deepcode-cli"
@@ -123,6 +123,42 @@ def read_settings(path: Path) -> dict:
 
 def user_settings() -> dict:
     return read_settings(Path.home() / ".deepcode" / "settings.json")
+
+
+def overlay_record(path: Path) -> Path:
+    """Where a turn notes what it put in place of a project's Deep Code settings."""
+    name = hashlib.sha256(str(path).encode()).hexdigest()[:20] + ".json"
+    return registry.state_dir() / "deepcode-overlays" / name
+
+
+def heal_overlay(path: Path) -> None:
+    """A turn's settings overlay left behind by an editor killed during the turn: put back
+    what was there before, where the file still is that overlay. Taken for the original
+    instead, the next turn would keep its deny rules for good (an Ask turn's write-in-cwd
+    denied in every Edit turn after, and in Deep Code run from a terminal)."""
+    record = overlay_record(path)
+    try:
+        noted = json.loads(record.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    try:
+        current = path.read_bytes() if path.is_file() else None
+        if current is not None and hashlib.sha256(current).hexdigest() == noted.get("overlay"):
+            if noted.get("original") is None:
+                path.unlink()
+                if not noted.get("directory_existed"):
+                    try:
+                        path.parent.rmdir()
+                    except OSError:
+                        pass
+            else:
+                write_bytes(path, base64.b64decode(noted["original"]))
+    except (OSError, ValueError):
+        return                                   # left as it is; tried again next turn
+    try:
+        record.unlink()
+    except OSError:
+        pass
 
 
 class DeepCode(Backend):
@@ -220,6 +256,7 @@ class DeepCode(Backend):
         path = project_path(job.root, ".deepcode/settings.json")
         if path.is_symlink():
             raise ValueError("Deep Code settings must be a regular project file")
+        heal_overlay(path)
         existed = path.exists()
         original = path.read_bytes() if existed else None
         directory_existed = path.parent.exists()
@@ -239,6 +276,10 @@ class DeepCode(Backend):
         if inherited:
             raise ValueError("Deep Code inherits user MCP servers. Use a profile without external MCP servers.")
         overlay = (json.dumps(settings, indent=2) + "\n").encode()
+        record = overlay_record(path)
+        registry.write_json(record, {"path": str(path), "overlay": hashlib.sha256(overlay).hexdigest(),
+                                     "original": None if original is None else base64.b64encode(original).decode(),
+                                     "directory_existed": directory_existed})
         write_bytes(path, overlay)
         try:
             yield
@@ -261,6 +302,10 @@ class DeepCode(Backend):
             else:
                 job.emit({"t": "error", "message": "Deep Code settings changed during the turn; "
                           "the editor kept that edit instead of restoring the earlier settings."})
+            try:
+                record.unlink()
+            except OSError:
+                pass
 
     def run(self, job: Job) -> dict:
         bad = self.preflight(job.root) or (self.check_session(job.root, job.session_id) if job.session_id else None)
@@ -277,17 +322,13 @@ class DeepCode(Backend):
         start = time.time()
         job.emit({"t": "thinking_start"})       # it prints nothing until the reply
         out_lines: list[str] = []
-        err_lines: list[str] = []
-        job.proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                    stderr=subprocess.PIPE, text=True, encoding="utf-8",
-                                    errors="replace", env=self.env(job), **TREE)
-        threading.Thread(target=lambda: err_lines.extend(job.proc.stderr), daemon=True).start()
-        job.proc.stdin.write(self.message(job))
-        job.proc.stdin.close()
-        for line in job.proc.stdout:
-            out_lines.append(line)
-        job.proc.wait()
-        st: dict = {"exit": job.proc.returncode, "billing": "api"}
+        with cli_process(job, cmd, self.message(job), self.env(job)) as (proc, err_lines):
+            if proc is None:
+                return {"billing": "api"}       # stopped before it started
+            for line in proc.stdout:
+                out_lines.append(line)
+            proc.wait()
+        st: dict = {"exit": proc.returncode, "billing": "api"}
         sid = job.session_id or latest_session(job.root, start)
         if sid:
             bad = self.check_session(job.root, sid)

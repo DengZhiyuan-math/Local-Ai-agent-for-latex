@@ -25,6 +25,27 @@ def project(files: dict) -> Path:
     return server.ROOT
 
 
+class Imports(unittest.TestCase):
+    def test_project_modules_are_all_loaded_at_the_start(self):
+        """A server runs for days, and a self-update fast-forwards the code under it: a
+        module of the project imported only at its first use would be the new version, next
+        to the old versions of those it uses. Every one server.py imports inside a function
+        is loaded by the time it has started."""
+        import re
+        prism = Path(server.__file__).parent
+        mods = {p.stem for p in prism.glob("*.py")}
+        late = set()
+        for line in Path(server.__file__).read_text(encoding="utf-8").splitlines():
+            m = re.match(r"\s+(?:import (\w+)|from (\w+) import)", line)
+            if m and (m.group(1) or m.group(2)) in mods:
+                late.add(m.group(1) or m.group(2))
+        code = ("import sys; sys.path.insert(0, sys.argv[1]); import server; "
+                "print(' '.join(sorted(sys.modules)))")
+        loaded = set(subprocess.run([sys.executable, "-c", code, str(prism)], capture_output=True,
+                                    text=True, check=True).stdout.split())
+        self.assertEqual(late - loaded, set(), "imported only at their first use")
+
+
 class Config(unittest.TestCase):
     def test_a_bad_prism_json_is_reported_and_the_defaults_apply(self):
         project({"main.tex": "", "prism.json": '{"engine": "xetex2", "outdir": "../x", '
@@ -46,6 +67,26 @@ class Config(unittest.TestCase):
         self.assertEqual(server.CFG.main, "paper.tex", "prism.json wins over the guess")
         project({"main.tex": "\\documentclass{article}", "a.tex": "\\documentclass{article}"})
         self.assertEqual(server.CFG.main, "main.tex")
+
+    def test_a_tex_that_cannot_be_read_is_passed_over(self):
+        """A .tex at the top that cannot be read (here a folder so named; also a broken link,
+        a cloud placeholder offline) must not keep the editor from starting."""
+        root = project({"a.tex/keep": "", "b.tex": "\\documentclass{article}"})
+        self.assertTrue((root / "a.tex").is_dir())
+        server.set_root(root)
+        self.assertEqual(server.CFG.main, "b.tex")
+
+    def test_the_home_page_names_the_same_document_and_folder(self):
+        """The Home page's card (title, thumbnail) and the editor read prism.json and guess
+        the document alike: a \\documentclass commented out is none, an outdir outside the
+        project is not used."""
+        import hub
+        root = project({"a.tex": "% \\documentclass{article}", "b.tex": "\\documentclass{article}",
+                        "prism.json": '{"outdir": "..\\\\elsewhere"}'})
+        pdf, main, outdir = hub.pdf_path(root)
+        self.assertEqual((main, outdir), (server.CFG.main, server.CFG.outdir))
+        self.assertEqual((main, outdir), ("b.tex", "build"))
+        self.assertEqual(pdf, root / "build" / "b.pdf")
 
     def test_a_started_server_shows_the_pdf_built_last(self):
         doc = "\\documentclass{article}"
@@ -171,6 +212,18 @@ class Files(unittest.TestCase):
             _winapi.CreateJunction(str(outside), str(root / "out"))
             _winapi.CreateJunction(str(root / "a"), str(root / "in"))
             self.assertEqual(server.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
+
+    def test_no_save_while_the_agent_edits(self):
+        """An Edit turn runs: the server holds every save, also from a page that did not see
+        the turn start (another tab, a reload): its diff and Undo would take your text for
+        the agent's. The page tries again; once the turn is over the save goes through."""
+        root = project({"main.tex": "one\n"})
+        with mock.patch.object(server.AGENT, "editing", return_value=True):
+            r, code = server.save_file("main.tex", "yours\n", None, True)
+        self.assertEqual((code, r.get("busy")), (503, True), r)
+        self.assertEqual((root / "main.tex").read_text(encoding="utf-8"), "one\n")
+        r, code = server.save_file("main.tex", "yours\n", None, False)
+        self.assertEqual(code, 200, r)
 
     def test_save_keeps_the_files_line_ends(self):
         root = project({})

@@ -54,6 +54,8 @@ SHARED_MARKER = "prism-repo.json"
 AUX = (".aux", ".log", ".out", ".toc", ".lof", ".lot", ".bbl", ".blg", ".bcf", ".run.xml",
        ".fls", ".fdb_latexmk", ".synctex.gz", ".synctex", ".nav", ".snm", ".vrb", ".idx",
        ".ilg", ".ind", ".xdv", ".dvi", ".thm", ".loe")
+# The git commands prism-local runs that take the index (and its index.lock).
+INDEX_WRITERS = frozenset(("merge", "commit", "add", "checkout"))
 # New files never recorded: those, and a save half-way (fsutil.replace_file's temporary file).
 NOT_SOURCES = AUX + (".prism-tmp",)
 
@@ -211,24 +213,31 @@ def shared_marker(top: Path) -> bool:
 def record_move(old: Path, new: Path) -> str | None:
     """A project's folder was renamed inside a repository shared by several projects:
     commit the move there (its own repository needs nothing: its paths do not change).
-    Returns the commit message, or None."""
-    def git(*args, cwd=new):
-        return gitenv.git(cwd, *args)
-    try:
-        r = git("rev-parse", "--show-toplevel")
-        if r.returncode != 0:
-            return None
-        top = Path(r.stdout.strip()).resolve()
-        if top == Path(new).resolve() or not shared_marker(top):
-            return None
-        specs = [f":(top,literal){Path(p).resolve().relative_to(top).as_posix()}" for p in (old, new)]
-        git("add", "-A", "--", *specs, cwd=top)
-        message = f"Rename {Path(old).name} to {Path(new).name}"
-        if git("commit", "-q", "-m", message, "--", *specs, cwd=top).returncode != 0:
-            return None
-        return message
-    except (OSError, subprocess.SubprocessError, ValueError):
+    Returns the commit message; None when there is nothing to record. Raises RuntimeError
+    (RepoBusy too) when the move could not be committed: say so, since nobody else would
+    commit it (each editor of the repository commits its own project only), and the other
+    copies would get the new folder next to the old one."""
+    r = gitenv.git(new, "rev-parse", "--show-toplevel", "--absolute-git-dir")
+    lines = r.stdout.strip().splitlines()
+    if r.returncode != 0 or len(lines) != 2:
         return None
+    top, git_dir = Path(lines[0]).resolve(), Path(lines[1])
+    if top == Path(new).resolve() or not shared_marker(top):
+        return None
+    specs = [f":(top,literal){Path(p).resolve().relative_to(top).as_posix()}" for p in (old, new)]
+    message = f"Rename {Path(old).name} to {Path(new).name}"
+    # As an editor's commit: one prism-local process at a time, no save meanwhile.
+    with repo_lock(git_dir), FilesLock(lambda: git_dir):
+        deadline = time.monotonic() + LOCK_WAIT          # another program's git, for a moment
+        while (git_dir / "index.lock").exists():
+            if time.monotonic() >= deadline:
+                raise RuntimeError("git is busy (index.lock)")
+            time.sleep(0.2)
+        for args in (("add", "-A", "--", *specs), ("commit", "-q", "-m", message, "--", *specs)):
+            c = gitenv.git(top, *args)
+            if c.returncode != 0:
+                raise RuntimeError((c.stderr or c.stdout).strip()[-300:] or f"git {args[0]} failed")
+    return message
 
 
 class RepoBusy(RuntimeError):
@@ -387,9 +396,12 @@ class GitSync:
         try:
             r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout, interactive=interactive)
         except subprocess.TimeoutExpired:
-            # Killed: an index.lock made since it started is its own (none other could take
-            # it while it held it), and would stop the merge --abort that follows.
-            lock = self.git_dir / "index.lock" if self.git_dir else None
+            # Killed: a command that takes the index (run under repo_lock and the files lock,
+            # as all of them here are) leaves its index.lock, which would stop the merge
+            # --abort that follows. One made since it started is its own: none other could
+            # take it while it held it. Any other command (a fetch, a read) took none, and
+            # one there now is someone else's.
+            lock = self.git_dir / "index.lock" if self.git_dir and args[0] in INDEX_WRITERS else None
             try:
                 if lock and lock.stat().st_mtime >= started - 1:
                     lock.unlink()
@@ -1122,7 +1134,7 @@ class GitSync:
             fn()
         except RepoBusy:
             pass                            # another window is at it; the next tick tries again
-        except (OSError, subprocess.SubprocessError, RuntimeError) as e:
+        except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, keepboth.MergeError) as e:
             self.error = str(e)[-300:]
 
     # ------------------------------------------------------------ the worker
@@ -1140,32 +1152,37 @@ class GitSync:
             self._safe(self.pull)
 
     def run(self) -> None:
-        if self.check_repo():
-            self._finish_crashed_merge()
-            self._safe(self._remote_state)
-            # Opening a project brings in what changed on GitHub (another computer) first,
-            # before you start editing an old version.
-            if self.enabled and self.has_remote:
-                self._safe(self.pull)
-            # Changes left from before the editor started are recorded like new ones.
-            try:
-                if self.enabled and self.changes():
-                    self.last_edit = self.dirty_since = time.time()
-            except (OSError, subprocess.SubprocessError, RuntimeError):
-                pass
+        self._guarded("start", self._start)
         while not self.stop.wait(TICK):
-            try:
-                self.tick()
-            except Exception as e:          # a bug must not end autosave for the session
-                self.error = f"{type(e).__name__}: {e}"[-300:]
-                print(json.dumps({"event": "git_sync", "git_top": str(self.top), "stage": "tick",
-                                  "result": "failed", "error": self.error}), flush=True)
+            self._guarded("tick", self.tick)
+
+    def _guarded(self, stage: str, fn) -> None:
+        """A failure, or a bug, in one step must not end autosave for the session."""
+        try:
+            fn()
+        except Exception as e:
+            self.error = f"{type(e).__name__}: {e}"[-300:]
+            print(json.dumps({"event": "git_sync", "git_top": str(self.top), "stage": stage,
+                              "result": "failed", "error": self.error}), flush=True)
+
+    def _start(self) -> None:
+        if not self.check_repo():
+            return
+        self._safe(self._finish_crashed_merge)
+        self._safe(self._remote_state)
+        # Opening a project brings in what changed on GitHub (another computer) first,
+        # before you start editing an old version.
+        if self.enabled and self.has_remote:
+            self._safe(self.pull)
+        # Changes left from before the editor started are recorded like new ones.
+        if self.enabled and self.changes():
+            self.last_edit = self.dirty_since = time.time()
 
     def _finish_crashed_merge(self) -> None:
         """A merge prism-local started and never finished (the editor was killed half-way, or
         git by its timeout): call it off, so this copy is as it was before it; the next sync
-        merges again. A merge
-        someone started in a terminal is theirs to finish, and is left alone."""
+        merges again. A merge someone started in a terminal is theirs to finish, and is left
+        alone."""
         head = self.git_dir / "MERGE_HEAD" if self.git_dir else None
         if not (head and head.exists()):
             return

@@ -142,6 +142,35 @@ class Targets(unittest.TestCase):
         self.assertNotIn("sync_target", self.g._settings())
         self.assertEqual((self.root / "main.tex").read_text(), "base\n")
 
+    def test_publishing_commits_holding_the_files(self):
+        """Publishing commits everything (git add -A): not while a save replaces a file (on
+        Windows git cannot open it then), so it holds the editor's save lock it is given."""
+        import hub
+        import threading
+        git(self.root, "remote", "remove", "origin")
+        (self.root / "new.tex").write_text("new\n")
+        held, lock = [], threading.RLock()
+        real_git, real_run = hub.run_git, subprocess.run
+
+        def run_git(root, *args, **kw):
+            if args and args[0] in ("add", "commit"):
+                held.append(lock._is_owned())
+            return real_git(root, *args, **kw)
+
+        def gh_fails(cmd, *args, **kwargs):
+            if cmd[0] == "/fixture/gh":
+                return subprocess.CompletedProcess(cmd, 1, "", "no network")
+            return real_run(cmd, *args, **kwargs)
+
+        with mock.patch.object(hub, "gh_status", return_value={
+                "logged_in": True, "gh": "/fixture/gh", "account": "owner"}), \
+                mock.patch.object(hub, "run_git", run_git), \
+                mock.patch.object(hub.subprocess, "run", side_effect=gh_fails):
+            r = hub.create_github_repo(self.root, "owner", "paper", files_lock=lock)
+        self.assertIn("no network", r.get("error", ""))
+        self.assertTrue(held)
+        self.assertEqual(set(held), {True}, "git add and commit ran holding the files")
+
     def test_redirects_block_and_keep_local_edits(self):
         self.g.bind_target()
         git(self.root, "remote", "add", "tool", str(self.tool))

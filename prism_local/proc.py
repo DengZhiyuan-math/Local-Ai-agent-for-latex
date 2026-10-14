@@ -17,12 +17,16 @@ TREE = NO_WINDOW if os.name == "nt" else {"start_new_session": True}
 
 def kill_tree(proc: subprocess.Popen) -> None:
     """Stop a process and its children. On Windows a CLI may be a .cmd shim around node,
-    and MiKTeX's pdflatex.exe runs the real engine as a child process."""
+    and MiKTeX's pdflatex.exe runs the real engine as a child process.
+    Never raises: taskkill failing or hanging leaves at least the program itself killed."""
     if proc.poll() is not None:
         return
     if os.name == "nt":
-        subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
-                       capture_output=True, timeout=15, **NO_WINDOW)
+        try:
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(proc.pid)],
+                           capture_output=True, timeout=15, **NO_WINDOW)
+        except (OSError, subprocess.SubprocessError):
+            pass
     else:
         _signal_group(proc, signal.SIGTERM)
     try:
@@ -30,10 +34,10 @@ def kill_tree(proc: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         if os.name != "nt":
             _signal_group(proc, signal.SIGKILL)
-        proc.kill()
         try:
+            proc.kill()
             proc.wait(5)
-        except subprocess.TimeoutExpired:
+        except (OSError, subprocess.TimeoutExpired):
             pass
 
 

@@ -1089,7 +1089,7 @@ $("#form-rename").addEventListener("submit", async (e) => {
                                                 folder: f.elements.folder.checked && !f.elements.folder.disabled });
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not rename");
   dlg.close();
-  if (r.moved) toast(`Folder renamed: ${r.path}`);
+  if (r.moved) toast(r.warning || `Folder renamed: ${r.path}`);
   H.sig = null; await load(); loadAllGit();
 });
 

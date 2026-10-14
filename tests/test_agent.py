@@ -541,6 +541,124 @@ class Snapshots(unittest.TestCase):
             self.assertTrue(seen["commit"], "and lets go of it before the commit")
             self.assertEqual((root / "a.tex").read_bytes(), b"one\n")
 
+    def test_what_the_editor_writes_during_a_turn_is_not_the_turns(self):
+        """During an Ask turn you keep editing (saves), and a build writes its output folder:
+        none of it is the turn's change. A backend without a read-only Ask mode has every
+        write of the turn reverted: your saves and the build stay."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+            (root / "build").mkdir()
+            (root / "build" / "main.pdf").write_bytes(b"%PDF old")
+            m = None
+
+            class NoReadOnlyAsk(backends.Backend):
+                read_only_ask = False
+
+                def run(self, job):
+                    (job.root / "a.tex").write_bytes(b"one\nyours\n")      # you save, meanwhile
+                    m.server_wrote(["a.tex"])
+                    (job.root / "build" / "main.pdf").write_bytes(b"%PDF new")   # a build
+                    (job.root / "build" / "main.log").write_bytes(b"log")
+                    m.server_wrote(["build"])
+                    (job.root / "notes.tex").write_bytes(b"the agent's\n")  # not allowed in Ask
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], ask=NoReadOnlyAsk("ask"))
+            done = wait_done(m.jobs[m.start("go", None, "ask")["job"]])
+            self.assertEqual([c["path"] for c in done["changed"]], [], done)
+            self.assertEqual(done["reverted"], ["notes.tex"], "only the agent's write")
+            self.assertEqual((root / "a.tex").read_bytes(), b"one\nyours\n", "your save stays")
+            self.assertEqual((root / "build" / "main.pdf").read_bytes(), b"%PDF new", "the build stays")
+            self.assertFalse((root / "notes.tex").exists())
+
+    def test_an_edit_turn_and_the_editor_do_not_write_the_same_files(self):
+        """While an Edit turn runs the editor holds your saves (editing()); a turn's Undo
+        leaves alone what you saved after it."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+            seen = {}
+            m = None
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    seen["editing"] = m.editing()
+                    (job.root / "a.tex").write_bytes(b"ONE\n")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
+            self.assertTrue(seen["editing"])
+            self.assertFalse(m.editing(), "over once the turn is done")
+            (root / "a.tex").write_bytes(b"ONE\nthen yours\n")
+            self.assertEqual(m.undo(done["turn"])["restored"], [], "your text is kept")
+            self.assertEqual((root / "a.tex").read_bytes(), b"ONE\nthen yours\n")
+
+    def test_a_turn_ends_even_when_reporting_it_fails(self):
+        """Whatever goes wrong after the backend (here the commit hook raising something
+        unexpected, or the snapshot), the turn ends: busy() must not stay true, or sync and
+        every later turn would wait for good."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    (job.root / "a.tex").write_bytes(b"ONE\n")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            with mock.patch.object(m, "_diff", side_effect=MemoryError("too big")):
+                done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
+            self.assertTrue(done.get("is_error"))
+            self.assertFalse(m.busy())
+
+    def cli(self, script: str):
+        """A CliBackend running `script` (Python) as its CLI."""
+        d = tmpdir()
+        (d / "cli.py").write_text(script, encoding="utf-8")
+
+        class Fake(backends.CliBackend):
+            def command(self, job):
+                return [sys.executable, str(d / "cli.py")], job.prompt
+
+            def handle(self, ev, job, st):
+                st.setdefault("seen", []).append(ev)
+                if ev.get("unexpected"):
+                    raise KeyError("a shape the handler did not expect")
+
+        return Fake("fake"), d
+
+    def test_a_cli_whose_output_breaks_the_handler_is_ended(self):
+        """A line the handler does not expect raises: the CLI must not go on writing the
+        files after its turn has ended."""
+        backend, d = self.cli("import json, time, sys\n"
+                              "print(json.dumps({'unexpected': True}), flush=True)\n"
+                              "time.sleep(30)\n"
+                              "open('late.txt', 'w').write('written after the turn')\n")
+        job = job_for(root=d, prompt="go")
+        with self.assertRaises(KeyError):
+            backend.run(job)
+        self.assertIsNotNone(job.proc.poll(), "the CLI is ended")
+
+    def test_stop_before_the_cli_starts_starts_none(self):
+        backend, d = self.cli("open('started.txt', 'w').write('x')\n")
+        job = job_for(root=d, prompt="go")
+        backend.stop(job)                       # pressed while the turn was being set up
+        self.assertEqual(backend.run(job), {})
+        self.assertIsNone(job.proc)
+        self.assertFalse((d / "started.txt").exists())
+
+    def test_a_cli_that_exits_at_once_says_why(self):
+        """The CLI exits before reading its input (a bad flag, no login): writing the prompt
+        to it fails, and what it printed on stderr is what the author needs."""
+        backend, d = self.cli("import sys\nsys.stderr.write('error: not logged in\\n')\nsys.exit(3)\n")
+        job = job_for(root=d, prompt="x" * 2_000_000)
+        st = backend.run(job)
+        self.assertEqual(st["exit"], 3)
+        self.assertIn("not logged in", st["stderr"])
+
     def test_undo_while_git_holds_the_files_says_busy(self):
         """git holding the files long (a repository's slow hook): Undo says so after a moment,
         changes nothing, and works when tried again."""

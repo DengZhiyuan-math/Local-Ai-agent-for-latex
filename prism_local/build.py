@@ -38,6 +38,7 @@ from proc import TREE, kill_tree
 
 MAX_PASSES = 5            # engine runs per build (at most 3 while the document has errors)
 TIMEOUT = 600.0           # seconds for one whole build
+KILL_GRACE = 10.0         # seconds a stopped build waits for programs it started to let go of its output
 
 ENGINES = {"pdflatex": "pdflatex", "pdftex": "pdflatex", "latex": "pdflatex",
            "pdflatex-dev": "pdflatex", "xelatex": "xelatex", "xetex": "xelatex",
@@ -83,6 +84,33 @@ def strip_comments(text: str) -> str:
 
 def is_document(text: str) -> bool:
     return re.search(r"\\documentclass\b", strip_comments(text)) is not None
+
+
+def guess_main(root: Path) -> str | None:
+    """The project's document when prism.json names none: main.tex, else the first .tex at
+    the top with a \\documentclass (not one commented out). Files that cannot be read (a
+    broken link, a cloud placeholder offline, a folder named x.tex) are passed over. The
+    editor and the Home page both ask here, so both name the same document."""
+    if (root / "main.tex").is_file():
+        return "main.tex"
+    for p in sorted(root.glob("*.tex")):
+        if p.name.startswith("._"):
+            continue
+        try:
+            with open(p, encoding="utf-8", errors="replace") as f:
+                if is_document(f.read(5000)):
+                    return p.name
+        except OSError:
+            pass
+    return None
+
+
+def output_folder(value) -> tuple[str, str | None]:
+    """prism.json's "outdir" as a folder inside the project, and why it was not usable."""
+    outdir = str(value or "build").replace("\\", "/").strip("/") or "build"
+    if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
+        return "build", "outdir must be a folder inside the project; build is used."
+    return outdir, None
 
 
 def _loaded(tex: str) -> set[str]:
@@ -288,12 +316,7 @@ class Runner:
                                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                                 **TREE)
         try:
-            out, _ = proc.communicate(timeout=max(1.0, self.deadline - time.monotonic()))
-        except subprocess.TimeoutExpired:
-            self.timed_out = True
-            self.stopped.set()
-            kill_tree(proc)
-            out, _ = proc.communicate()
+            out = self._wait(proc)
         finally:
             with self.lock:
                 self.proc = None
@@ -301,15 +324,34 @@ class Runner:
             raise Stopped()
         return proc.returncode, out.decode("utf-8", "replace")
 
+    def _wait(self, proc: subprocess.Popen) -> bytes:
+        """The program's output, once it ends. At the time limit its whole tree is killed. A
+        program it started that outlives it (re-parented, so taskkill /T misses it) keeps
+        the output pipe open: once stopped, it is waited for KILL_GRACE seconds at most,
+        and its output given up, or the build (and BUILD_LOCK) would never end."""
+        given_up_at = None
+        while True:
+            try:
+                return proc.communicate(timeout=0.5)[0]
+            except subprocess.TimeoutExpired:
+                pass
+            now = time.monotonic()
+            if not self.stopped.is_set() and now >= self.deadline:
+                self.timed_out = True
+                self.stopped.set()
+                kill_tree(proc)
+            if self.stopped.is_set():
+                given_up_at = given_up_at or now + KILL_GRACE
+                if now >= given_up_at:
+                    kill_tree(proc)
+                    return b""
+
     def stop(self) -> None:
         with self.lock:
             self.stopped.set()
             proc = self.proc
         if proc is not None:
-            try:
-                kill_tree(proc)
-            except (OSError, subprocess.SubprocessError):
-                proc.kill()           # taskkill itself failed: at least the program goes
+            kill_tree(proc)
 
 
 # ---------------------------------------------------------------- the output folder

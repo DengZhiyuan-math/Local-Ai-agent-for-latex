@@ -71,6 +71,35 @@ def read_json(path: Path) -> dict | None:
         return None
 
 
+class StateUnreadable(ValueError):
+    """A state file is there but cannot be read: damaged, or held by another program."""
+
+
+def read_state(path: Path, tries: int = 10) -> dict:
+    """A state file prism-local keeps (projects.json, settings.json): {} when there is none
+    yet. One that is there but cannot be read raises StateUnreadable, after about a second of
+    trying while another program (an antivirus, a backup) holds it: taken for an empty one,
+    it would be written back empty, and the project list or the settings lost."""
+    for attempt in range(tries):
+        try:
+            text = path.read_text(encoding="utf-8")
+            break
+        except FileNotFoundError:
+            return {}
+        except OSError as e:
+            if attempt == tries - 1:
+                raise StateUnreadable(f"{path} cannot be read ({e}); nothing was changed") from e
+            time.sleep(0.1)
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        data = e
+    if not isinstance(data, dict):
+        raise StateUnreadable(f"{path} is damaged; nothing was changed. Fix it, or rename it "
+                              "to start afresh.")
+    return data
+
+
 def write_json(path: Path, data) -> None:
     replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"))
 
@@ -116,16 +145,21 @@ class FileLock:
 def ping(url: str, app: str = "prism-local", root: Path | None = None,
          timeout: float = 2.0) -> dict | None:
     """The /api/ping answer of the server at `url`, if it is `app` (serving `root`)."""
+    return _probe(url, app, root, timeout)[0]
+
+
+def _probe(url: str, app: str, root: Path | None, timeout: float) -> tuple[dict | None, bool]:
+    """ping(), and whether nothing listens at `url` at all (the connection refused)."""
     try:
         with HTTP.open(url + "api/ping", timeout=timeout) as r:
             info = json.loads(r.read().decode("utf-8"))
-    except (OSError, ValueError):
-        return None
-    if info.get("app") != app:
-        return None
+    except (OSError, ValueError) as e:
+        return None, isinstance(getattr(e, "reason", e), ConnectionRefusedError)
+    if not isinstance(info, dict) or info.get("app") != app:
+        return None, False
     if root is not None and norm(info.get("root", "")) != norm(root):
-        return None
-    return info
+        return None, False
+    return info, False
 
 
 def _kernel32():
@@ -223,13 +257,19 @@ def server_alive(pid, started: int | None = None) -> bool:
 def running_instance(inst: Path, app: str = "prism-local", root: Path | None = None,
                      timeout: float = 2.0, cleanup: bool = True) -> dict | None:
     """The instance file's contents if that server answers. A file whose server has
-    ended (it did not exit cleanly) is removed; a server that is only slow keeps it."""
+    ended (it did not exit cleanly) is removed; a server that is only slow keeps it.
+    Ended: nothing listens at its address (a server writes its file once it listens, and
+    removes it before it stops), or its process is gone. The address tells on every
+    system: where the process table cannot say when a process started (macOS), a new
+    process given the ended server's pid would otherwise pass for it."""
     info = read_json(inst)
+    refused = False
     if info and info.get("url"):
-        live = ping(info["url"], app, root, timeout)
+        live, refused = _probe(info["url"], app, root, timeout)
         if live:
             return {**info, "pages": live.get("pages", 0)}
-    if cleanup and inst.exists() and not server_alive((info or {}).get("pid"), (info or {}).get("started")):
+    if cleanup and inst.exists() and (refused or not server_alive((info or {}).get("pid"),
+                                                                   (info or {}).get("started"))):
         try:
             inst.unlink()
         except OSError:
@@ -244,7 +284,8 @@ def _registry_path() -> Path:
 
 
 def load_projects() -> dict:
-    data = read_json(_registry_path()) or {}
+    """The project list. Raises StateUnreadable rather than taking a damaged one for empty."""
+    data = read_state(_registry_path())
     data.setdefault("projects", [])
     return data
 
@@ -398,7 +439,6 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
     file and stops by itself shortly after its last page is closed (or after a minute
     if no page ever connects). The lock keeps two quick clicks, or the launcher and
     the Home page, from starting two servers for the same project."""
-    import subprocess
     if project is None:
         key, app, script, target, cwd = HOME_KEY, "prism-home", HUB, [], Path.home()
         port, tries = port or HOME_PORT, HOME_PORT_TRIES
@@ -407,6 +447,15 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
         key, app, script, target, cwd = project_key(project), "prism-local", SERVER, [str(project)], project
         port, tries = port or preferred_port(project), PORT_TRIES
     inst, log = instance_file(key), log_file(key)
+    try:
+        return _ensure(inst, log, app, project, script, target, cwd, port, tries, extra, timeout)
+    except TimeoutError:                # its server restarts, and holds the lock meanwhile
+        return {"error": "prism-local for this project is restarting. Try again in a moment.",
+                "log": tail(log), "logfile": str(log)}
+
+
+def _ensure(inst, log, app, project, script, target, cwd, port, tries, extra, timeout) -> dict:
+    import subprocess
     with FileLock(inst.with_suffix(".lock")):
         info = running_instance(inst, app, project)
         if info:

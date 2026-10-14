@@ -93,10 +93,54 @@ class GitSyncTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 lock.release()
         got = []
-        t = threading.Thread(target=lambda: got.append(lock.acquire(timeout=2)))
+
+        def other_thread():
+            got.append(lock.acquire(timeout=2))
+            if got[-1]:
+                lock.release()
+
+        t = threading.Thread(target=other_thread)
         t.start()
         t.join()
         self.assertEqual(got, [True], "another thread gets it")
+
+    def test_a_fetch_cut_off_by_its_timeout_leaves_others_index_lock(self):
+        """A fetch or a read takes no index.lock: when one is cut off by its timeout, an
+        index.lock there belongs to someone else's commit (a terminal, another editor)."""
+        lock = self.root / ".git" / "index.lock"
+
+        def slow(cwd, *args, **kw):
+            lock.write_bytes(b"")              # someone else's commit, meanwhile
+            raise subprocess.TimeoutExpired(["git", *args], kw.get("timeout", 60))
+
+        self.g.check_repo()
+        try:
+            for args in (("fetch", "-q", "origin"), ("status", "--porcelain"), ("log", "-1")):
+                with mock.patch.object(gitsync.gitenv, "git", slow):
+                    with self.assertRaises(subprocess.TimeoutExpired):
+                        self.g.git(*args)
+                self.assertTrue(lock.exists(), f"git {args[0]} left it alone")
+        finally:
+            lock.unlink()
+
+    def test_a_failing_start_does_not_end_autosave(self):
+        """The editor's start calls off a merge left half-way; that git cut off by its timeout,
+        or any bug at the start, must not end the worker (no autosave for the session)."""
+        ticks = []
+
+        def tick():
+            ticks.append(1)
+            self.g.stop.set()
+
+        with mock.patch.object(gitsync, "TICK", 0.01), \
+                mock.patch.object(self.g, "_finish_crashed_merge",
+                                  side_effect=subprocess.TimeoutExpired(["git", "merge"], 60)), \
+                mock.patch.object(self.g, "_remote_state", side_effect=KeyError("a bug")), \
+                mock.patch.object(self.g, "tick", tick):
+            t = threading.Thread(target=self.g.run)
+            t.start()
+            t.join(20)
+        self.assertEqual(ticks, [1], "the worker went on")
 
     def test_nothing_to_commit_does_not_wait_for_the_index(self):
         """Another program's git (an IDE's) holds index.lock for a moment: with nothing to
