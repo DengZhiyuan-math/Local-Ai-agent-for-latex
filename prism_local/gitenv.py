@@ -1,7 +1,8 @@
 """Running git: the one way prism-local starts it.
 
 Repository discovery stays local to the cwd (no GIT_DIR and the like from the
-environment), git never asks on a terminal or waits for input, never holds an optional
+environment), git never asks on a terminal or waits for input, never opens a login
+window unless you started it with a button (see NO_PROMPTS), never holds an optional
 lock such as .git/index.lock (the editor asks every two seconds, and a git command of
 yours must never find it taken), never opens a console window, always ends within its
 timeout, and its output is UTF-8 whatever the system's code page (paths like 练习/).
@@ -33,13 +34,23 @@ def git_env(base: dict | None = None) -> dict:
     return env
 
 
+# Git run in the background (the sync every few seconds, the Home page's fetch) must not
+# open a login window nobody asked for. Git Credential Manager still hands over the
+# credentials it has saved, but asks for none, and no askpass program runs, git's (an
+# empty GIT_ASKPASS also hides core.askPass and SSH_ASKPASS from git) or ssh's. A missing
+# login is then an error the page shows.
+NO_PROMPTS = {"GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS_REQUIRE": "never"}
+
+
 def git(cwd: str | Path, *args: str, timeout: float = 60, binary: bool = False,
-        check: bool = False) -> subprocess.CompletedProcess:
+        check: bool = False, interactive: bool = False) -> subprocess.CompletedProcess:
     """`git args` in `cwd`. Output is str (UTF-8, undecodable bytes replaced), or bytes with
     binary=True. Raises subprocess.TimeoutExpired after `timeout` seconds, OSError when git
     cannot start, and subprocess.CalledProcessError on failure with check=True; otherwise
-    the caller reads returncode."""
+    the caller reads returncode. Only with interactive=True (you pressed a button) may a
+    credential helper ask you to log in."""
     text = {} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}
+    env = git_env() if interactive else {**git_env(), **NO_PROMPTS}
     return subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True,
-                          stdin=subprocess.DEVNULL, timeout=timeout, check=check, env=git_env(),
+                          stdin=subprocess.DEVNULL, timeout=timeout, check=check, env=env,
                           **text, **NO_WINDOW)

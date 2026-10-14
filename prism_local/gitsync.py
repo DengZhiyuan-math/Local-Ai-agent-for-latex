@@ -310,9 +310,10 @@ class GitSync:
         self.stop = threading.Event()
 
     # ------------------------------------------------------------ git
-    def git(self, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-        """git at the repository's top: paths are relative to it (see rel())."""
-        r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout)
+    def git(self, *args: str, timeout: float = 60, interactive: bool = False) -> subprocess.CompletedProcess:
+        """git at the repository's top: paths are relative to it (see rel()). Only a fetch
+        or push you started (manual) may ask you to log in (gitenv.NO_PROMPTS)."""
+        r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout, interactive=interactive)
         if args[0] in ("push", "fetch"):
             print(json.dumps({"event": "git_sync", "git_top": str(self.top),
                               "target": public_target(self.target), "stage": args[0],
@@ -574,7 +575,8 @@ class GitSync:
         t = self.target
         self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
         return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
-                        t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120)
+                        t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
+                        interactive=manual)
 
     def _remote_state(self) -> None:
         self.has_remote = bool(self.git("remote", timeout=20).stdout.strip())
@@ -607,7 +609,7 @@ class GitSync:
                         return
                     args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
                             self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
-                    r = self.git(*args, timeout=180)
+                    r = self.git(*args, timeout=180, interactive=manual)
                     if r.returncode == 0:
                         self.last_push, self.error = time.time(), None
                         self._remote_state()

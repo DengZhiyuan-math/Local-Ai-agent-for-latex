@@ -7,6 +7,7 @@ import time
 from unittest import mock
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -124,6 +125,27 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "from the other computer\n")
         self.assertEqual(self.g.behind, 0)
         self.assertIn("Pulled 1 commit", self.g.notice)
+
+    def test_only_a_button_may_ask_for_a_login(self):
+        seen, real = [], gitsync.gitenv.git
+
+        def spy(cwd, *args, interactive=False, **kw):
+            if args[0] in ("fetch", "push"):
+                seen.append((args[0], interactive))
+            return real(cwd, *args, interactive=interactive, **kw)
+
+        with mock.patch.object(gitsync.gitenv, "git", spy):
+            (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+            self.g.commit_all("Autosave")
+            self.g.push()                           # what the worker does
+            self.g.pull()
+            background, seen[:] = list(seen), []
+            (self.root / "main.tex").write_text("three\n", encoding="utf-8")
+            self.g.now("push")                      # the buttons
+            self.g.now("pull")
+        self.assertEqual(background, [("push", False), ("fetch", False)])
+        self.assertEqual(seen, [("push", True), ("fetch", True)])
+        self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
     def test_opening_the_project_pulls_at_once(self):
         other = tmpdir()
