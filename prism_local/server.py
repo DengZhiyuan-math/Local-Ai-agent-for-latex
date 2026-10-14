@@ -425,20 +425,9 @@ def scan(rel: str, kind: str = "tex"):
 def document_order(files: list[str] | None = None) -> list[str]:
     """Project .tex files in the order the main file \\input's them (depth first).
     `files`: list_files(), when the caller has it already."""
-    order: dict[str, None] = {}
-
-    def visit(rel: str) -> None:
-        if rel in order:
-            return
-        order[rel] = None
-        for name in (scan(rel) or {"inputs": []})["inputs"]:
-            child = resolve_tex_name(name)
-            if child:
-                visit(child)
-
-    visit(CFG.main)
+    order = input_chain(CFG.main)
     rest = [f for f in (list_files() if files is None else files) if f.endswith(".tex") and f not in order]
-    return list(order) + rest
+    return order + rest
 
 
 def theorem_envs(files: list[str]) -> dict[str, str]:
@@ -661,23 +650,18 @@ def stale_document() -> str | None:
 
 def input_chain(main: str) -> list[str]:
     """`main` and the files it \\input's or \\include's, depth first."""
-    order: list[str] = []
+    order: dict[str, None] = {}
 
     def visit(rel: str) -> None:
         if rel in order:
             return
-        order.append(rel)
-        try:
-            text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return
-        for line in text.splitlines():
-            for m in INPUT_RE.finditer(strip_comment(line)):
-                child = resolve_tex_name(m.group(1).strip())
-                if child:
-                    visit(child)
+        order[rel] = None
+        for name in (scan(rel) or {"inputs": []})["inputs"]:
+            child = resolve_tex_name(name)
+            if child:
+                visit(child)
     visit(main)
-    return order
+    return list(order)
 
 
 def document_of(rel: str, cfg: Config) -> str:
