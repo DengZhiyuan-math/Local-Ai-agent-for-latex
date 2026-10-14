@@ -757,6 +757,7 @@ class OpenAICompatible(unittest.TestCase):
     def run_turn(self, script, prompt="fix the typo", scope=None, mode="edit", session=None,
                  backend=None):
         api = FakeAPI(script)
+        self.addCleanup(api.server_close)
         self.addCleanup(api.shutdown)
         be = backend or OpenAICompat("ds", {"base_url": f"http://127.0.0.1:{api.server_port}",
                                             "api_key_env": "PRISM_TEST_KEY",

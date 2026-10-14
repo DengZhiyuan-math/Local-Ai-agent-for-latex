@@ -445,7 +445,7 @@ class FolderSync(TempState):
         hub.git_init(root)
         (root / "huge.bin").write_bytes(b"x" * 4096)
         repo = hub.Repository.find(root)
-        with mock.patch.object(hub.gitsync, "MAX_FILE", 1024), repo.changing():
+        with mock.patch.object(hub.sources, "MAX_FILE", 1024), repo.changing():
             repo.ok("add", "-A")
             self.assertEqual(hub._unstage_big(repo), ["huge.bin"])
         self.assertNotIn("huge.bin", self.git(root, "diff", "--cached", "--name-only"))

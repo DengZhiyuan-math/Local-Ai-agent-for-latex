@@ -19,7 +19,6 @@ import gitenv
 import argparse
 import fnmatch
 import gzip
-import json
 import os
 import re
 import subprocess
@@ -33,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
+from projectconfig import Config  # noqa: E402
 from repository import FilesLock  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
@@ -45,6 +45,7 @@ import httpbase  # noqa: E402
 import hub  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
+import sources  # noqa: E402
 
 MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
@@ -56,75 +57,6 @@ UPLOAD_WAIT = 10        # seconds an upload waits for git before it is refused (
 
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
-
-
-class Config:
-    """Project settings: defaults, overridden by PROJECT_DIR/prism.json. A prism.json
-    that cannot be used is reported (`error`) and the defaults apply instead."""
-
-    def __init__(self, root: Path, *, main: str | None = None):
-        self.root = root.resolve()
-        problems: list[str] = []
-        cfg = self.root / "prism.json"
-        self.stamp = cfg.stat().st_mtime_ns if cfg.is_file() else None
-        data: dict = {}
-        if self.stamp is not None:
-            try:
-                data = json.loads(cfg.read_text(encoding="utf-8"))
-                if not isinstance(data, dict):
-                    raise ValueError("it must hold a JSON object")
-            except (OSError, ValueError) as e:
-                data = {}
-                problems.append(f"prism.json cannot be used ({e}); the defaults apply.")
-        self.project_main = str(data.get("main") or build.guess_main(self.root) or "main.tex")
-        self.main = main or self.project_main
-        self.outdir, problem = build.output_folder(data.get("outdir"))
-        if problem:
-            problems.append(problem)
-        lists = {k: data.get(k) for k in ("files", "exclude")}
-        for k, v in lists.items():
-            if v is not None and not (isinstance(v, list) and all(isinstance(g, str) for g in v)):
-                problems.append(f"{k} must be a list of patterns; it is ignored.")
-                lists[k] = None
-        self.files = lists["files"]                    # optional list of globs
-        self.exclude = lists["exclude"] or []
-        self.builder = str(data.get("builder") or "auto")       # auto (built-in), latexmk, tectonic
-        self.engine = data.get("engine") or None                 # pdflatex, xelatex, lualatex
-        if self.engine is not None and str(self.engine).lower() not in build.ENGINES:
-            problems.append(f"unknown engine {self.engine!r} (use pdflatex, xelatex or "
-                            "lualatex); it is chosen from the document instead.")
-            self.engine = None
-        self.shell_escape = data.get("shell_escape") is True
-        # Commands of your own per mode: an argv list, or a shell string (see build.py).
-        cmds = data.get("build") or {}
-        if not isinstance(cmds, dict):
-            problems.append("build must map modes to commands; it is ignored.")
-            cmds = {}
-        self.custom = {k: v for k, v in cmds.items() if isinstance(v, (str, list)) and v}
-        self.modes = [m for m in ("draft", "strict", "check") if m != "check" or m in self.custom]
-        self.error = " ".join(p if p.startswith("prism.json") else "prism.json: " + p
-                              for p in problems) or None
-        stem = Path(self.main).stem
-        out = self.root / self.outdir
-        self.pdf = out / f"{stem}.pdf"
-        self.log = out / f"{stem}.log"
-        self.synctex = out / f"{stem}.synctex.gz"
-
-    def expand(self, cmd: list[str] | str) -> list[str] | str:
-        sub = lambda a: str(a).replace("{main}", self.main).replace("{outdir}", self.outdir)  # noqa: E731
-        return sub(cmd) if isinstance(cmd, str) else [sub(a) for a in cmd]
-
-    def describe(self, mode: str) -> str:
-        """What a build in `mode` runs, for the Compile menu."""
-        cmd = self.custom.get(mode)
-        if cmd:
-            return cmd if isinstance(cmd, str) else " ".join(self.expand(cmd))
-        how = "stops at the first error" if mode == "strict" else "continues after errors"
-        engine = self.engine or "chosen from the document"
-        if self.builder in ("latexmk", "tectonic"):
-            return f"{self.builder}; engine {engine}; {how}"
-        return (f"built-in: engine {engine}, then bibtex/biber and makeindex as needed, "
-                f"rerun until stable; {how}")
 
 
 # The project's settings, with the document shown now (CFG.main: its PDF is the one in the
@@ -284,22 +216,13 @@ def git_prefix() -> str:
 def git_status() -> dict[str, str]:
     """{project-relative path: status} of the files git reports as changed."""
     try:
-        out = git("status", "--porcelain", "-z", "-uall", "--", ".").stdout
+        # --no-optional-locks: a look, which never holds the index from a commit meanwhile.
+        out = git("--no-optional-locks", "status", "--porcelain", "-z", "-uall", "--", ".").stdout
     except (OSError, subprocess.SubprocessError):
         return {}
-    # -z: unquoted paths (any characters), relative to the repository's top, "XY path";
-    # a rename or copy is followed by its old path.
-    prefix, st, entries, i = git_prefix(), {}, out.split("\0"), 0
-    while i < len(entries):
-        e = entries[i]
-        i += 1
-        if len(e) < 4:
-            continue
-        if "R" in e[:2] or "C" in e[:2]:
-            i += 1
-        if e[3:].startswith(prefix):
-            st[e[3:][len(prefix):]] = e[:2].strip() or "M"
-    return st
+    prefix = git_prefix()
+    return {path[len(prefix):]: xy.strip() or "M" for xy, path in sources.parse_status(out)
+            if path.startswith(prefix)}
 
 
 def project_diff(spec: str) -> dict:

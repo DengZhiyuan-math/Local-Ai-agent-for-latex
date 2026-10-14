@@ -33,7 +33,7 @@ import threading
 import time
 from pathlib import Path
 
-from fsutil import SKIP_DIRS
+from fsutil import SKIP_DIRS, TEMP_SUFFIX
 from proc import TREE, kill_tree
 
 MAX_PASSES = 5            # engine runs per build (at most 3 while the document has errors)
@@ -84,33 +84,6 @@ def strip_comments(text: str) -> str:
 
 def is_document(text: str) -> bool:
     return re.search(r"\\documentclass\b", strip_comments(text)) is not None
-
-
-def guess_main(root: Path) -> str | None:
-    """The project's document when prism.json names none: main.tex, else the first .tex at
-    the top with a \\documentclass (not one commented out). Files that cannot be read (a
-    broken link, a cloud placeholder offline, a folder named x.tex) are passed over. The
-    editor and the Home page both ask here, so both name the same document."""
-    if (root / "main.tex").is_file():
-        return "main.tex"
-    for p in sorted(root.glob("*.tex")):
-        if p.name.startswith("._"):
-            continue
-        try:
-            with open(p, encoding="utf-8", errors="replace") as f:
-                if is_document(f.read(5000)):
-                    return p.name
-        except OSError:
-            pass
-    return None
-
-
-def output_folder(value) -> tuple[str, str | None]:
-    """prism.json's "outdir" as a folder inside the project, and why it was not usable."""
-    outdir = str(value or "build").replace("\\", "/").strip("/") or "build"
-    if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
-        return "build", "outdir must be a folder inside the project; build is used."
-    return outdir, None
 
 
 def _loaded(tex: str) -> set[str]:
@@ -360,7 +333,7 @@ class Runner:
 # every file counts except these; in the project folder itself only the FEEDBACK ones.
 NOT_FEEDBACK = {".log", ".pdf", ".gz", ".synctex", ".fls", ".fdb_latexmk", ".blg", ".ilg",
                 ".glg", ".alg", ".nlg", ".xdv", ".dvi", ".bcf", ".xml", ".idx", ".glo", ".acn",
-                ".nlo", ".json", ".png", ".jpg", ".jpeg", ".eps", ".tmp", ".prism-tmp"}
+                ".nlo", ".json", ".png", ".jpg", ".jpeg", ".eps", ".tmp", TEMP_SUFFIX}
 FEEDBACK = {".aux", ".toc", ".lof", ".lot", ".loa", ".lol", ".out", ".bbl", ".ind", ".gls",
             ".acr", ".nls", ".nav", ".snm", ".vrb", ".thm", ".brf", ".ent", ".tdo", ".loe",
             ".cpt", ".xref", ".mw"}

@@ -256,6 +256,7 @@ class DeepCodeContract(unittest.TestCase):
 class VisualAttachments(unittest.TestCase):
     def test_api_receives_image_content_and_unsupported_inputs_are_rejected(self):
         api = FakeAPI([[{"choices": [{"delta": {"content": "image received"}}]}]])
+        self.addCleanup(api.server_close)
         self.addCleanup(api.shutdown)
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

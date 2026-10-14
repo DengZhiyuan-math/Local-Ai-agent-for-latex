@@ -47,34 +47,7 @@ class Imports(unittest.TestCase):
 
 
 class Config(unittest.TestCase):
-    def test_a_bad_prism_json_is_reported_and_the_defaults_apply(self):
-        project({"main.tex": "", "prism.json": '{"engine": "xetex2", "outdir": "../x", '
-                                               '"build": ["pdflatex", "{main}"]}'})
-        self.assertIsNone(server.CFG.engine)
-        self.assertEqual(server.CFG.outdir, "build")
-        for part in ("outdir", "unknown engine 'xetex2'", "build must map"):
-            self.assertIn(part, server.CFG.error, "every problem is reported")
-        project({"main.tex": "", "prism.json": "{not json"})
-        self.assertIn("cannot be used", server.CFG.error)
-        self.assertEqual((server.CFG.main, server.CFG.modes), ("main.tex", ["draft", "strict"]))
-
-    def test_the_main_file_when_it_is_not_main_tex(self):
-        # The editor opens CFG.main (via /api/config) on a first visit.
-        project({"proof.tex": "\\documentclass{article}", "notes.tex": "no class here"})
-        self.assertEqual(server.CFG.main, "proof.tex", "guessed from \\documentclass")
-        project({"a.tex": "\\documentclass{article}", "paper.tex": "\\documentclass{article}",
-                 "prism.json": '{"main": "paper.tex"}'})
-        self.assertEqual(server.CFG.main, "paper.tex", "prism.json wins over the guess")
-        project({"main.tex": "\\documentclass{article}", "a.tex": "\\documentclass{article}"})
-        self.assertEqual(server.CFG.main, "main.tex")
-
-    def test_a_tex_that_cannot_be_read_is_passed_over(self):
-        """A .tex at the top that cannot be read (here a folder so named; also a broken link,
-        a cloud placeholder offline) must not keep the editor from starting."""
-        root = project({"a.tex/keep": "", "b.tex": "\\documentclass{article}"})
-        self.assertTrue((root / "a.tex").is_dir())
-        server.set_root(root)
-        self.assertEqual(server.CFG.main, "b.tex")
+    """The editor's use of the project's settings (projectconfig.py; tested there)."""
 
     def test_the_home_page_names_the_same_document_and_folder(self):
         """The Home page's card (title, thumbnail) and the editor read prism.json and guess

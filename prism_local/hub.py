@@ -34,8 +34,9 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import build  # noqa: E402
 import gitsync  # noqa: E402
+import sources  # noqa: E402
+from projectconfig import Config  # noqa: E402
 from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
@@ -56,14 +57,6 @@ BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 # ---------------------------------------------------------------- project facts
-
-def read_prism_json(root: Path) -> dict:
-    try:
-        data = json.loads((root / "prism.json").read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
 
 def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
     """How many editable source files the project has, and the newest mtime."""
@@ -87,12 +80,9 @@ def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
 
 
 def pdf_path(root: Path) -> tuple[Path | None, str | None, str]:
-    cfg = read_prism_json(root)
-    main = cfg.get("main") or build.guess_main(root)     # as the editor reads it
-    outdir = build.output_folder(cfg.get("outdir"))[0]
-    if not main:
-        return None, None, outdir
-    return root / outdir / f"{Path(main).stem}.pdf", main, outdir
+    """The project's PDF, its document and its output folder, as the editor names them."""
+    cfg = Config(root)
+    return (cfg.pdf if cfg.named_main else None), cfg.named_main, cfg.outdir
 
 
 def project_info(entry: dict) -> dict:
@@ -388,8 +378,6 @@ def remove_folder(fid: str) -> dict:
 
 SPLIT_BACKUP = ".git-prism-separate"    # a project's own .git, after it joined a shared repository
 SHARED_BACKUP = ".git-prism-shared"     # a shared repository's .git, after its projects split up
-SHARED_IGNORE = ["build/", ".git-prism-*/", "*.prism-tmp", ".DS_Store",
-                 *(f"*{ext}" for ext in gitsync.AUX)]
 
 
 def disk_name(name: str) -> str:
@@ -555,7 +543,7 @@ def _repoint(pid: str, new: Path) -> None:
 def _ensure_ignore(top: Path) -> None:
     gi = top / ".gitignore"
     have = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
-    add = [x for x in SHARED_IGNORE if x not in have]
+    add = [x for x in sources.gitignore(shared=True) if x not in have]
     if add:
         text = "\n".join(have + add) + "\n"
         write_bytes(gi, text.lstrip("\n").encode("utf-8"))
@@ -911,7 +899,8 @@ def git_init(root: Path) -> None:
     same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
     gi = root / ".gitignore"
     if not gi.exists():
-        write_bytes(gi, GITIGNORE.encode("utf-8"))
+        lines = sources.gitignore(Config(root).outdir)
+        write_bytes(gi, ("\n".join(lines) + "\n").encode("utf-8"))
     ga = root / ".gitattributes"
     if not ga.exists():
         write_bytes(ga, GITATTRIBUTES.encode("utf-8"))
@@ -1010,10 +999,10 @@ def protect_branch(gh: str, url: str, root: Path) -> str:
 
 
 def _unstage_big(repo: Repository) -> list[str]:
-    """Files GitHub would refuse (gitsync.MAX_FILE and over) stay out of the commit. In
+    """Files GitHub would refuse (sources.MAX_FILE and over) stay out of the commit. In
     repo.changing()."""
     staged = repo.ok("diff", "--cached", "--name-only", "-z").split("\0")
-    big = [x for x in staged if x and (repo.top / x).is_file() and (repo.top / x).stat().st_size > gitsync.MAX_FILE]
+    big = [x for x in staged if x and (repo.top / x).is_file() and (repo.top / x).stat().st_size > sources.MAX_FILE]
     if big:
         repo.ok("rm", "-q", "--cached", "--", *big)
     return big
@@ -1147,7 +1136,6 @@ TEMPLATES = {
         "main.tex": "\\documentclass{article}\n\\begin{document}\n\n\\end{document}\n",
     },
 }
-GITIGNORE = "build/\n*.prism-tmp\n.DS_Store\n"
 
 
 def create_project(body: dict) -> dict:

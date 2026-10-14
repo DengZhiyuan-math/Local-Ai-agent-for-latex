@@ -53,6 +53,8 @@ class GitSyncTest(unittest.TestCase):
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
         (self.root / "fig.png").write_bytes(b"\x89PNG")
         (self.root / "main.aux").write_text("aux", encoding="utf-8")
+        (self.root / "main.gls").write_text("glossary", encoding="utf-8")      # glossaries, nomencl
+        (self.root / "main.nlo").write_text("nomenclature", encoding="utf-8")
         (self.root / "build").mkdir()
         (self.root / "build" / "main.pdf").write_bytes(b"%PDF")
         self.g.touched()

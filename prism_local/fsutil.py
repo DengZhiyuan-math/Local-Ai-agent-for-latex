@@ -10,6 +10,7 @@ from pathlib import Path
 
 EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".txt", ".tikz"}
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
+TEMP_SUFFIX = ".prism-tmp"      # a save half-way (replace_file): never a project's file
 
 
 def project_path(root: Path, rel: str) -> Path:
@@ -50,7 +51,7 @@ def replace_file(path: Path, data: bytes, tries: int = 40) -> None:
     process has the file open (a server reading it, a TeX engine during a build), so it is
     tried every 0.05 seconds, `tries` times in all, before PermissionError is raised."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}.prism-tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}{TEMP_SUFFIX}")
     try:
         tmp.write_bytes(data)
         try:

@@ -37,6 +37,7 @@ from urllib.parse import urlsplit, urlunsplit
 import keepboth
 import registry
 import gitenv
+import sources
 from fsutil import write_bytes
 from repository import FilesLock, RepoBusy, Repository
 
@@ -47,14 +48,7 @@ QUIET = 20               # automatic pulls wait this long after your last save (
 PUSH_TRIES = 5           # pushes in a row while co-authors keep pushing in between
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
-MAX_FILE = 50 * 1024 * 1024    # GitHub refuses files over 100 MB; keep well below
 SHARED_MARKER = "prism-repo.json"
-# Files LaTeX writes next to the sources when they are not in the build folder.
-AUX = (".aux", ".log", ".out", ".toc", ".lof", ".lot", ".bbl", ".blg", ".bcf", ".run.xml",
-       ".fls", ".fdb_latexmk", ".synctex.gz", ".synctex", ".nav", ".snm", ".vrb", ".idx",
-       ".ilg", ".ind", ".xdv", ".dvi", ".thm", ".loe")
-# New files never recorded: those, and a save half-way (fsutil.replace_file's temporary file).
-NOT_SOURCES = AUX + (".prism-tmp",)
 
 
 def redact_url(url: str) -> str:
@@ -403,31 +397,9 @@ class GitSync:
     def changes(self) -> list[str]:
         """Paths (from the top) with changes worth recording: no build output, no huge files."""
         out = self._ok("status", "--porcelain", "-z", "-uall", "--", self._pathspec(), timeout=30)
-        outdir = self.prefix + self.outdir_fn().strip("/") + "/"
-        entries, paths, i = out.split("\0"), [], 0
-        while i < len(entries):
-            e = entries[i]
-            i += 1
-            if len(e) < 4:
-                continue
-            xy, path = e[:2], e[3:]
-            if "R" in xy or "C" in xy:            # a rename: the old path follows
-                old = entries[i] if i < len(entries) else ""
-                i += 1
-                if old:
-                    paths.append(old)
-            if path.startswith(outdir) or path.startswith(".git/"):
-                continue
-            if xy == "??" and path.lower().endswith(NOT_SOURCES):
-                continue
-            p = (self.top or self.root_fn()) / path
-            try:
-                if p.is_file() and p.stat().st_size > MAX_FILE:
-                    continue
-            except OSError:
-                continue
-            paths.append(path)
-        return sorted(set(paths))
+        top, outdir = self.top or self.root_fn(), self.prefix + self.outdir_fn().strip("/")
+        return sorted({path for xy, path in sources.parse_status(out)
+                       if sources.recordable(path, xy == "??", top, outdir)})
 
     def commit(self, paths: list[str], message: str) -> bool:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""
