@@ -318,10 +318,11 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
                             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                             env=env, **TREE, **popen)
     job.proc = proc
+    drain = threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True)
     try:
         if job.cancel.is_set():                  # Stop came while it started
             kill_tree(proc)
-        threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True).start()
+        drain.start()
         try:
             proc.stdin.write(stdin)
             proc.stdin.close()
@@ -331,6 +332,14 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     finally:
         if proc.poll() is None:
             kill_tree(proc)
+        drain.join(5)
+        # Its pipes go with it. Not stderr while its reader still waits on it (a command
+        # the CLI started may hold it open): closing it then would wait for that command.
+        for pipe in (proc.stdout, proc.stdin) + (() if drain.is_alive() else (proc.stderr,)):
+            try:
+                pipe.close()
+            except (OSError, ValueError):
+                pass
 
 
 # ---------------------------------------------------------------- registry

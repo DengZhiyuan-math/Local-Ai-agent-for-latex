@@ -21,6 +21,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitsync  # noqa: E402
+import repository  # noqa: E402
 from tmpdirs import tmpdir  # noqa: E402
 
 
@@ -232,7 +233,7 @@ class Collaboration(unittest.TestCase):
         da, ga = self.people["A"]
         lock = da / ".git" / "index.lock"
         lock.write_text("", encoding="utf-8")
-        old = time.time() - gitsync.STALE_LOCK - 5
+        old = time.time() - repository.STALE_LOCK - 5
         os.utime(lock, (old, old))
         self.write("A", "main.tex", PAPER.replace("First", "After a crash, first"))
         self.save("A")
@@ -813,7 +814,7 @@ class SharedFolderCollaboration(unittest.TestCase):
 
     def test_a_merge_holds_the_other_editors_saves(self):
         """Each project of a shared repository has its own editor, and one's merge changes the
-        whole repository: the other editor's saves wait for it too (gitsync.FilesLock, one
+        whole repository: the other editor's saves wait for it too (repository.FilesLock, one
         per repository, across processes)."""
         da, ga = self.clone("A", "练习/ex 1")
         db, gb = self.clone("B", "答案/ex 1 sol")

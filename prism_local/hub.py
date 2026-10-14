@@ -36,6 +36,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import build  # noqa: E402
 import gitsync  # noqa: E402
+from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -228,14 +229,15 @@ def fetch_one(top: Path) -> str | None:
     """git fetch; an error message, or None."""
     try:
         sync = project_sync(top)
-        sync.check_repo()
+        if not sync.check_repo():
+            return None
         # Not while an editor of it is at the repository (one that opened since the list
         # was made): it fetches by itself, and two fetches at once fail on the refs.
-        with sync.lock, gitsync.repo_lock(sync.git_dir, timeout=0):
+        with sync.lock, sync.repo.changing(files=False, wait=0):
             r = sync.fetch()
         if r is None:
             return sync.blocked_reason
-    except gitsync.RepoBusy:
+    except RepoBusy:
         return None
     except (OSError, subprocess.SubprocessError) as e:
         return str(e)
@@ -620,21 +622,21 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
             os.replace(dot, root / SPLIT_BACKUP)
             report.append(f"{root.name}: its history is kept in the shared repository; "
                           f"its own .git is now {SPLIT_BACKUP}")
-    run_git(top, "add", "-A", timeout=300)
-    staged = run_git(top, "diff", "--cached", "--name-only", "-z", timeout=60).stdout.split("\0")
-    big = [x for x in staged if x and (top / x).is_file() and (top / x).stat().st_size > gitsync.MAX_FILE]
-    if big:
-        run_git(top, "rm", "-q", "--cached", "--", *big)
-        report.append("Not committed, too large for GitHub: " + ", ".join(big))
-    tree = run_git(top, "write-tree").stdout.strip()
-    head = gitenv.git(top, "rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
-    old_tree = run_git(top, "rev-parse", "HEAD^{tree}").stdout.strip() if head else None
-    if imports or tree != old_tree:
-        parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
-        n = len(plan["projects"])
-        msg = f"{f['name']}: {n} project{'s' if n != 1 else ''} in one repository"
-        sha = run_git(top, "commit-tree", tree, *parents, "-m", msg).stdout.strip()
-        run_git(top, "update-ref", "HEAD", sha)
+    repo = Repository.find(top)
+    with repo.changing():
+        repo.ok("add", "-A", timeout=300)
+        big = _unstage_big(repo)
+        if big:
+            report.append("Not committed, too large for GitHub: " + ", ".join(big))
+        tree = repo.ok("write-tree").strip()
+        head = repo.git("rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
+        old_tree = repo.ok("rev-parse", "HEAD^{tree}").strip() if head else None
+        if imports or tree != old_tree:
+            parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
+            n = len(plan["projects"])
+            msg = f"{f['name']}: {n} project{'s' if n != 1 else ''} in one repository"
+            sha = repo.ok("commit-tree", tree, *parents, "-m", msg).strip()
+            repo.ok("update-ref", "HEAD", sha)
     _publish(top, bool(body.get("github")), str(body.get("github_owner") or ""),
              str(body.get("github_name") or "") or repo_name(top.name), report)
     f["sync"] = {"mode": "shared", "repo": str(top)}
@@ -733,7 +735,7 @@ def apply_sync(body: dict) -> dict:
     except subprocess.CalledProcessError as e:
         report.append(f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[-400:]}")
         return {"ok": False, "report": report}
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, RuntimeError) as e:           # RuntimeError: git, RepoBusy
         report.append(str(e))
         return {"ok": False, "report": report}
     finally:
@@ -931,7 +933,7 @@ GITATTRIBUTES = "* text=auto\n*.pdf binary\n*.png binary\n*.jpg binary\n*.jpeg b
 def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=None) -> dict:
     """Commit the project and push it to a new private GitHub repository. The commit holds
     the repository and `files_lock` (the editor's save lock, when the editor publishes; else
-    the repository's gitsync.FilesLock): no save lands in the middle of git add.
+    the repository's FilesLock): no save lands in the middle of git add.
 
     Returns {"url"} or {"error"}. The project itself is never removed on failure."""
     st = gh_status()
@@ -947,12 +949,14 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
         git_init(root)
         if run_git(root, "remote").stdout.strip():
             return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
-        git_dir = Path(run_git(root, "rev-parse", "--absolute-git-dir").stdout.strip())
-        with gitsync.repo_lock(git_dir), files_lock or gitsync.FilesLock(lambda: git_dir):
-            run_git(root, "add", "-A")
-            _unstage_big(root)
-            if run_git(root, "status", "--porcelain", "--untracked-files=no").stdout.strip():
-                run_git(root, "commit", "-q", "-m", "Initial commit")
+        repo = Repository.find(root, files=(lambda: files_lock) if files_lock else None)
+        if repo is None:
+            return {"error": "git init failed"}
+        with repo.changing():
+            repo.ok("add", "-A")
+            _unstage_big(repo)
+            if repo.ok("status", "--porcelain", "--untracked-files=no").strip():
+                repo.ok("commit", "-q", "-m", "Initial commit")
         r = subprocess.run([st["gh"], "repo", "create", full, "--private", "--source", ".",
                             "--remote", "origin"],
                            cwd=root, capture_output=True, text=True, encoding="utf-8",
@@ -1005,12 +1009,13 @@ def protect_branch(gh: str, url: str, root: Path) -> str:
     return "not set: " + (r.stderr or r.stdout).strip()[-200:]
 
 
-def _unstage_big(root: Path) -> list[str]:
-    """Files GitHub would refuse (gitsync.MAX_FILE and over) stay out of the commit."""
-    staged = run_git(root, "diff", "--cached", "--name-only", "-z").stdout.split("\0")
-    big = [x for x in staged if x and (root / x).is_file() and (root / x).stat().st_size > gitsync.MAX_FILE]
+def _unstage_big(repo: Repository) -> list[str]:
+    """Files GitHub would refuse (gitsync.MAX_FILE and over) stay out of the commit. In
+    repo.changing()."""
+    staged = repo.ok("diff", "--cached", "--name-only", "-z").split("\0")
+    big = [x for x in staged if x and (repo.top / x).is_file() and (repo.top / x).stat().st_size > gitsync.MAX_FILE]
     if big:
-        run_git(root, "rm", "-q", "--cached", "--", *big)
+        repo.ok("rm", "-q", "--cached", "--", *big)
     return big
 
 

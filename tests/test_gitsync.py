@@ -12,6 +12,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitsync  # noqa: E402
+import repository  # noqa: E402
 from tmpdirs import tmpdir  # noqa: E402
 
 
@@ -66,9 +67,9 @@ class GitSyncTest(unittest.TestCase):
     def test_files_lock_is_held_across_processes(self):
         """Another editor of the repository (another process) writing the files, or its git
         committing or merging: this one waits, and gets the lock once it is done."""
-        lock = gitsync.FilesLock(lambda: self.root / ".git")
-        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import gitsync; "
-                "from pathlib import Path; l = gitsync.FilesLock(lambda: Path(sys.argv[2])); "
+        lock = repository.FilesLock(lambda: self.root / ".git")
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import repository; "
+                "from pathlib import Path; l = repository.FilesLock(lambda: Path(sys.argv[2])); "
                 "l.acquire(); print('held', flush=True); time.sleep(1.5)")
         p = subprocess.Popen([sys.executable, "-c", code, str(Path(gitsync.__file__).parent), str(self.root / ".git")],
                              stdout=subprocess.PIPE, text=True)
@@ -87,9 +88,9 @@ class GitSyncTest(unittest.TestCase):
     def test_files_lock_let_go_when_unlocking_the_file_fails(self):
         """Unlocking the lock file can fail (the folder on a network drive gone): the lock is
         let go anyway, or every later save and sync would wait on it for good."""
-        lock = gitsync.FilesLock(lambda: self.root / ".git")
+        lock = repository.FilesLock(lambda: self.root / ".git")
         self.assertTrue(lock.acquire(timeout=5))
-        with mock.patch.object(gitsync.registry.FileLock, "_lock", side_effect=OSError("gone")):
+        with mock.patch.object(repository.registry.FileLock, "_lock", side_effect=OSError("gone")):
             with self.assertRaises(OSError):
                 lock.release()
         got = []
@@ -193,6 +194,52 @@ class GitSyncTest(unittest.TestCase):
         self.g._record = real
         self.g.commit_all("Autosave")
         self.assertIsNone(self.g.dirty_since)
+
+    def test_an_upload_is_told_what_its_own_push_did(self):
+        """The worker may push the upload's commit first, and `error` may still say what
+        failed earlier: the upload is told what happened to it, not that."""
+        (self.root / "notes.pdf").write_bytes(b"%PDF")
+        real = self.g.commit
+
+        def commit_then_the_worker_pushes(paths, message):
+            ok = real(paths, message)
+            self.g.push()
+            self.g.error = "Could not reach GitHub: an hour ago"
+            return ok
+
+        self.g.commit = commit_then_the_worker_pushes
+        o = self.g.record_file("notes.pdf", "Add notes.pdf")
+        self.assertEqual(o.state, "synced", o)
+        self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+
+    def test_every_page_gets_every_notice(self):
+        """Several ask for the status (the tree's poll, a button's answer, another tab): the
+        first to ask must not take a notice away from the others."""
+        self.g.notice = "Pulled 1 commit from GitHub"
+        a, b = self.g.status(), self.g.status()
+        self.assertEqual((a["notice"], a["notice_id"]), (b["notice"], b["notice_id"]))
+        self.assertLess(a["notice_age"], 60)
+        self.g.notice = "Combined your changes with 1 commit from GitHub"
+        self.assertNotEqual(self.g.status()["notice_id"], a["notice_id"], "a new one")
+
+    def test_both_versions_kept_by_a_merge_meanwhile_stay_listed(self):
+        """The page asks where both versions are still kept while a merge adds new places:
+        those must not be dropped by the look that did not see them."""
+        import keepboth
+        (self.root / "main.tex").write_text("% [prism-local] mine\n", encoding="utf-8")
+        old = {"path": "main.tex", "line": 1, "who": "A", "mtime": 0}
+        new = {"path": "sec.tex", "line": 1, "who": "B", "mtime": 0}
+        self.g.kept = [old]
+        real = keepboth.marked_lines
+
+        def merge_meanwhile(text):
+            if new not in self.g.kept:
+                self.g.kept = self.g.kept + [new]      # the worker's merge, at this moment
+            return real(text)
+
+        with mock.patch.object(keepboth, "marked_lines", merge_meanwhile):
+            self.g.kept_both()
+        self.assertIn(new, self.g.kept)
 
     def test_a_save_half_way_is_not_a_change(self):
         """The temporary file a save writes before it replaces the file (fsutil.replace_file)
@@ -420,9 +467,9 @@ class SharedRepositoryTest(unittest.TestCase):
 
 HOLD = """import sys, time
 sys.path.insert(0, sys.argv[1])
-import gitsync
+import repository
 from pathlib import Path
-with gitsync.repo_lock(Path(sys.argv[2])):
+with repository.repo_lock(Path(sys.argv[2])):
     print("held", flush=True)
     sys.stdin.readline()
 """
@@ -464,8 +511,8 @@ class OtherProcesses(unittest.TestCase):
     def test_sync_waits_its_turn_without_an_error(self):
         release = self.hold()
         (self.root / "main.tex").write_text("mine\n", encoding="utf-8")
-        with mock.patch.object(gitsync, "REPO_WAIT", 0.3):
-            with self.assertRaises(gitsync.RepoBusy):
+        with mock.patch.object(repository, "REPO_WAIT", 0.3):
+            with self.assertRaises(repository.RepoBusy):
                 self.g.commit(["main.tex"], "edit")
             self.g._safe(self.g.push)
         self.assertIsNone(self.g.error, "busy is not an error: the next tick tries again")
@@ -473,8 +520,8 @@ class OtherProcesses(unittest.TestCase):
         self.assertTrue(self.g.commit(["main.tex"], "edit"))
 
     def test_the_lock_is_reentrant_and_shared_by_threads(self):
-        with gitsync.repo_lock(self.g.git_dir):
-            with gitsync.repo_lock(self.g.git_dir, timeout=0):
+        with self.g.repo.changing(files=False):
+            with self.g.repo.changing(files=False, wait=0):
                 pass                                       # the same thread again
             got = []
             t = threading.Thread(target=lambda: got.append(self._try()))
@@ -485,9 +532,9 @@ class OtherProcesses(unittest.TestCase):
 
     def _try(self):
         try:
-            with gitsync.repo_lock(self.g.git_dir, timeout=0.2):
+            with self.g.repo.changing(files=False, wait=0.2):
                 return True
-        except gitsync.RepoBusy:
+        except repository.RepoBusy:
             return False
 
     def test_settings_written_at_once_keep_every_key(self):

@@ -389,7 +389,7 @@ class FolderSync(TempState):
         moment): the rename waits its turn and is committed. When it cannot be, the answer
         says so: no other editor would commit it (each commits its own project only)."""
         import threading
-        import gitsync
+        import repository
         self.assertTrue(hub.apply_sync({"id": self.top["id"], "mode": "shared"})["ok"])
         repo = self.projects / "Course"
         pid = {p["name"]: p["id"] for p in hub.list_projects()["projects"]}["ex 1"]
@@ -401,7 +401,7 @@ class FolderSync(TempState):
         self.assertEqual(self.git(repo, "log", "-1", "--format=%s").strip(), "Rename ex 1 to ex one")
         lock.write_bytes(b"")                  # and this time it stays
         try:
-            with mock.patch.object(gitsync, "LOCK_WAIT", 0.3):
+            with mock.patch.object(repository, "LOCK_WAIT", 0.3):
                 r = hub.rename_project(r["id"], "ex uno", folder=True)
         finally:
             lock.unlink()
@@ -444,9 +444,10 @@ class FolderSync(TempState):
         root = self.projects / "ex 1"
         hub.git_init(root)
         (root / "huge.bin").write_bytes(b"x" * 4096)
-        with mock.patch.object(hub.gitsync, "MAX_FILE", 1024):
-            hub.run_git(root, "add", "-A")
-            self.assertEqual(hub._unstage_big(root), ["huge.bin"])
+        repo = hub.Repository.find(root)
+        with mock.patch.object(hub.gitsync, "MAX_FILE", 1024), repo.changing():
+            repo.ok("add", "-A")
+            self.assertEqual(hub._unstage_big(repo), ["huge.bin"])
         self.assertNotIn("huge.bin", self.git(root, "diff", "--cached", "--name-only"))
 
     def test_separate_creates_missing_repositories(self):

@@ -22,6 +22,7 @@ from test_lifecycle import NO_WINDOW, stop, wait_file  # noqa: E402
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO / "prism_local"))
 import gitsync
+import repository
 SERVER = REPO / "prism_local" / "server.py"
 HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 HEADERS = {"Content-Type": "application/json", "X-Prism-Local": "1"}
@@ -324,7 +325,7 @@ class SyncButtons(unittest.TestCase):
         """git holding the files long (a repository's hook, in another editor of it): a save
         answers busy after a moment rather than holding the page's connection, and saves once
         git is done."""
-        lock = gitsync.FilesLock(lambda: self.mine / ".git")
+        lock = repository.FilesLock(lambda: self.mine / ".git")
         self.assertTrue(lock.acquire(timeout=10))
         try:
             started = time.monotonic()

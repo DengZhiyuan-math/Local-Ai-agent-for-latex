@@ -79,7 +79,7 @@ class AgentManager:
         # the server commits them to the project's repository (gitsync.py).
         self.on_start: Callable[[], None] = lambda: None
         self.on_changed: Callable[[list[str], str], None] = lambda paths, why: None
-        # Held while Undo writes the files: the editor's save lock (gitsync.FilesLock), which a
+        # Held while Undo writes the files: the editor's save lock (repository.FilesLock), which a
         # sync's commit and merge hold too, so a merge never undoes the Undo.
         self.writes = threading.RLock()
 

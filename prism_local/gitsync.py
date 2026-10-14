@@ -29,7 +29,7 @@ import re
 import subprocess
 import threading
 import time
-from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -38,24 +38,21 @@ import keepboth
 import registry
 import gitenv
 from fsutil import write_bytes
+from repository import FilesLock, RepoBusy, Repository
 
 IDLE = 120               # seconds without an edit before an autosave commit
 MAX_WAIT = 600           # ... but at the latest this long after the first change
 FETCH_EVERY = 60         # seconds between fetches from the remote (co-authors' changes arrive soon)
 QUIET = 20               # automatic pulls wait this long after your last save (no clash with typing)
-STALE_LOCK = 600         # an index.lock this old was left by a git that crashed
 PUSH_TRIES = 5           # pushes in a row while co-authors keep pushing in between
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
 MAX_FILE = 50 * 1024 * 1024    # GitHub refuses files over 100 MB; keep well below
-LOCK_WAIT = 10           # seconds to wait for another editor's git command in a shared repository
 SHARED_MARKER = "prism-repo.json"
 # Files LaTeX writes next to the sources when they are not in the build folder.
 AUX = (".aux", ".log", ".out", ".toc", ".lof", ".lot", ".bbl", ".blg", ".bcf", ".run.xml",
        ".fls", ".fdb_latexmk", ".synctex.gz", ".synctex", ".nav", ".snm", ".vrb", ".idx",
        ".ilg", ".ind", ".xdv", ".dvi", ".thm", ".loe")
-# The git commands prism-local runs that take the index (and its index.lock).
-INDEX_WRITERS = frozenset(("merge", "commit", "add", "checkout"))
 # New files never recorded: those, and a save half-way (fsutil.replace_file's temporary file).
 NOT_SOURCES = AUX + (".prism-tmp",)
 
@@ -217,135 +214,23 @@ def record_move(old: Path, new: Path) -> str | None:
     (RepoBusy too) when the move could not be committed: say so, since nobody else would
     commit it (each editor of the repository commits its own project only), and the other
     copies would get the new folder next to the old one."""
-    r = gitenv.git(new, "rev-parse", "--show-toplevel", "--absolute-git-dir")
-    lines = r.stdout.strip().splitlines()
-    if r.returncode != 0 or len(lines) != 2:
+    repo = Repository.find(new)
+    if repo is None or repo.top == Path(new).resolve() or not shared_marker(repo.top):
         return None
-    top, git_dir = Path(lines[0]).resolve(), Path(lines[1])
-    if top == Path(new).resolve() or not shared_marker(top):
-        return None
-    specs = [f":(top,literal){Path(p).resolve().relative_to(top).as_posix()}" for p in (old, new)]
+    specs = [f":(top,literal){Path(p).resolve().relative_to(repo.top).as_posix()}" for p in (old, new)]
     message = f"Rename {Path(old).name} to {Path(new).name}"
-    # As an editor's commit: one prism-local process at a time, no save meanwhile.
-    with repo_lock(git_dir), FilesLock(lambda: git_dir):
-        deadline = time.monotonic() + LOCK_WAIT          # another program's git, for a moment
-        while (git_dir / "index.lock").exists():
-            if time.monotonic() >= deadline:
-                raise RuntimeError("git is busy (index.lock)")
-            time.sleep(0.2)
-        for args in (("add", "-A", "--", *specs), ("commit", "-q", "-m", message, "--", *specs)):
-            c = gitenv.git(top, *args)
-            if c.returncode != 0:
-                raise RuntimeError((c.stderr or c.stdout).strip()[-300:] or f"git {args[0]} failed")
+    with repo.changing():                    # as an editor's commit
+        repo.ok("add", "-A", "--", *specs)
+        repo.ok("commit", "-q", "-m", message, "--", *specs)
     return message
 
 
-class RepoBusy(RuntimeError):
-    """Another prism-local process is changing the repository; try again later."""
-
-
-REPO_WAIT = 30           # seconds a commit, pull or push waits while another process changes the repository
-_REPO_LOCKS: dict[str, list] = {}
-_REPO_LOCKS_GUARD = threading.Lock()
-
-
-def _take(path: Path | None, timeout: float, own: list | None = None) -> list | None:
-    """This process's hold on the OS file lock `path`: [its threads' lock, depth, the file
-    lock]. The file is locked at the first hold in the process, and unlocked by the process
-    ending at the latest, so a crash never leaves it behind. Re-entrant within a thread.
-    path None: `own`, a lock of this process only. None after `timeout` seconds."""
-    if path is None:
-        entry = own
-    else:
-        with _REPO_LOCKS_GUARD:
-            entry = _REPO_LOCKS.setdefault(registry.norm(path), [threading.RLock(), 0, None])
-    deadline = time.monotonic() + timeout
-    if not entry[0].acquire(timeout=max(timeout, 0)):
-        return None
-    if entry[1] == 0 and path is not None:
-        held = registry.FileLock(path, timeout=max(deadline - time.monotonic(), 0))
-        try:
-            held.__enter__()
-        except (TimeoutError, OSError):
-            entry[0].release()
-            return None
-        entry[2] = held
-    entry[1] += 1
-    return entry
-
-
-def _give_back(entry: list) -> None:
-    """Undo one _take. The threads' lock is let go even when unlocking the file fails (a
-    network drive gone): the file lock goes with its handle, closed regardless."""
-    try:
-        entry[1] -= 1
-        if entry[1] == 0 and entry[2] is not None:
-            held, entry[2] = entry[2], None
-            held.__exit__(None, None, None)
-    finally:
-        entry[0].release()
-
-
-@contextmanager
-def repo_lock(git_dir: Path | None, timeout: float | None = None):
-    """Held while prism-local changes a repository (commit, merge, push): one process at a
-    time, also across processes: two editors in a repository shared by several projects, or
-    an editor still pushing as it closes while the project opens again. It is an OS file
-    lock (.git/prism-local.lock, see _take). Re-entrant within a thread. Raises RepoBusy
-    after `timeout` (REPO_WAIT) seconds."""
-    if git_dir is None:
-        yield
-        return
-    entry = _take(git_dir / "prism-local.lock", REPO_WAIT if timeout is None else timeout)
-    if entry is None:
-        raise RepoBusy("git is busy in another prism-local window; will try again")
-    try:
-        yield
-    finally:
-        _give_back(entry)
-
-
-FILES_WAIT = 60          # seconds git waits for a save or an Undo to finish writing (they take milliseconds)
-
-
-class FilesLock:
-    """Held while the project's files are written, or git reads and changes them: the
-    editor's saves and an Undo, a sync's commit and merge (GitSync.writes). A merge that
-    gives up puts the files back as they were when it started, undoing a save made
-    meanwhile; on Windows git cannot open a file a save is replacing. One per repository,
-    across processes too (an OS file lock, .git/prism-local-files.lock): projects sharing a
-    repository have their own editors, and one's merge changes the other's files. Never
-    held for a fetch or a push, so a save waits for git's local work only. Re-entrant
-    within a thread."""
-
-    def __init__(self, git_dir_fn: Callable[[], Path | None]):
-        self.git_dir_fn = git_dir_fn
-        self._own = [threading.RLock(), 0, None]     # no repository (yet): this process only
-        self._held = threading.local()
-
-    def acquire(self, timeout: float = FILES_WAIT) -> bool:
-        stack = getattr(self._held, "stack", [])
-        if stack:                                    # again: the one this thread holds
-            path = stack[-1][0]
-        else:
-            git_dir = self.git_dir_fn()
-            path = Path(git_dir) / "prism-local-files.lock" if git_dir is not None else None
-        entry = _take(path, timeout, self._own)
-        if entry is None:
-            return False
-        self._held.stack = stack + [(path, entry)]
-        return True
-
-    def release(self) -> None:
-        _give_back(self._held.stack.pop()[1])
-
-    def __enter__(self):
-        if not self.acquire():
-            raise RepoBusy("another prism-local window is writing the files; will try again")
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self.release()
+@dataclass(frozen=True)
+class Outcome:
+    """What one sync step did, for whoever asked it: not what another thread did meanwhile
+    (the shared `error` may be someone else's)."""
+    state: str                    # "synced": GitHub has it; "local": kept here (message: why); "failed"
+    message: str | None = None
 
 
 def _slug(name: str) -> str:
@@ -367,6 +252,7 @@ class GitSync:
         # an Undo take it too (server.SAVE_LOCK).
         self.writes = writes or FilesLock(lambda: self.git_dir if self.check_repo() else None)
         self.own: bool | None = None          # the project has a repository to sync with
+        self.repo: Repository | None = None   # that repository (check_repo)
         self.git_dir: Path | None = None
         self.top: Path | None = None          # that repository's top: the project, or above it
         self.prefix = ""                      # the project's path in it: "" or "ex2/"
@@ -383,31 +269,35 @@ class GitSync:
         self.blocked_reason: str | None = None
         self.state = "idle"                   # idle | committing | pushing | pulling
         self.error: str | None = None
-        self.notice: str | None = None        # e.g. "pulled 2 commits from GitHub"
+        # What the worker (or a button) changed that the pages should know of, kept with a
+        # number: each page shows each notice once, also when several pages ask.
+        self._state = threading.Lock()        # notice, kept: the worker writes, requests read
+        self._notice: tuple[int, float, str | None] = (0, 0.0, None)   # number, when, text
+        self._repo_guard = threading.RLock()  # check_repo, from requests and the worker at once
         self.clash: list[str] = []            # files you and GitHub both changed (project paths)
         self.kept: list[dict] = []            # where both versions were kept: {"path", "line", "who", "mtime"}
         self.stop = threading.Event()
 
+    @property
+    def notice(self) -> str | None:
+        """The last notice, e.g. "Pulled 2 commits from GitHub" (see status())."""
+        return self._notice[2]
+
+    @notice.setter
+    def notice(self, text: str | None) -> None:
+        if text:
+            with self._state:
+                self._notice = (self._notice[0] + 1, time.time(), text)
+
     # ------------------------------------------------------------ git
     def git(self, *args: str, timeout: float = 60, interactive: bool = False) -> subprocess.CompletedProcess:
-        """git at the repository's top: paths are relative to it (see rel()). Only a fetch
-        or push you started (manual) may ask you to log in (gitenv.NO_PROMPTS)."""
-        started = time.time()
-        try:
-            r = gitenv.git(self.top or self.root_fn(), *args, timeout=timeout, interactive=interactive)
-        except subprocess.TimeoutExpired:
-            # Killed: a command that takes the index (run under repo_lock and the files lock,
-            # as all of them here are) leaves its index.lock, which would stop the merge
-            # --abort that follows. One made since it started is its own: none other could
-            # take it while it held it. Any other command (a fetch, a read) took none, and
-            # one there now is someone else's.
-            lock = self.git_dir / "index.lock" if self.git_dir and args[0] in INDEX_WRITERS else None
-            try:
-                if lock and lock.stat().st_mtime >= started - 1:
-                    lock.unlink()
-            except OSError:
-                pass
-            raise
+        """git at the repository's top: paths are relative to it (see rel()). A command that
+        changes the index runs only inside _changing() (Repository.git). Only a fetch or push
+        you started (manual) may ask you to log in (gitenv.NO_PROMPTS)."""
+        if self.repo is None:
+            r = gitenv.git(self.root_fn(), *args, timeout=timeout, interactive=interactive)
+        else:
+            r = self.repo.git(*args, timeout=timeout, interactive=interactive)
         if args[0] in ("push", "fetch"):
             print(json.dumps({"event": "git_sync", "git_top": str(self.top),
                               "target": public_target(self.target), "stage": args[0],
@@ -424,14 +314,18 @@ class GitSync:
     def check_repo(self) -> bool:
         """Whether the project is the top of its own repository, or in a shared one
         (looked up once per folder; recheck() looks again)."""
+        with self._repo_guard:      # requests and the worker ask at once; one looks
+            return self._check_repo()
+
+    def _check_repo(self) -> bool:
         root = self.root_fn().resolve()
         if getattr(self, "_checked", None) != root:
-            self._checked, self.own, self.git_dir, self.top, self.prefix = root, None, None, None, ""
+            self._checked, self.own, self.repo, self.git_dir, self.top, self.prefix = root, None, None, None, None, ""
         if self.own is None:
             try:
-                r = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir", timeout=20)
-                lines = r.stdout.strip().splitlines()
-                top = Path(lines[0]).resolve() if r.returncode == 0 and len(lines) == 2 else None
+                # Its changes hold the editor's save lock (self.writes): saves wait for them.
+                repo = Repository.find(root, files=lambda: self.writes)
+                top = repo.top if repo else None
                 if top is not None and registry.norm(top) == registry.norm(root):
                     self.own = True
                 elif top is not None and shared_marker(top):
@@ -439,11 +333,18 @@ class GitSync:
                 else:
                     self.own = False
                 if self.own:
-                    self.git_dir, self.top = Path(lines[1]), top
+                    self.repo, self.git_dir, self.top = repo, repo.git_dir, repo.top
                     self.guarded = install_guard(self.git_dir)
             except (OSError, subprocess.SubprocessError, ValueError):
                 self.own = False
         return bool(self.own)
+
+    def _changing(self, files: bool = True, wait: float | None = None):
+        """self.repo.changing(): this process alone changes the repository, and with
+        `files`, no save writes the files meanwhile (see repository.py)."""
+        if not self.check_repo():
+            raise RuntimeError("This project has no repository to sync")
+        return self.repo.changing(files=files, wait=wait)
 
     def recheck(self) -> bool:
         """Look for a repository again: one may have been created while the editor runs (the
@@ -546,14 +447,13 @@ class GitSync:
         """Commit the paths pick() names, chosen and committed at one hold of the files lock:
         no save lands in between, and git never reads a file a save is replacing. False:
         nothing to commit."""
-        with self.lock, repo_lock(self.git_dir), self.writes:
+        with self.lock, self._changing():
             paths = pick()
             if not paths:
                 return False
             msg = message(paths)
             if self.shared:      # the repository has the project's name in every message
                 msg = f"{self.root_fn().name}: {msg}"
-            self._wait_index()
             self.state = "committing"
             try:
                 self._ok("add", "-A", "--", *paths)
@@ -566,15 +466,6 @@ class GitSync:
                 return True
             finally:
                 self.state = "idle"
-
-    def _wait_index(self) -> None:
-        """In a shared repository another editor may be committing right now."""
-        deadline = time.monotonic() + (LOCK_WAIT if self.shared else 0)
-        self._clear_stale_lock()
-        while self.git_dir and (self.git_dir / "index.lock").exists():
-            if time.monotonic() >= deadline:
-                raise RuntimeError("git is busy (index.lock); will try again")
-            time.sleep(0.2)
 
     # ------------------------------------------------------------ remote
     def _candidate(self, fresh: bool = False) -> dict:
@@ -704,27 +595,34 @@ class GitSync:
             n = self.git("rev-list", "--count", "HEAD", timeout=20).stdout.strip()
             self.ahead, self.behind = (int(n) if n.isdigit() else 0), 0
 
-    def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> None:
+    def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> Outcome:
         """Push. If GitHub has commits this copy lacks (a co-author pushed), bring them in
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
-        (co-authors pushing one after another), up to `tries` times. Never forced."""
+        (co-authors pushing one after another), up to `tries` times. Never forced. Returns
+        what this push did (`error` also says so, for the pages)."""
         attempts = tries if retry else 1
-        with self.lock, repo_lock(self.git_dir):
+        with self.lock, self._changing(files=False):
             for attempt in range(attempts):
                 self._remote_state()
-                if self.blocked_reason or (not manual and not self.enabled) or not self.has_remote or not self.ahead:
-                    return
+                if not self.has_remote:
+                    return Outcome("local", "The repository has no remote, so nothing was pushed.")
+                if self.blocked_reason:
+                    return Outcome("local", "Sync paused: " + self.blocked_reason)
+                if not manual and not self.enabled:
+                    return Outcome("local", "Automatic sync is off.")
+                if not self.ahead:
+                    return Outcome("synced")
                 self.state = "pushing"
                 try:
                     if not self.validate_target(fresh=True):
-                        return
+                        return Outcome("local", "Sync paused: " + str(self.blocked_reason))
                     args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
                             self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
                     r = self.git(*args, timeout=180, interactive=manual)
                     if r.returncode == 0:
                         self.last_push, self.error = time.time(), None
                         self._remote_state()
-                        return
+                        return Outcome("synced")
                     msg = safe_git_message((r.stderr or r.stdout).strip())
                     # GitHub has commits this copy lacks: GitHub said so, or the guard did
                     # (it stops such a push before GitHub sees it).
@@ -735,15 +633,36 @@ class GitSync:
                 if behind and attempt < attempts - 1:
                     self.pull(manual=manual)
                     if self.error:
-                        return                   # pull said what is wrong
+                        return Outcome("failed", self.error)        # pull said what is wrong
                     if self.behind and self.busy_fn():
-                        return                   # an agent turn: merged and pushed after it
+                        return Outcome("local", "The agent is working: pushed once its turn ends.")
                     time.sleep(min(0.3 * (attempt + 1), 1.5))
                     continue
                 self.push_failed_at = time.time()
                 self.error = ("GitHub has changes this copy does not have yet; pull first."
                               if behind else "Push failed: " + msg[-300:])
-                return
+                return Outcome("failed", self.error)
+        return Outcome("failed", self.error)
+
+    def record_file(self, path: str, message: str) -> Outcome:
+        """Commit one file the editor wrote (an upload, `path` in the project) alone, other
+        changes staying as they are, and push it. Returns what happened to it."""
+        if not self.check_repo():
+            return Outcome("local", "Saved in the project. It has no git repository to sync with "
+                                    "(none, or it is inside another one), so nothing was committed.")
+        if not self.enabled:
+            return Outcome("local", "Saved in the project. Sync with GitHub is off for this project.")
+        full = self.rel(path)
+        if self.git("check-ignore", "-q", "--", full, timeout=20).returncode == 0:
+            folder = path.rsplit("/", 1)[0] + "/" if "/" in path else path
+            return Outcome("local", f"Saved in the project. {folder} is in .gitignore, so it is not committed.")
+        self.commit([full], message)
+        pushed = self.push()
+        if pushed.state == "synced":
+            return Outcome("synced", f"Committed and pushed to {self.upstream or 'origin'}.")
+        if pushed.state == "local":
+            return Outcome("local", "Committed. " + str(pushed.message))
+        return Outcome("failed", "Committed, but not pushed: " + str(pushed.message))
 
     def pull(self, manual: bool = False) -> None:
         """Fetch, and bring GitHub's commits in. Your changes are committed first. When only
@@ -751,7 +670,7 @@ class GitSync:
         a merge commit that keeps both sides. Nothing is ever rewritten or thrown away: when
         the two sides changed the same lines, the merge is called off, both versions stay
         where they are (GitHub's there, yours committed here), and `error` says which files."""
-        with self.lock, repo_lock(self.git_dir):
+        with self.lock, self._changing(files=False):
             self.last_fetch = time.time()
             if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
                 return
@@ -780,7 +699,7 @@ class GitSync:
                     if healed and self.ahead:
                         self.push(retry=False, manual=manual)   # put the dropped commits back on GitHub now
                     return
-                with self.writes:
+                with self._changing():
                     try:
                         if self.busy_fn():       # an agent turn is writing: after it
                             return
@@ -859,7 +778,7 @@ class GitSync:
                           "once you are sure, in a terminal: git reset --keep @{u}")
             return None
         if self.git("merge-base", "--is-ancestor", tip, "HEAD", timeout=20).returncode != 0:
-            with self.writes:
+            with self._changing():
                 try:
                     # Your edits recorded first, as for any merge: one that gives up over them
                     # would put back the files as they were when it started.
@@ -878,17 +797,6 @@ class GitSync:
                            f"commit{'s' if dropped != '1' else ''}; they are put back, nothing is lost")
         self.notice = self._heal_note
         return True
-
-    def _clear_stale_lock(self) -> None:
-        """A git that crashed (a power cut, a killed process) leaves index.lock behind, and
-        every commit fails from then on. One older than STALE_LOCK cannot belong to a git
-        still running (they take seconds), so it goes."""
-        lock = self.git_dir / "index.lock" if self.git_dir else None
-        try:
-            if lock and lock.exists() and time.time() - lock.stat().st_mtime > STALE_LOCK:
-                lock.unlink()
-        except OSError:
-            pass
 
     def _merge(self, n: int, again: bool = True) -> None:
         """Merge GitHub's branch into this one. Where both sides changed the same lines, both
@@ -914,7 +822,8 @@ class GitSync:
                     self.git("merge", "--abort", timeout=60)
                 self._report_clash(f" ({e})")
                 return
-            self.kept = [k for k in self.kept if k["path"] not in {x["path"] for x in kept}] + kept
+            with self._state:
+                self.kept = [k for k in self.kept if k["path"] not in {x["path"] for x in kept}] + kept
             where = ", ".join(sorted({k["path"] for k in kept}))
             self.notice = (f"Combined your changes with {n} commit{'s' if n != 1 else ''} from GitHub. "
                            f"You both changed the same lines in {where}: both versions are kept there "
@@ -1011,8 +920,10 @@ class GitSync:
     def kept_both(self) -> list[dict]:
         """The places where both versions were kept and are still there."""
         top = self.top or self.root_fn()
+        with self._state:
+            looked_at = list(self.kept)
         still = []
-        for k in self.kept:
+        for k in looked_at:
             f = top / (self.prefix + k["path"])
             try:
                 if k["line"] is not None and keepboth.is_tex(k["path"]):
@@ -1038,7 +949,9 @@ class GitSync:
                 out += [{**group[0], "line": ln} for ln in lines]
             else:
                 out += group
-        self.kept = [k for k in self.kept if k in still]
+        # Drop only those looked at and gone: a merge may have added others meanwhile.
+        with self._state:
+            self.kept = [k for k in self.kept if k in still or k not in looked_at]
         return out
 
     def _report_clash(self, why: str = "") -> None:
@@ -1066,7 +979,7 @@ class GitSync:
         GitHub's branch, taking your version of the lines both changed (git merge -X ours:
         everything else of theirs comes in as usual), and push. Their version stays in
         their commits; nothing leaves the history."""
-        with self.lock, repo_lock(self.git_dir):
+        with self.lock, self._changing(files=False):
             self.commit_all("Combined with GitHub's version")     # recorded even when offline
             r = self.fetch(manual=True)
             if r is None:
@@ -1081,7 +994,7 @@ class GitSync:
                 self.clash = []
                 self.push(manual=True)
                 return
-            with self.writes:
+            with self._changing():
                 try:
                     self.commit_all("Combined with GitHub's version")     # saved during the fetch
                     m = self.git("merge", "--no-edit", "-X", "ours", "-m",
@@ -1191,12 +1104,11 @@ class GitSync:
         except OSError:
             return
         if msg.startswith(("Merge changes from GitHub", "Put back commits dropped from GitHub")):
-            # Unless a prism-local process is merging right now (it holds repo_lock): another
+            # Unless a prism-local process is merging right now (it holds the repository): another
             # project's editor in the same repository, or this project's last editor still
             # closing. A crashed one holds nothing.
             try:
-                with repo_lock(self.git_dir, timeout=0), self.writes:
-                    self._clear_stale_lock()
+                with self._changing(wait=0):
                     self.git("merge", "--abort", timeout=60)
             except RepoBusy:
                 pass
@@ -1246,10 +1158,13 @@ class GitSync:
               "guarded": bool(getattr(self, "guarded", False)), "state": self.state, "error": self.error,
               "remote": self.has_remote, "upstream": self.upstream, "ahead": self.ahead,
               "behind": self.behind, "last_commit": self.last_commit, "last_push": self.last_push or None,
-              "pending": self.dirty_since is not None, "notice": self.notice,
+              "pending": self.dirty_since is not None,
               "next_autosave": (None if self.dirty_since is None else
                                 max(0, min((self.last_edit or 0) + IDLE, self.dirty_since + MAX_WAIT) - time.time()))}
-        self.notice = None
+        # Kept, not taken by the first who asks: each page shows each notice (by its number)
+        # once, also when several ask (the tree's poll, a button's answer, another tab).
+        number, at, text = self._notice
+        st.update(notice=text, notice_id=number, notice_age=time.time() - at if number else None)
         return st
 
     def log(self, path: str, n: int = 60) -> list[dict]:

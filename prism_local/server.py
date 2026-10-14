@@ -32,7 +32,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
-from gitsync import FilesLock, GitSync  # noqa: E402
+from gitsync import GitSync  # noqa: E402
+from repository import FilesLock  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
@@ -48,7 +49,7 @@ import selfupdate  # noqa: E402
 MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
-# and merges; also by the other editors of a shared repository (gitsync.FilesLock).
+# and merges; also by the other editors of a shared repository (repository.FilesLock).
 SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
 SAVE_WAIT = 3           # seconds a save waits for git before the page is told to try again
 UPLOAD_WAIT = 10        # seconds an upload waits for git before it is refused (try again)
@@ -559,31 +560,11 @@ UPLOAD_SYNC: dict[str, dict] = {}     # rel -> {"state": syncing|synced|local|fa
 
 def sync_upload(rel: str) -> None:
     """Commit the upload `rel` and push it (in a thread; the state is in UPLOAD_SYNC)."""
-    def done(state: str, message: str) -> None:
-        UPLOAD_SYNC[rel] = {"state": state, "message": message}
-    g = GITSYNC
     try:
-        if not g.check_repo():
-            return done("local", "Saved in the project. It has no git repository to sync with "
-                                 "(none, or it is inside another one), so nothing was committed.")
-        if not g.enabled:
-            return done("local", "Saved in the project. Sync with GitHub is off for this project.")
-        if g.git("check-ignore", "-q", "--", g.rel(rel), timeout=20).returncode == 0:
-            return done("local", f"Saved in the project. {UPLOAD_DIR}/ is in .gitignore, so it is not committed.")
-        g.commit([g.rel(rel)], f"Add {rel} (a file used in the agent chat)")
-        g._remote_state()
-        if not g.has_remote:
-            return done("local", "Committed. The repository has no remote, so nothing was pushed.")
-        g.push()
-        if g.blocked_reason:
-            return done("local", "Committed locally; sync paused: " + g.blocked_reason)
-        if not g.enabled:
-            return done("local", "Committed locally; automatic sync is off")
-        if g.error:
-            return done("failed", "Committed, but not pushed: " + g.error)
-        done("synced", f"Committed and pushed to {g.upstream or 'origin'}.")
-    except (OSError, subprocess.SubprocessError, RuntimeError) as e:
-        done("failed", f"git: {str(e)[-300:]}")
+        o = GITSYNC.record_file(rel, f"Add {rel} (a file used in the agent chat)")
+        UPLOAD_SYNC[rel] = {"state": o.state, "message": o.message}
+    except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
+        UPLOAD_SYNC[rel] = {"state": "failed", "message": f"git: {str(e)[-300:]}"}
 
 # Your snippets (static/snippets.js): one file for every project. JavaScript, run by the
 # editor page, so it lives with your settings and not in a project co-authors share.

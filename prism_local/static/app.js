@@ -570,6 +570,7 @@ function ago(t) {
   return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago`
     : new Date(t * 1000).toLocaleDateString();
 }
+const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
 function renderSync(st) {
   S.sync = st;
   $("#sync-box").hidden = false;
@@ -622,7 +623,11 @@ function renderSync(st) {
   $("#sync-clash").innerHTML = clash.map((f) =>
     `<button type="button" class="dd-item" data-theirs="${esc(f)}">Compare with GitHub's version: ${esc(f)}</button>`).join("")
     + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : "");
-  if (st.notice) toast(st.notice + (/[.)]$/.test(st.notice) ? "" : ".") + " The editor shows the new versions.");
+  // Each notice once, by its number (several requests return it), and only a recent one:
+  // a page opened later does not repeat what happened before it.
+  if (st.notice && st.notice_id !== SYNC_NOTICE.seen && st.notice_age < 60)
+    toast(st.notice + (/[.)]$/.test(st.notice) ? "" : ".") + " The editor shows the new versions.");
+  if (st.notice_id != null) SYNC_NOTICE.seen = st.notice_id;
 }
 function syncMenu(open) { $("#sync-menu").hidden = !open; $("#btn-sync").setAttribute("aria-expanded", String(open)); }
 $("#btn-sync").onclick = async (e) => {

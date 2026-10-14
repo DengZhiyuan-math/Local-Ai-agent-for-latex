@@ -154,6 +154,8 @@ def _probe(url: str, app: str, root: Path | None, timeout: float) -> tuple[dict 
         with HTTP.open(url + "api/ping", timeout=timeout) as r:
             info = json.loads(r.read().decode("utf-8"))
     except (OSError, ValueError) as e:
+        if hasattr(e, "close"):                     # an HTTP error answer: its connection goes
+            e.close()
         return None, isinstance(getattr(e, "reason", e), ConnectionRefusedError)
     if not isinstance(info, dict) or info.get("app") != app:
         return None, False
