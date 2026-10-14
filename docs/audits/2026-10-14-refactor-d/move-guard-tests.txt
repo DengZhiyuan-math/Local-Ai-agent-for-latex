@@ -1,0 +1,15 @@
+test_a_damaged_project_list_is_never_written_back_empty (test_hub.Registry.test_a_damaged_project_list_is_never_written_back_empty)
+projects.json damaged (a hand edit) or held by another program: opening a project ... ok
+test_damaged_settings_are_kept_and_the_claude_account_is_not_lifted (test_hub.Registry.test_damaged_settings_are_kept_and_the_claude_account_is_not_lifted)
+settings.json damaged: saving a setting does not replace it with the defaults, ... ok
+test_failed_rollback_reports_the_actual_path_and_keeps_recovery_details (test_hub.Registry.test_failed_rollback_reports_the_actual_path_and_keeps_recovery_details) ... ok
+test_folder_move_validates_the_list_before_moving_files (test_hub.Registry.test_folder_move_validates_the_list_before_moving_files) ... ok
+test_metadata_write_failure_rolls_the_folder_back (test_hub.Registry.test_metadata_write_failure_rolls_the_folder_back) ... ok
+test_partial_cross_device_move_is_not_retried_into_its_own_target (test_hub.Registry.test_partial_cross_device_move_is_not_retried_into_its_own_target) ... ok
+test_project_key_is_stable (test_hub.Registry.test_project_key_is_stable) ... ok
+test_touch_adds_once_and_records_opening (test_hub.Registry.test_touch_adds_once_and_records_opening) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.063s
+
+OK

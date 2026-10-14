@@ -19,6 +19,7 @@ sys.path.insert(0, str(REPO / "prism_local"))
 import hub  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
+import instances  # noqa: E402
 import settings  # noqa: E402
 
 HEADERS = {"Content-Type": "application/json", "X-Prism-Local": "1"}
@@ -96,6 +97,76 @@ class Registry(TempState):
     def test_project_key_is_stable(self):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 
+    def test_folder_move_validates_the_list_before_moving_files(self):
+        root, new = self.tmp / "paper", self.tmp / "renamed"
+        root.mkdir()
+        file = registry._registry_path()
+        file.parent.mkdir(parents=True, exist_ok=True)
+        file.write_bytes(b'{"projects": [')
+        with self.assertRaises(registry.StateUnreadable):
+            registry.move_folder(root, new)
+        self.assertTrue(root.exists())
+        self.assertFalse(new.exists())
+
+    def test_metadata_write_failure_rolls_the_folder_back(self):
+        root, new = self.tmp / "paper", self.tmp / "renamed"
+        root.mkdir()
+        (root / "main.tex").write_text("paper")
+        registry.touch(root)
+        write = registry.write_json
+        def fail_list(file, data):
+            if file == registry._registry_path():
+                raise PermissionError("fixture: metadata is locked")
+            return write(file, data)
+        with mock.patch.object(registry, "write_json", side_effect=fail_list):
+            with self.assertRaisesRegex(OSError, "restored"):
+                registry.move_folder(root, new)
+        self.assertEqual((root / "main.tex").read_text(), "paper")
+        self.assertFalse(new.exists())
+        self.assertEqual(registry.load_projects()["projects"][0]["path"], str(root))
+        self.assertEqual(list((registry.state_dir() / "moves").glob("*.json")), [])
+
+    def test_failed_rollback_reports_the_actual_path_and_keeps_recovery_details(self):
+        root, new = self.tmp / "paper", self.tmp / "renamed"
+        root.mkdir()
+        registry.touch(root)
+        write, rename = registry.write_json, os.rename
+        def fail_list(file, data):
+            if file == registry._registry_path():
+                raise PermissionError("fixture: metadata is locked")
+            return write(file, data)
+        def fail_rollback(source, target):
+            if source == new:
+                raise PermissionError("fixture: rollback is locked")
+            return rename(source, target)
+        with mock.patch.object(registry, "write_json", side_effect=fail_list), \
+                mock.patch.object(registry.os, "rename", side_effect=fail_rollback):
+            with self.assertRaises(registry.MoveIncomplete) as raised:
+                registry.move_folder(root, new)
+        self.assertEqual(raised.exception.actual, new)
+        self.assertTrue(new.exists())
+        recovery = registry.read_json(raised.exception.journal)
+        self.assertEqual((recovery["from"], recovery["to"]), (str(root), str(new)))
+        self.assertEqual(recovery["projects"]["projects"][0]["path"], str(new))
+
+    def test_partial_cross_device_move_is_not_retried_into_its_own_target(self):
+        root, new = self.tmp / "paper", self.tmp / "renamed"
+        root.mkdir()
+        registry.touch(root)
+        def partial_move(source, target):
+            target.mkdir()
+            (target / "main.tex").write_text("copied")
+            raise PermissionError("fixture: source removal blocked after copying")
+        with mock.patch.object(registry.shutil, "move", side_effect=partial_move) as move:
+            with self.assertRaisesRegex(OSError, "Recovery details"):
+                registry.move_folder(root, new, wait=0.3, across=True)
+        self.assertEqual(move.call_count, 1)
+        self.assertTrue(root.exists())
+        self.assertEqual((new / "main.tex").read_text(), "copied")
+        self.assertFalse((new / root.name).exists(), "no nested second copy")
+        self.assertEqual(registry.load_projects()["projects"][0]["path"], str(root))
+        self.assertTrue((registry.state_dir() / "moves" / (registry.project_key(root)+".json")).exists())
+
 
 @unittest.skipIf(os.name == "nt", "desktop dialogs: Linux")
 class FolderDialog(unittest.TestCase):
@@ -109,7 +180,7 @@ class FolderDialog(unittest.TestCase):
 
 
 class Instances(TempState):
-    """An instance file goes only when its server has ended, not when it is slow."""
+    """Read-only instance inspection and process identity checks."""
 
     def silent(self) -> str:
         """The address of a server that takes connections but does not answer (busy)."""
@@ -130,51 +201,51 @@ class Instances(TempState):
         return f"http://127.0.0.1:{port}/"
 
     def test_a_live_server_that_does_not_answer_keeps_its_file(self):
-        inst = registry.instance_file("slow")
+        inst = instances.path(self.tmp / "slow")
         registry.write_json(inst, {"pid": os.getpid(), "url": self.silent()})
-        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertEqual(instances.inspect(self.tmp / "slow", timeout=0.3).state, "unresponsive")
         self.assertTrue(inst.exists())
 
     def test_nothing_listening_at_its_address_is_a_server_gone(self):
         """Where the system cannot say when a process started (macOS), a new process given
-        an ended server's pid passes the process check; but nothing listens at the server's
-        address any more: its file goes, and the project can be opened again."""
-        inst = registry.instance_file("gone")
+        an ended server's pid passes the process check; nothing listening at its address
+        makes the instance absent. Only a later ensure may replace the stale record."""
+        inst = instances.path(self.tmp / "gone")
         registry.write_json(inst, {"pid": os.getpid(), "url": self.closed()})      # a live pid
-        with mock.patch.object(registry, "process_started", return_value=None):
-            self.assertIsNone(registry.running_instance(inst, timeout=5))
-        self.assertFalse(inst.exists())
+        with mock.patch.object(instances, "process_started", return_value=None):
+            self.assertEqual(instances.inspect(self.tmp / "gone", timeout=5).state, "absent")
+        self.assertTrue(inst.exists(), "inspection does not delete records")
 
-    def test_the_file_of_a_server_that_ended_is_removed(self):
+    def test_inspecting_a_server_that_ended_keeps_its_record(self):
         ended = subprocess.Popen([sys.executable, "-c", "pass"])
         ended.wait()
-        inst = registry.instance_file("gone")
+        inst = instances.path(self.tmp / "gone")
         registry.write_json(inst, {"pid": ended.pid, "url": "http://127.0.0.1:9/"})
-        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
-        self.assertFalse(inst.exists())
+        self.assertEqual(instances.inspect(self.tmp / "gone", timeout=0.3).state, "absent")
+        self.assertTrue(inst.exists(), "inspection does not delete records")
 
     def test_server_alive(self):
-        self.assertTrue(registry.server_alive(os.getpid()))
-        self.assertFalse(registry.server_alive(None))
-        self.assertFalse(registry.server_alive(-5))
+        self.assertTrue(instances.server_alive(os.getpid()))
+        self.assertFalse(instances.server_alive(None))
+        self.assertFalse(instances.server_alive(-5))
 
     def test_a_pid_given_to_a_new_process_is_not_the_server(self):
         # After a crash the system may give the server's pid to a new process, which
         # started later than the instance file says: the file is stale.
-        started = registry.process_started(os.getpid())
+        started = instances.process_started(os.getpid())
         if started is None:
             self.skipTest("this system does not say when a process started")
-        self.assertEqual(registry.process_started(os.getpid()), started)
-        self.assertIsNone(registry.process_started(None))
-        self.assertTrue(registry.server_alive(os.getpid(), started))
-        self.assertFalse(registry.server_alive(os.getpid(), started + 1))
-        inst = registry.instance_file("slow")
+        self.assertEqual(instances.process_started(os.getpid()), started)
+        self.assertIsNone(instances.process_started(None))
+        self.assertTrue(instances.server_alive(os.getpid(), started))
+        self.assertFalse(instances.server_alive(os.getpid(), started + 1))
+        inst = instances.path(self.tmp / "slow")
         registry.write_json(inst, {"pid": os.getpid(), "started": started, "url": self.silent()})
-        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
+        self.assertEqual(instances.inspect(self.tmp / "slow", timeout=0.3).state, "unresponsive")
         self.assertTrue(inst.exists(), "the server itself, only slow")
         registry.write_json(inst, {"pid": os.getpid(), "started": started + 1, "url": self.silent()})
-        self.assertIsNone(registry.running_instance(inst, timeout=0.3))
-        self.assertFalse(inst.exists(), "another process with its pid")
+        self.assertEqual(instances.inspect(self.tmp / "slow", timeout=0.3).state, "absent")
+        self.assertTrue(inst.exists(), "inspection is read-only, even for a reused pid")
 
 
 class Create(TempState):
@@ -224,8 +295,9 @@ class Create(TempState):
     def test_a_new_repository_is_announced_to_the_editor_unless_it_is_this_process(self):
         # The editor's own publish runs here holding its sync lock: asking it would wait for that.
         for pid, told in ((os.getpid(), False), (os.getpid() + 1, True)):
-            with mock.patch.object(hub.registry, "running_instance",
-                                   return_value={"url": "http://127.0.0.1:9/", "pid": pid}),                     mock.patch.object(hub.registry.HTTP, "open") as asked:
+            with mock.patch.object(instances, "inspect", return_value=instances.State("ready",
+                    {"url": "http://127.0.0.1:9/", "pid": pid})), \
+                    mock.patch.object(instances.HTTP, "open") as asked:
                 hub.tell_editor(self.tmp)
             self.assertEqual(asked.called, told, pid)
 
@@ -481,6 +553,50 @@ class FolderSync(TempState):
         with self.assertRaises(ValueError):
             hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(self.projects / "exam" / "all")})
         self.assertTrue((self.projects / "exam" / "main.tex").exists())
+
+    def test_slow_editor_blocks_both_home_rename_and_repository_restructure(self):
+        root = self.projects / "ex 1"
+        registry.write_json(instances.path(root), {"pid": os.getpid(), "url": "http://127.0.0.1:9/"})
+        with mock.patch.object(instances, "_probe", return_value=(None, False)):
+            with self.assertRaises(instances.Busy):
+                hub.rename_project(self.ids["ex 1"], "new name", folder=True)
+            with self.assertRaises(ValueError):
+                hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(root.exists())
+        self.assertFalse((self.projects / "Course").exists())
+
+    def test_restructure_reserves_old_and_new_paths_through_metadata_update(self):
+        real_move = registry.move_folder
+        def checked(old, new, **kw):
+            with mock.patch.object(instances, "_spawn") as spawn:
+                for root in (old, new):
+                    self.assertEqual(instances.inspect(root).state, "busy")
+                    self.assertIn("error", instances.ensure(root, timeout=0.2))
+                spawn.assert_not_called()
+            return real_move(old, new, **kw)
+        with mock.patch.object(registry, "move_folder", side_effect=checked):
+            result = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(result["ok"], result)
+
+    def test_two_home_mutations_cannot_use_the_same_preview(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        entered, release = threading.Event(), threading.Event()
+        real_apply = hub._apply_shared
+        def paused(*args):
+            entered.set()
+            self.assertTrue(release.wait(5))
+            return real_apply(*args)
+        body = {"id": self.top["id"], "mode": "shared"}
+        with mock.patch.object(hub, "_apply_shared", side_effect=paused), ThreadPoolExecutor(max_workers=1) as pool:
+            first = pool.submit(hub.apply_sync, body)
+            try:
+                self.assertTrue(entered.wait(5))
+                with self.assertRaises(ValueError):
+                    hub.apply_sync(body)
+            finally:
+                release.set()
+            self.assertTrue(first.result()["ok"])
 
 
 @unittest.skipUnless(hub.shutil.which("git"), "needs git")

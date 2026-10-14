@@ -1,0 +1,16 @@
+test_editor_started_in_its_project_folder_releases_cwd_before_renaming (test_instance_lifecycle.Handover.test_editor_started_in_its_project_folder_releases_cwd_before_renaming) ... FAIL
+
+======================================================================
+FAIL: test_editor_started_in_its_project_folder_releases_cwd_before_renaming (test_instance_lifecycle.Handover.test_editor_started_in_its_project_folder_releases_cwd_before_renaming)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_instance_lifecycle.py", line 127, in test_editor_started_in_its_project_folder_releases_cwd_before_renaming
+    self.wait_replacement(new, info)
+  File "D:\DynNum\prism-local\tests\test_instance_lifecycle.py", line 69, in wait_replacement
+    self.fail(f"no successor for {previous}")
+AssertionError: no successor for {'app': 'prism-local', 'pid': 54104, 'started': 134364882691695878, 'port': 13656, 'url': 'http://127.0.0.1:13656/', 'token': 'e7867ff8fca58d81b0bbead2c624cd0a7ba30e60', 'root': 'C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-lm7xtjaa\\paper'}
+
+----------------------------------------------------------------------
+Ran 1 test in 15.250s
+
+FAILED (failures=1)

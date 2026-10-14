@@ -39,6 +39,7 @@ from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
+import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -498,6 +499,7 @@ def snippets_file() -> Path:
 STARTED_CODE = httpbase.code_stamp()
 STARTED_AT = time.time()                 # tells the page when a new server answers
 RESTART: dict = {"server": None, "again": False, "move_to": None, "args": None, "port": None}
+LIFETIME: instances.Serving | None = None
 # A folder rename that did not work (in use?): the server came back at the old folder.
 MOVE: dict = {"error": None, "from": None}
 
@@ -516,61 +518,40 @@ def rename_project(name: str) -> tuple[dict, int]:
         return {"error": f"a folder named {folder} already exists next to this project"}, 409
     if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
         return {"error": "wait until the build or the agent's turn has finished"}, 409
-    registry.rename(ROOT, name)          # the list keeps the exact name; move_folder tidies it
+    if LIFETIME is None:
+        return {"error": "not ready to restart"}, 409
+    try:
+        transition = LIFETIME.transition(new)
+    except (instances.Busy, TimeoutError, OSError) as exc:
+        return {"error": str(exc)}, 409
+    try:
+        registry.rename(ROOT, name)      # the list keeps the exact name; move_folder tidies it
+    except BaseException:
+        transition.close()
+        raise
     RESTART.update(again=True, move_to=new)
     threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
     return {"name": name, "moving": True, "folder": folder}, 200
 
 
-def move_argv(new: Path) -> list[str]:
+def move_argv(new: Path, moving: bool = True) -> list[str]:
     """This server's command line for the project at `new`, on the port it has now."""
     a = RESTART["args"]
     argv = [sys.executable, *(["-u"] if "-u" in (getattr(sys, "orig_argv", None) or []) else []),
             str(Path(__file__).resolve()), str(new), "--port", str(RESTART["port"]),
-            "--port-tries", "1", "--no-browser", "--moved-from", str(ROOT)]
+            "--port-tries", "1", "--no-browser"]
+    if moving:
+        argv += ["--moved-from", str(ROOT)]
     if a.exit_when_idle:
         argv.append("--exit-when-idle")
     if a.idle_timings:
         argv += ["--idle-timings", a.idle_timings]
-    if a.ready_file:     # the instance file is per project: the new folder has its own
-        own = registry.norm(a.ready_file) == registry.norm(registry.instance_file(registry.project_key(ROOT)))
-        argv += ["--ready-file", str(registry.instance_file(registry.project_key(new)) if own else a.ready_file)]
+    if a.ready_file:
+        alias = LIFETIME.alias if LIFETIME else None
+        if alias and moving and registry.inside(alias, ROOT):
+            alias = new / alias.relative_to(ROOT)
+        argv += ["--ready-file", str(alias or instances.path(new))]
     return argv
-
-
-def relaunch() -> list[str]:
-    """Start this server again with the same command line (after it stopped listening),
-    or, after a rename, for the renamed folder (move_argv). Returns that command line."""
-    argv = move_argv(RESTART["move_to"]) if RESTART["move_to"] is not None else httpbase.own_argv()
-    # Not from inside the project's folder: a process working there keeps it from being renamed.
-    httpbase.relaunch(argv, str(ROOT.parent))
-    return argv
-
-
-def hold_instance(ready_file: str | None) -> registry.FileLock | None:
-    """During a restart, the project's instance lock (registry.ensure_server takes it before
-    it starts a server): the Home page or the launcher opening the project meanwhile waits
-    for the new server, instead of starting a second one next to it."""
-    if not ready_file:
-        return None
-    lock = registry.FileLock(Path(ready_file).with_suffix(".lock"), timeout=10)
-    try:
-        return lock.__enter__()
-    except (TimeoutError, OSError):
-        return None                     # one is opening it right now: it finds the new one
-
-
-def wait_for_successor(argv: list[str], timeout: float = 30) -> None:
-    """Until the server `argv` started has written its instance file and answers."""
-    if "--ready-file" not in argv:
-        return
-    ready = Path(argv[argv.index("--ready-file") + 1])
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        info = registry.read_json(ready)
-        if info and info.get("pid") != os.getpid() and registry.ping(str(info.get("url") or ""), timeout=1):
-            return
-        time.sleep(0.2)
 
 
 def stale_document() -> str | None:
@@ -909,7 +890,7 @@ class Handler(httpbase.Handler):
     def _get(self, path, q):
         if path == "/api/ping":
             return self._json({"app": "prism-local", "root": str(ROOT), "project_key": registry.project_key(ROOT), "pid": os.getpid(),
-                               "pages": PRESENCE.count()})
+                               "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
         if path == "/api/pdfstat":
             cfg = CFG
             return self._json({"main": cfg.main, "mtime": pdf_state(cfg)})
@@ -1071,7 +1052,7 @@ class Handler(httpbase.Handler):
                             body.get("attachments") or [])
             return self._json(r, 409 if "error" in r else 200)
         if path == "/api/home":
-            r = registry.ensure_server(None)
+            r = instances.ensure(None)
             return self._json(r, 502 if "error" in r else 200)
         if path == "/api/agent/usage":
             return self._json(AGENT.probe_rate(body.get("provider") or None))
@@ -1108,6 +1089,12 @@ class Handler(httpbase.Handler):
         if path == "/api/restart":
             if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
                 return self._err(409, "wait until the build or the agent's turn has finished")
+            if LIFETIME is None:
+                return self._err(409, "not ready to restart")
+            try:
+                LIFETIME.transition()
+            except (instances.Busy, TimeoutError, OSError) as exc:
+                return self._err(409, str(exc))
             RESTART["again"] = True
             threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
             return self._json({"ok": True})
@@ -1130,7 +1117,10 @@ def finish_move(old: Path, new: Path) -> Path:
     os.chdir(old.parent)
     try:
         registry.move_folder(old, new)
-    except OSError as e:
+    except registry.MoveIncomplete as e:
+        MOVE.update(error=str(e), **{"from": str(old)})
+        return e.actual
+    except (OSError, ValueError, TimeoutError) as e:
         MOVE.update(error=f"The folder was not renamed: {e}", **{"from": str(old)})
         return old
     try:
@@ -1159,12 +1149,24 @@ def main():
     ap.add_argument("--idle-timings", help=argparse.SUPPRESS)   # "first,grace,stale" for tests
     ap.add_argument("--root", type=Path, help=argparse.SUPPRESS)   # backwards compatible
     ap.add_argument("--moved-from", type=Path, help=argparse.SUPPRESS)   # see rename_project
+    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
     a = ap.parse_args()
     project = Path(a.root or a.project).resolve()
-    if a.moved_from:
-        project = finish_move(a.moved_from.resolve(), project)
-        if a.ready_file:
-            a.ready_file = registry.instance_file(registry.project_key(project))
+    global LIFETIME
+    try:
+        with instances.serving(project, a.ready_file, a.instance_token) as life:
+            LIFETIME = life
+            if a.moved_from:
+                actual = finish_move(a.moved_from.resolve(), project)
+                if actual != project:
+                    life.retarget(actual)
+                project = actual
+            return serve(a, project, life)
+    except (instances.Busy, TimeoutError) as exc:
+        sys.exit(f"prism-local: {exc}")
+
+
+def serve(a, project, life):
     set_root(project)
     show_last_built()
     if a.idle_timings:
@@ -1186,9 +1188,7 @@ def main():
         print(f"  warning: {CFG.error}", flush=True)
     if not is_scratch(ROOT):
         registry.safe_touch(ROOT)       # list the project on the Home page
-    if a.ready_file:
-        httpbase.write_ready_file(a.ready_file, {"app": "prism-local", "pid": os.getpid(),
-                                                 "port": port, "url": url, "root": str(ROOT)})
+    life.publish(url, port)
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
@@ -1205,25 +1205,23 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        handover = hold_instance(a.ready_file) if RESTART["again"] else None
+        transition = life.pending or life.transition()
         try:
             srv.server_close()
-            if a.ready_file:            # first, so that a new server can start at once
-                httpbase.remove_ready_file(a.ready_file)
+            life.unpublish()
             stop_build()
             AGENT.shutdown()
             GITSYNC.flush()             # what is left is committed and pushed
             if RESTART["again"]:
-                argv = relaunch()       # first: nothing after it may keep the restart from happening
-                httpbase.log(f"restarting in {RESTART['move_to']}" if RESTART["move_to"]
-                             else "restarting with the updated code")
-                if handover:
-                    wait_for_successor(argv)
+                destination = RESTART["move_to"] or ROOT
+                argv = move_argv(destination, moving=RESTART["move_to"] is not None)
+                result = transition.handover(argv, str(ROOT.parent))
+                httpbase.log("restart failed: " + result["error"] if "error" in result
+                             else "restart handed to the successor")
             else:
                 httpbase.log("stopped")
         finally:
-            if handover:
-                handover.__exit__(None, None, None)
+            transition.close()
 
 
 if __name__ == "__main__":

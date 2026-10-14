@@ -1,0 +1,171 @@
+{
+  "selector": "test_instance_lifecycle.Handover",
+  "repeats": 20,
+  "workers": 4,
+  "completed": 20,
+  "passed": 20,
+  "tests": 120,
+  "seconds": 55.015,
+  "runs": [
+    {
+      "run": 1,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.844
+    },
+    {
+      "run": 2,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.797
+    },
+    {
+      "run": 3,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.859
+    },
+    {
+      "run": 4,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.89
+    },
+    {
+      "run": 5,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.297
+    },
+    {
+      "run": 6,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.125
+    },
+    {
+      "run": 7,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.0
+    },
+    {
+      "run": 8,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.047
+    },
+    {
+      "run": 9,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.828
+    },
+    {
+      "run": 10,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.922
+    },
+    {
+      "run": 11,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.062
+    },
+    {
+      "run": 12,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.187
+    },
+    {
+      "run": 13,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.907
+    },
+    {
+      "run": 14,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.828
+    },
+    {
+      "run": 15,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.922
+    },
+    {
+      "run": 16,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 11.016
+    },
+    {
+      "run": 17,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.89
+    },
+    {
+      "run": 18,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.875
+    },
+    {
+      "run": 19,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.984
+    },
+    {
+      "run": 20,
+      "exit_code": 0,
+      "tests": 6,
+      "resource_warnings": 0,
+      "passed": true,
+      "seconds": 10.718
+    }
+  ]
+}

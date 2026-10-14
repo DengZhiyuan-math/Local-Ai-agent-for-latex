@@ -14,9 +14,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import httpbase  # noqa: E402
-import registry  # noqa: E402
 from presence import Presence  # noqa: E402
-from tmpdirs import tmpdir  # noqa: E402
 
 
 class Failing(httpbase.Handler):
@@ -67,23 +65,6 @@ class Answers(unittest.TestCase):
 
     def test_an_answer_already_sent_is_not_followed_by_another(self):
         self.assertEqual(self.ask("/half"), (200, {}))
-
-
-class ReadyFile(unittest.TestCase):
-    def test_written_while_the_home_page_reads_it(self):
-        path = tmpdir() / "instances" / "x.json"
-        httpbase.write_ready_file(path, {"pid": os.getpid(), "url": "first"})
-        reader = open(path, "rb")           # Windows does not replace a file open elsewhere
-        timer = threading.Timer(0.3, reader.close)
-        timer.start()
-        self.addCleanup(timer.join)
-        httpbase.write_ready_file(path, {"pid": os.getpid(), "url": "second"})
-        info = json.loads(path.read_text(encoding="utf-8"))
-        self.assertEqual(info["url"], "second")
-        self.assertEqual([p.name for p in path.parent.iterdir()], ["x.json"], "no temporary file is left")
-        if registry.process_started(os.getpid()) is not None:
-            self.assertEqual(info["started"], registry.process_started(os.getpid()))
-        self.assertTrue(registry.server_alive(info["pid"], info.get("started")))
 
 
 class CodeStamp(unittest.TestCase):

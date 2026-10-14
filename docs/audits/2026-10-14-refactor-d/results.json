@@ -1,0 +1,120 @@
+{
+  "phase": "D",
+  "completed_at_utc": "2026-10-14T22:24:50.360319+00:00",
+  "baseline_head": "773805a6402ecd11f2aa77ad2413a67048e47cbc",
+  "head_after": "773805a6402ecd11f2aa77ad2413a67048e47cbc",
+  "committed": false,
+  "pushed": false,
+  "staged_files": [],
+  "python": "3.12.14 (main, Aug 25 2026, 14:01:42) [MSC v.1944 64 bit (AMD64)]",
+  "git": "git version 2.45.1.windows.1",
+  "full": {
+    "total": 435,
+    "passed": 411,
+    "skipped": 24,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 527.332,
+    "resource_warnings": 2,
+    "popen_resource_warnings": 0,
+    "log": "full-tests.txt"
+  },
+  "move_targeted": {
+    "total": 20,
+    "passed": 20,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 25.703,
+    "resource_warnings": 0,
+    "popen_resource_warnings": 0,
+    "log": "move-tests.txt"
+  },
+  "move_guard_targeted": {
+    "total": 8,
+    "passed": 8,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 0.063,
+    "resource_warnings": 0,
+    "popen_resource_warnings": 0,
+    "log": "move-guard-tests.txt"
+  },
+  "handover_targeted": {
+    "total": 37,
+    "passed": 37,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 19.076,
+    "resource_warnings": 0,
+    "popen_resource_warnings": 0,
+    "log": "handoff-tests.txt"
+  },
+  "baseline_fixture_warning_reproduction": {
+    "total": 2,
+    "passed": 2,
+    "skipped": 0,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 6.298,
+    "resource_warnings": 2,
+    "popen_resource_warnings": 0,
+    "log": "baseline-fixture-warnings.txt"
+  },
+  "handover_pressure": {
+    "selector": "test_instance_lifecycle.Handover",
+    "repeats": 20,
+    "workers": 4,
+    "completed": 20,
+    "passed": 20,
+    "tests": 120,
+    "seconds": 55.015,
+    "log": "handover-stress-results.json"
+  },
+  "sync_pressure": {
+    "selector": "test_sync_buttons.SyncButtons.test_buttons_while_typing_and_a_coauthor_pushes",
+    "repeats": 100,
+    "workers": 4,
+    "completed": 100,
+    "passed": 100,
+    "tests": 100,
+    "seconds": 490.282,
+    "log": "sync-stress-results.json"
+  },
+  "protected_files_expected_sha256": {
+    "prism_local/backend_codex.py": "30823592393AD3ED87F374C794D3E2B229995259CA527A67E99B63126CF02FF2",
+    "README.md": "11C6B5F3AD5218275EE95BABD7FAE6C9B783604AC6074EF000A72C0C3AB5B5F7",
+    "tests/test_codex_discovery.py": "A7DD0FFC37C7F74E7859C7315D08D98F0B301987FC8DDB8F858F8A09182D29CA",
+    "tests/test_codex_runtime.py": "5E93657E8C5D57D5E7C487DA564ACF90650E3900C897CF23B13A7B7282436164"
+  },
+  "protected_files_actual_sha256": {
+    "prism_local/backend_codex.py": "30823592393AD3ED87F374C794D3E2B229995259CA527A67E99B63126CF02FF2",
+    "README.md": "11C6B5F3AD5218275EE95BABD7FAE6C9B783604AC6074EF000A72C0C3AB5B5F7",
+    "tests/test_codex_discovery.py": "A7DD0FFC37C7F74E7859C7315D08D98F0B301987FC8DDB8F858F8A09182D29CA",
+    "tests/test_codex_runtime.py": "5E93657E8C5D57D5E7C487DA564ACF90650E3900C897CF23B13A7B7282436164"
+  },
+  "protected_files_unchanged": true,
+  "d_sources_unchanged_since_final_regression": true,
+  "d_source_sha256": {
+    "prism_local/instances.py": "6499A3A62110BD45F332A8D540C709D9CF8F5C18CD94086CBCD379CFFBDFF679",
+    "prism_local/registry.py": "3B89FBB549AE480CAD63822CA058D5B6B6D875BB4368892095734DDDA1C82613",
+    "prism_local/httpbase.py": "ACEC60AFC42811E0C9A9D0C5F0AE4E7B943FE8D210D26B9AC863E4D55D9205CB",
+    "prism_local/hub.py": "8B47DAE2316F706EF72CB6C360295D5C7CA2BB98246106D4405F9EAF2DA6FD9E",
+    "prism_local/server.py": "D3D5899F53AB0D2ABE7D498918566AAD71BC55AD99A29A3578B261CCFBFC5D03",
+    "prism_local/publish.py": "0ABBF107348032F579AC1508646EC6C20BED68495968C9A93C726C2DF697DCE6",
+    "launcher/prism_launcher.pyw": "932094A8D24183508BDABB3440675E2F5B2193E7891E21D523B7A9227B3D4B09",
+    "tests/test_instances.py": "6CCDF54585C77943F5395F6D3B17C76B6BC0021EF24255E9A1B5F2932C8D10BC",
+    "tests/fake_instance.py": "0B73C92406F8EE209B25E3490312BE563CDC8761CA10B6F3A94C0618E131EC1A",
+    "tests/test_instance_lifecycle.py": "AE2DBD8472E8335F7C221F27A65D2D55C49AE3A178D88E50DE4B0593EB1FD3CC",
+    "tests/test_httpbase.py": "10A683BFC9A4E45442CD47B0A9472EC92771DA96C35D4A7A2ECB7FCEFB0FA085",
+    "tests/test_hub.py": "FA95C301BD4927E3DEDC8BEAD7E233D3D4D77DAC66915555099856C710C4443C",
+    "tests/test_lifecycle.py": "2163D52C3779A59845041DACAF56FA1B753E3F19DABECB9B9AB71448192B05DB"
+  },
+  "limitations": [
+    "PRISM_SKIP_TEX=1; native Codex sandbox probes not opted in",
+    "Two baseline fixture file-handle ResourceWarnings under PYTHONWARNINGS=always",
+    "Activate the new handover protocol by fully stopping old Home/editor processes and restarting"
+  ]
+}

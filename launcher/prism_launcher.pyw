@@ -35,7 +35,8 @@ PKG = HERE.parent / "prism_local"
 SERVER = PKG / "server.py"
 HUB = PKG / "hub.py"
 sys.path.insert(0, str(PKG))
-from registry import WIN, ensure_server  # noqa: E402
+from registry import WIN
+from instances import ensure as ensure_server  # noqa: E402
 
 QUIET = False
 

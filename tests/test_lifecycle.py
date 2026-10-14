@@ -238,6 +238,7 @@ class ServerLifecycle(unittest.TestCase):
         server next to it (two editors of one project, on different ports)."""
         sys.path.insert(0, str(REPO / "prism_local"))
         import registry
+        import instances
         from unittest import mock
         root = self.copy_project()
         state = tmpdir() / "state"
@@ -250,7 +251,7 @@ class ServerLifecycle(unittest.TestCase):
 
         self.addCleanup(kill_all)
         with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(state)}):
-            first = registry.ensure_server(root)
+            first = instances.ensure(root)
             self.assertTrue(first.get("started"), first)
             old = request(first["url"], "/api/ping")[1]["pid"]
             pids.add(old)
@@ -259,7 +260,7 @@ class ServerLifecycle(unittest.TestCase):
             opened, new = [], None
             deadline = time.monotonic() + 40
             while time.monotonic() < deadline and new is None:
-                r = registry.ensure_server(root)       # the Home page's Open, over and over
+                r = instances.ensure(root)       # the Home page's Open, over and over
                 opened.append(r)
                 if r.get("url"):
                     try:

@@ -28,7 +28,6 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-import registry
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -287,37 +286,6 @@ def code_stamp() -> float:
     return stamp
 
 
-def relaunch(argv: list[str], cwd: str) -> None:
-    """Start a server again (after it stopped listening), detached, without opening a
-    browser: its page is already open and reloads."""
-    if "--no-browser" not in argv:
-        argv = [*argv, "--no-browser"]
-    try:
-        out = sys.stdout if sys.stdout and sys.stdout.fileno() >= 0 else subprocess.DEVNULL
-    except (OSError, ValueError, AttributeError):
-        out = subprocess.DEVNULL
-    kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
-          if os.name == "nt" else {"start_new_session": True})
-    subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=out, stderr=subprocess.STDOUT,
-                     close_fds=True, cwd=cwd, **kw)
-
-
 def own_argv() -> list[str]:
     """This process's command line."""
     return list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
-
-
-def write_ready_file(path: Path, info: dict) -> None:
-    """The instance file (registry.py), with when this process started: a process that
-    later gets the same pid is then not taken for this server. Written like every state
-    file, so the Home page reading it at that moment does not stop the server."""
-    started = registry.process_started(os.getpid())
-    registry.write_json(path, info if started is None else {**info, "started": started})
-
-
-def remove_ready_file(path: Path) -> None:
-    try:
-        if json.loads(path.read_text(encoding="utf-8")).get("pid") == os.getpid():
-            path.unlink()
-    except (OSError, ValueError):
-        pass

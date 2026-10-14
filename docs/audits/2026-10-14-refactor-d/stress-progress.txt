@@ -1,0 +1,13 @@
+handover-stress: 10/20, passed=10
+handover-stress: 20/20, passed=20
+sync-stress: 10/100, passed=10
+sync-stress: 20/100, passed=20
+sync-stress: 30/100, passed=30
+sync-stress: 40/100, passed=40
+sync-stress: 50/100, passed=50
+sync-stress: 60/100, passed=60
+sync-stress: 70/100, passed=70
+sync-stress: 80/100, passed=80
+sync-stress: 90/100, passed=90
+sync-stress: 100/100, passed=100
+{"handover": {"selector": "test_instance_lifecycle.Handover", "repeats": 20, "workers": 4, "completed": 20, "passed": 20, "tests": 120, "seconds": 55.015}, "sync": {"selector": "test_sync_buttons.SyncButtons.test_buttons_while_typing_and_a_coauthor_pushes", "repeats": 100, "workers": 4, "completed": 100, "passed": 100, "tests": 100, "seconds": 490.282}}

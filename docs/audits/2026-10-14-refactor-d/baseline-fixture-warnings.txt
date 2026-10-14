@@ -1,0 +1,10 @@
+test_files_lock_is_held_across_processes (test_gitsync.GitSyncTest.test_files_lock_is_held_across_processes)
+Another editor of the repository (another process) writing the files, or its git ... sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-ocf1dojm\\.git\\prism-local-files.lock' mode='a+' encoding='cp1252'>
+ok
+test_save_while_another_program_reads_the_file (test_server.Files.test_save_while_another_program_reads_the_file) ... sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-tb_hghnp\\main.tex' mode='r' encoding='cp1252'>
+ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 6.298s
+
+OK

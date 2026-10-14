@@ -4,9 +4,8 @@ Everything lives under one state directory (PRISM_STATE_DIR, otherwise
 %LOCALAPPDATA%\\prism-local or ~/.local/state/prism-local):
 
     projects.json          the project list shown on the Home page
-    instances/<key>.json   {pid, started, port, url, root} of each running server
-    instances/home.json    the same for the Home page server
-    logs/<key>.log         server output of launcher-started servers
+
+Instance records, startup logs and process coordination are owned by instances.py.
 
 Only the Python standard library is used.
 """
@@ -16,20 +15,14 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
-import urllib.request
 import zlib
 from pathlib import Path
 from fsutil import replace_file
-from gitenv import git_env
 
 WIN = os.name == "nt"
-PORT_BASE, PORT_SPAN, PORT_TRIES = 8800, 1000, 20
-HOME_PORT, HOME_PORT_TRIES = 8790, 10          # below the per-project range
-HOME_KEY = "home"
-
-# Never send requests for 127.0.0.1 through a system proxy.
-HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+PORT_BASE, PORT_SPAN = 8800, 1000
 
 
 def state_dir() -> Path:
@@ -54,14 +47,6 @@ def project_key(project: Path) -> str:
 def preferred_port(project: Path) -> int:
     """A stable port per project, so the browser keeps its per-origin state (tabs, chat)."""
     return PORT_BASE + zlib.crc32(norm(project).encode("utf-8")) % PORT_SPAN
-
-
-def instance_file(key: str) -> Path:
-    return state_dir() / "instances" / f"{key}.json"
-
-
-def log_file(key: str) -> Path:
-    return state_dir() / "logs" / f"{key}.log"
 
 
 def read_json(path: Path) -> dict | None:
@@ -138,145 +123,6 @@ class FileLock:
         else:
             import fcntl
             fcntl.flock(self.fh, (fcntl.LOCK_EX | fcntl.LOCK_NB) if on else fcntl.LOCK_UN)
-
-
-# ---------------------------------------------------------------- running servers
-
-def ping(url: str, app: str = "prism-local", root: Path | None = None,
-         timeout: float = 2.0) -> dict | None:
-    """The /api/ping answer of the server at `url`, if it is `app` (serving `root`)."""
-    return _probe(url, app, root, timeout)[0]
-
-
-def _probe(url: str, app: str, root: Path | None, timeout: float) -> tuple[dict | None, bool]:
-    """ping(), and whether nothing listens at `url` at all (the connection refused)."""
-    try:
-        with HTTP.open(url + "api/ping", timeout=timeout) as r:
-            info = json.loads(r.read().decode("utf-8"))
-    except (OSError, ValueError) as e:
-        if hasattr(e, "close"):                     # an HTTP error answer: its connection goes
-            e.close()
-        return None, isinstance(getattr(e, "reason", e), ConnectionRefusedError)
-    if not isinstance(info, dict) or info.get("app") != app:
-        return None, False
-    if root is not None and norm(info.get("root", "")) != norm(root):
-        return None, False
-    return info, False
-
-
-def _kernel32():
-    import ctypes
-    from ctypes import wintypes
-    k32 = ctypes.WinDLL("kernel32", use_last_error=True)
-    k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
-    k32.OpenProcess.restype = wintypes.HANDLE
-    k32.WaitForSingleObject.argtypes = (wintypes.HANDLE, wintypes.DWORD)
-    k32.WaitForSingleObject.restype = wintypes.DWORD
-    k32.QueryFullProcessImageNameW.argtypes = (wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR,
-                                               ctypes.POINTER(wintypes.DWORD))
-    k32.GetProcessTimes.argtypes = (wintypes.HANDLE, *[ctypes.POINTER(wintypes.FILETIME)] * 4)
-    k32.CloseHandle.argtypes = (wintypes.HANDLE,)
-    return k32
-
-
-def _created(k32, h) -> int | None:
-    import ctypes
-    from ctypes import wintypes
-    times = [wintypes.FILETIME() for _ in range(4)]    # creation, exit, kernel, user
-    if not k32.GetProcessTimes(h, *map(ctypes.byref, times)):
-        return None
-    return times[0].dwHighDateTime << 32 | times[0].dwLowDateTime
-
-
-def process_started(pid) -> int | None:
-    """When process `pid` started, as a number to compare (not a time to show), or None
-    where the system does not say. The instance file records it: once a server has ended,
-    Windows may give its pid to a new process, which started later."""
-    if not isinstance(pid, int) or pid <= 0:
-        return None
-    if WIN:
-        k32 = _kernel32()
-        h = k32.OpenProcess(0x1000, False, pid)                 # query limited info
-        if not h:
-            return None
-        try:
-            return _created(k32, h)
-        finally:
-            k32.CloseHandle(h)
-    try:
-        stat = Path(f"/proc/{pid}/stat").read_bytes()
-        return int(stat[stat.rindex(b")") + 2:].split()[19])   # field 22: starttime
-    except (OSError, ValueError, IndexError):
-        return None                     # no /proc (macOS)
-
-
-def server_alive(pid, started: int | None = None) -> bool:
-    """Whether `pid` is a running Python process (a prism-local server), not a process
-    that got the number of a server that ended long ago. With `started` (the instance
-    file's, see process_started) the process must also have started then; instance files
-    written before that was recorded are judged by the program's name alone."""
-    if not isinstance(pid, int) or pid <= 0:
-        return False
-    if WIN:
-        import ctypes
-        from ctypes import wintypes
-        k32 = _kernel32()
-        h = k32.OpenProcess(0x1000 | 0x00100000, False, pid)  # query limited info | synchronize
-        if not h:
-            # Access denied: it exists, but a server of yours can always be looked at.
-            return ctypes.get_last_error() == 5 and started is None
-        try:
-            if k32.WaitForSingleObject(h, 0) != 0x102:         # not WAIT_TIMEOUT: it has ended
-                return False
-            now = _created(k32, h) if started is not None else None
-            if now is not None:
-                return now == started
-            buf, size = ctypes.create_unicode_buffer(1024), wintypes.DWORD(1024)
-            if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
-                return "python" in Path(buf.value).name.lower()
-            return True
-        finally:
-            k32.CloseHandle(h)
-    try:
-        os.kill(pid, 0)
-        other_user = False
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        other_user = True
-    now = process_started(pid) if started is not None else None
-    if now is not None:
-        return now == started
-    if other_user:
-        return True
-    try:
-        return "python" in Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")[0].decode(
-            "utf-8", "replace").lower()
-    except OSError:
-        return True                     # no /proc (macOS): trust the process table
-
-
-def running_instance(inst: Path, app: str = "prism-local", root: Path | None = None,
-                     timeout: float = 2.0, cleanup: bool = True) -> dict | None:
-    """The instance file's contents if that server answers. A file whose server has
-    ended (it did not exit cleanly) is removed; a server that is only slow keeps it.
-    Ended: nothing listens at its address (a server writes its file once it listens, and
-    removes it before it stops), or its process is gone. The address tells on every
-    system: where the process table cannot say when a process started (macOS), a new
-    process given the ended server's pid would otherwise pass for it."""
-    info = read_json(inst)
-    refused = False
-    if info and info.get("url"):
-        live, refused = _probe(info["url"], app, root, timeout)
-        if live:
-            return {**info, "pages": live.get("pages", 0)}
-    if cleanup and inst.exists() and (refused or not server_alive((info or {}).get("pid"),
-                                                                   (info or {}).get("started"))):
-        try:
-            inst.unlink()
-        except OSError:
-            pass
-    return None
 
 
 # ---------------------------------------------------------------- project list
@@ -367,26 +213,25 @@ def inside(p: Path, top: Path) -> bool:
     return norm(p) == norm(top) or norm(p).startswith(norm(top).rstrip("\\/") + os.sep)
 
 
-def move_folder(old: Path, new: Path, wait: float = 20.0) -> None:
+class MoveIncomplete(OSError):
+    """Files moved, but neither saving the list nor rolling the files back worked."""
+
+    def __init__(self, actual: Path, journal: Path, cause):
+        self.actual, self.journal = actual, journal
+        super().__init__(f"files are in {actual}; the project list could not be saved ({cause}). "
+                         f"Recovery details: {journal}")
+
+
+def move_folder(old: Path, new: Path, wait: float = 20.0, *, across: bool = False) -> None:
     """Rename a project's folder, and make the list follow it (projects inside it, a
     folder's shared repository there). A folder still in use (a server that is just
     exiting, an Explorer window) is tried again for `wait` seconds."""
-    old, new = Path(old), Path(new)
+    old = Path(old).resolve()
+    new = Path(new).parent.resolve() / Path(new).name
     same = norm(old) == norm(new)            # only the case changes
     if new.exists() and not same:
         raise FileExistsError(f"a folder named {new.name} already exists there")
-    deadline = time.monotonic() + wait
-    while True:
-        try:
-            os.rename(old, new)
-            break
-        except PermissionError:
-            if time.monotonic() > deadline:
-                raise PermissionError(f"{old.name} is in use by another program (an Explorer "
-                                      "window, a terminal, a PDF viewer?); close it and try again")
-            time.sleep(0.25)
-
-    def fn(data):
+    def repoint(data):
         for e in data["projects"]:
             p = Path(e["path"])
             if inside(p, old):
@@ -397,7 +242,56 @@ def move_folder(old: Path, new: Path, wait: float = 20.0) -> None:
             sync = f.get("sync") or {}
             if sync.get("repo") and inside(Path(sync["repo"]), old):
                 sync["repo"] = str(new / Path(sync["repo"]).relative_to(old))
-    update_projects(fn)
+    # Read and validate before touching the files. Keep the metadata lock through the
+    # move, so another request cannot write an outdated project list back over it.
+    file = _registry_path()
+    journal = state_dir() / "moves" / (project_key(old) + ".json")
+    mover = shutil.move if across else os.rename
+    with FileLock(file.with_suffix(".lock"), timeout=10):
+        data = load_projects()
+        repoint(data)
+        write_json(journal, {"from": str(old), "to": str(new), "projects": data,
+                             "instruction": "Check which folder exists, then restore its paths in projects.json."})
+        moved = False
+        try:
+            deadline = time.monotonic() + wait
+            while True:
+                try:
+                    mover(old, new)
+                    moved = True
+                    break
+                except OSError as exc:
+                    if across:
+                        # shutil.move may already have copied part/all of a directory
+                        # before failing to remove the source. Retrying could move it
+                        # inside the now-existing target. Keep the journal for recovery.
+                        if new.exists():
+                            raise OSError(f"the move from {old} to {new} did not finish; keep both folders. "
+                                          f"Recovery details: {journal}. {exc}") from exc
+                        raise
+                    if not isinstance(exc, PermissionError):
+                        raise
+                    if time.monotonic() > deadline:
+                        raise PermissionError(f"{old.name} is in use by another program; close it and try again")
+                    time.sleep(0.25)
+            try:
+                write_json(file, data)
+            except OSError as exc:
+                try:
+                    mover(new, old)
+                    moved = False
+                except OSError:
+                    raise MoveIncomplete(new, journal, exc) from exc
+                raise OSError(f"the project list could not be saved; the folder was restored to {old}: {exc}") from exc
+        finally:
+            # Leave evidence if rollback failed (or a cross-device copy was partial).
+            rolled_back = not moved and old.is_dir() and (same or not new.exists())
+            saved = moved and read_json(file) == data
+            if rolled_back or saved:
+                try:
+                    journal.unlink()
+                except OSError:
+                    pass
 
 
 def safe_touch(project: Path) -> None:
@@ -406,99 +300,3 @@ def safe_touch(project: Path) -> None:
         touch(project)
     except (OSError, TimeoutError, ValueError):
         pass
-
-
-# ---------------------------------------------------------------- starting servers
-
-PKG = Path(__file__).resolve().parent
-SERVER, HUB = PKG / "server.py", PKG / "hub.py"
-READY_TIMEOUT = 30.0
-
-
-def server_python() -> str:
-    """python.exe rather than pythonw.exe: the server then has a (hidden) console that
-    its build and git subprocesses share, and a real stdout for the log."""
-    import sys
-    exe = Path(sys.executable)
-    if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
-        return str(exe.with_name("python.exe"))
-    return sys.executable
-
-
-def tail(path: Path, lines: int = 15) -> str:
-    try:
-        return "\n".join(path.read_text(encoding="utf-8", errors="replace").splitlines()[-lines:])
-    except OSError:
-        return ""
-
-
-def ensure_server(project: Path | None, port: int | None = None, extra: list[str] = (),
-                  timeout: float = READY_TIMEOUT) -> dict:
-    """Make sure a server runs for `project` (None: the Home page).
-
-    Returns {"url", "started"} or {"error", "log", "logfile"}. A new server is started
-    detached with --exit-when-idle: nothing waits for it, it removes its own instance
-    file and stops by itself shortly after its last page is closed (or after a minute
-    if no page ever connects). The lock keeps two quick clicks, or the launcher and
-    the Home page, from starting two servers for the same project."""
-    if project is None:
-        key, app, script, target, cwd = HOME_KEY, "prism-home", HUB, [], Path.home()
-        port, tries = port or HOME_PORT, HOME_PORT_TRIES
-    else:
-        project = Path(project).resolve()
-        key, app, script, target, cwd = project_key(project), "prism-local", SERVER, [str(project)], project
-        port, tries = port or preferred_port(project), PORT_TRIES
-    inst, log = instance_file(key), log_file(key)
-    try:
-        return _ensure(inst, log, app, project, script, target, cwd, port, tries, extra, timeout)
-    except TimeoutError:                # its server restarts, and holds the lock meanwhile
-        return {"error": "prism-local for this project is restarting. Try again in a moment.",
-                "log": tail(log), "logfile": str(log)}
-
-
-def _ensure(inst, log, app, project, script, target, cwd, port, tries, extra, timeout) -> dict:
-    import subprocess
-    with FileLock(inst.with_suffix(".lock")):
-        info = running_instance(inst, app, project)
-        if info:
-            return {"url": info["url"], "started": False}
-        old = read_json(inst)
-        if old and server_alive(old.get("pid"), old.get("started")):
-            # It runs but did not answer in time (busy, or waking up): give it a little
-            # longer rather than start a second server for the same project.
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                info = running_instance(inst, app, project, timeout=2.0, cleanup=False)
-                if info:
-                    return {"url": info["url"], "started": False}
-                time.sleep(0.5)
-            return {"error": f"prism-local for this project runs (process {old.get('pid')}) but "
-                             "does not answer. Close its pages and try again in a minute.",
-                    "log": tail(log), "logfile": str(log)}
-        # The new server updates prism-local itself in the background (selfupdate.py), so
-        # opening a project never waits for GitHub.
-        log.parent.mkdir(parents=True, exist_ok=True)
-        mode = "w"
-        try:
-            if log.exists():
-                os.replace(log, log.with_name(log.name + ".1"))
-        except OSError:                 # still open by a server that is just exiting
-            mode = "a"
-        cmd = [server_python(), "-u", str(script), *target, "--port", str(port),
-               "--port-tries", str(tries), "--no-browser", "--exit-when-idle",
-               "--ready-file", str(inst), *extra]
-        kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
-              if WIN else {"start_new_session": True})
-        with open(log, mode, encoding="utf-8") as logf:     # the child keeps its own handle
-            proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=logf,
-                                    stderr=subprocess.STDOUT, close_fds=True,
-                                    env={**git_env(), "PYTHONIOENCODING": "utf-8"}, **kw)
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline and proc.poll() is None:
-            info = running_instance(inst, app, project, timeout=1.0, cleanup=False)
-            if info and info.get("pid") == proc.pid:
-                return {"url": info["url"], "started": True}
-            time.sleep(0.1)
-        if proc.poll() is None:
-            proc.kill()
-    return {"error": "the server did not start", "log": tail(log), "logfile": str(log)}

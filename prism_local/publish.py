@@ -16,6 +16,7 @@ from pathlib import Path
 import github
 import gitenv
 import gitsync
+import instances
 import registry
 import settings
 import sources
@@ -223,15 +224,4 @@ def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list
 
 def tell_editor(root: Path) -> None:
     """The project's open editor, if any, looks for its new repository (gitsync.recheck)."""
-    inst = registry.running_instance(registry.instance_file(registry.project_key(root)), "prism-local",
-                                     root, timeout=1.0, cleanup=False)
-    # Not when this process is that editor (its own publish): it looks again itself, and asking
-    # it here would wait for the sync lock its publish holds.
-    if not inst or inst.get("pid") == os.getpid():
-        return
-    req = registry.urllib.request.Request(inst["url"] + "api/git/recheck", data=b"{}", method="POST",
-                                          headers={"Content-Type": "application/json", "X-Prism-Local": "1"})
-    try:
-        registry.HTTP.open(req, timeout=10).close()
-    except OSError:
-        pass                    # an editor of an older version: its GitHub menu looks again
+    instances.call(root, "api/git/recheck")

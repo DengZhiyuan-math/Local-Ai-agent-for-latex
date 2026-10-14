@@ -42,6 +42,7 @@ from publish import (create_github_repo, ensure_ignore, git_init, github_of, pro
                      publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
 from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
+import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
@@ -54,6 +55,7 @@ PRESENCE = Presence()
 # is updated, the page offers a restart (/api/restart) on the same command line.
 STARTED_CODE = httpbase.code_stamp()
 RESTART: dict = {"server": None, "again": False}
+LIFETIME: instances.Serving | None = None
 MAX_SCAN = 3000
 BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -103,10 +105,9 @@ def project_info(entry: dict) -> dict:
              files=files, edited=edited,
              pdf_mtime=pdf.stat().st_mtime if pdf and pdf.is_file() else None)
     # Only a look: a server that is slow to answer right now keeps its instance file.
-    inst = registry.running_instance(registry.instance_file(d["id"]), "prism-local", root,
-                                     timeout=0.8, cleanup=False)
-    if inst:
-        d["running"] = {"url": inst["url"], "pages": inst.get("pages", 0)}
+    state = instances.inspect(root)
+    if state.state == "ready":
+        d["running"] = {"url": state.info["url"], "pages": state.info.get("pages", 0)}
     return d
 
 
@@ -428,8 +429,7 @@ def shared_repo_of(fid: str) -> Path | None:
 
 
 def is_running(root: Path) -> bool:
-    return registry.running_instance(registry.instance_file(registry.project_key(root)),
-                                     "prism-local", root, timeout=0.8, cleanup=False) is not None
+    return instances.inspect(root, timeout=0.8).occupied
 
 
 def default_repo(data: dict, f: dict, entries: list[dict]) -> Path:
@@ -502,15 +502,6 @@ def sync_plan(fid: str, mode: str | None = None, repo: str | None = None) -> dic
             "others": others[:20], "projects": rows, "github": github.GITHUB.status()}
 
 
-def _repoint(pid: str, new: Path) -> None:
-    """The project moved on disk: the list follows it (folder, tags and all)."""
-    def fn(data):
-        for e in data["projects"]:
-            if registry.project_key(Path(e["path"])) == pid:
-                e["path"] = str(new)
-    registry.update_projects(fn)
-
-
 def _publish(root: Path, create: bool, owner: str, name: str, report: list[str]) -> str | None:
     """Push to origin, or, with `create`, make a private GitHub repository for `root` first."""
     sync = project_sync(root)
@@ -555,8 +546,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         if r["action"] == "moves":
             dst = Path(r["target"])
             dst.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(root), str(dst))
-            _repoint(r["id"], dst)
+            registry.move_folder(root, dst, across=True)
             report.append(f"Moved {root.name} to {dst}")
             root = dst
         dot = root / ".git"
@@ -677,6 +667,20 @@ def apply_sync(body: dict) -> dict:
         raise ValueError("close the editors of these projects first: " + ", ".join(open_))
     if body.get("github") and not github.GITHUB.status().get("logged_in"):
         raise ValueError(github.GITHUB.status().get("error") or "GitHub CLI is not ready")
+    targets = [Path(r["target"]) for r in changing if r.get("target")]
+    with instances.exclusive([Path(r["path"]) for r in changing], targets=[Path(plan["repo"]), *targets]):
+        # A competing Home request may have changed membership or paths before the locks.
+        current = sync_plan(fid, str(body.get("mode") or ""), str(body.get("repo") or ""))
+        def identity(p):
+            return (p.get("plan_mode"), p.get("repo"), p.get("repo_kind"),
+                    [(r["id"], r["path"], r.get("target"), r.get("action"), r.get("kind"))
+                     for r in p.get("projects", [])])
+        if identity(current) != identity(plan):
+            raise ValueError("the folder changed; preview the operation again")
+        return _apply_sync_locked(body, fid, plan)
+
+
+def _apply_sync_locked(body: dict, fid: str, plan: dict) -> dict:
     report: list[str] = []
     data = registry.load_projects()
     f = _folder(data, fid)
@@ -903,18 +907,18 @@ def rename_project(pid: str, name: str, folder: bool) -> dict:
         return {"id": pid, "path": str(root), "moved": False}
     if not root.is_dir():
         raise ValueError(f"folder not found: {root}")
-    if is_running(root):
-        raise ValueError("its editor is open: rename it there (click the name at the top left), "
-                         "or close the editor first")
     new = root.parent / new_folder
-    change_project(pid, {"name": name})
-    registry.move_folder(root, new)
-    warning = None
-    try:
-        gitsync.record_move(root, new)
-    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
-        warning = (f"The folder was renamed, but the rename could not be committed ({e}). "
-                   "Commit it from a terminal, so the other copies of the repository get it.")
+    with instances.exclusive([root], targets=[new]):
+        if Path(entry_for(pid)["path"]) != root:
+            raise ValueError("the project moved; refresh the project list")
+        registry.move_folder(root, new)
+        change_project(registry.project_key(new), {"name": name})
+        warning = None
+        try:
+            gitsync.record_move(root, new)
+        except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+            warning = (f"The folder was renamed, but the rename could not be committed ({e}). "
+                       "Commit it from a terminal, so the other copies of the repository get it.")
     return {"id": registry.project_key(new), "path": str(new), "moved": True, "warning": warning}
 
 
@@ -934,7 +938,7 @@ def open_project(pid: str) -> dict:
     root = Path(entry_for(pid)["path"])
     if not root.is_dir():
         return {"error": f"folder not found: {root}"}
-    r = registry.ensure_server(root)
+    r = instances.ensure(root)
     if "url" in r:
         registry.safe_touch(root)
     return r
@@ -1015,7 +1019,7 @@ class Handler(httpbase.Handler):
         try:
             if path == "/api/ping":
                 return self._json({"app": "prism-home", "pid": os.getpid(),
-                                   "pages": PRESENCE.count()})
+                                   "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
             if path == "/api/projects":
                 return self._json({**list_projects(),
                                    "updated": httpbase.code_stamp() > STARTED_CODE + 1})
@@ -1084,6 +1088,12 @@ class Handler(httpbase.Handler):
             if path == "/api/restart":
                 if RESTART["server"] is None:
                     return self._err(409, "not ready to restart")
+                if LIFETIME is None:
+                    return self._err(409, "not ready to restart")
+                try:
+                    LIFETIME.transition()
+                except (instances.Busy, TimeoutError, OSError) as exc:
+                    return self._err(409, str(exc))
                 RESTART["again"] = True
                 threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
                 return self._json({"ok": True})
@@ -1111,7 +1121,7 @@ class Handler(httpbase.Handler):
 def main():
     httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local Home: manage your LaTeX projects")
-    ap.add_argument("--port", type=int, default=registry.HOME_PORT, help="port (0: any free port)")
+    ap.add_argument("--port", type=int, default=instances.HOME_PORT, help="port (0: any free port)")
     ap.add_argument("--port-tries", type=int, default=1,
                     help="if the port is taken, try this many ports upwards")
     ap.add_argument("--no-browser", action="store_true")
@@ -1120,7 +1130,18 @@ def main():
     ap.add_argument("--ready-file", type=Path,
                     help="once listening, write {pid, port, url} as JSON to this file")
     ap.add_argument("--idle-timings", help=argparse.SUPPRESS)
+    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
     a = ap.parse_args()
+    global LIFETIME
+    try:
+        with instances.serving(None, a.ready_file, a.instance_token) as life:
+            LIFETIME = life
+            return serve(a, life)
+    except (instances.Busy, TimeoutError) as exc:
+        sys.exit(f"prism-home: {exc}")
+
+
+def serve(a, life):
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
@@ -1131,9 +1152,7 @@ def main():
     url = f"http://127.0.0.1:{srv.server_address[1]}/"
     print(f"prism-local Home: {url}\n  projects: {registry.state_dir() / 'projects.json'}",
           flush=True)
-    if a.ready_file:
-        httpbase.write_ready_file(a.ready_file, {"app": "prism-home", "pid": os.getpid(),
-                                                 "port": srv.server_address[1], "url": url})
+    life.publish(url, srv.server_address[1])
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
@@ -1147,14 +1166,26 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        srv.server_close()
-        if a.ready_file:            # first, so that the new server can start at once
-            httpbase.remove_ready_file(a.ready_file)
-        if RESTART["again"]:
-            httpbase.relaunch(httpbase.own_argv(), str(Path.home()))
-            httpbase.log("restarting with the updated code")
-        else:
-            httpbase.log("stopped")
+        transition = life.pending or life.transition()
+        try:
+            srv.server_close()
+            life.unpublish()
+            if RESTART["again"]:
+                argv = [sys.executable, str(Path(__file__).resolve()), "--port",
+                        str(srv.server_address[1]), "--port-tries", "1", "--no-browser"]
+                if a.exit_when_idle:
+                    argv.append("--exit-when-idle")
+                if a.idle_timings:
+                    argv += ["--idle-timings", a.idle_timings]
+                if a.ready_file:
+                    argv += ["--ready-file", str(a.ready_file)]
+                result = transition.handover(argv, str(Path.home()))
+                httpbase.log("restart failed: " + result["error"] if "error" in result
+                             else "restart handed to the successor")
+            else:
+                httpbase.log("stopped")
+        finally:
+            transition.close()
 
 
 if __name__ == "__main__":
