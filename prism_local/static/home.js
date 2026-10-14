@@ -38,9 +38,12 @@ $("#btn-theme").onclick = () => {
 };
 
 /* ------------------------------------------------------------------ data */
-async function load() {
-  const r = await api("/api/projects").catch(() => null);
-  if (!r || r._status !== 200) return;
+// Never two at a time (see poller), so an older answer cannot land after a newer one; a
+// call during a load asks for one more after it.
+const load = poller(loadOnce, 10000);
+async function loadOnce() {
+  const r = await api("/api/projects");
+  if (r._status !== 200) return;
   delete r._status;
   showUpdate(r.updated);
   const sig = JSON.stringify(r);
@@ -58,9 +61,10 @@ function showUpdate(updated) {
 }
 $("#btn-restart").onclick = async () => {
   const b = $("#btn-restart"); b.disabled = true; b.textContent = "restarting…";
-  const before = await api("/api/ping").catch(() => null);
-  const r = await api("/api/restart", {}).catch(() => ({ error: "Home server not reachable" }));
-  if (!r.error && before) {
+  const before = await api("/api/ping");
+  const r = await api("/api/restart", {});
+  if (r._status === 0) r.error = "Home server not reachable";
+  if (!r.error && before._status === 200) {
     for (let i = 0; i < 80; i++) {           // the new server listens within a few seconds
       await new Promise((res) => setTimeout(res, 500));
       const p = await fetch("/api/ping", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
@@ -72,7 +76,7 @@ $("#btn-restart").onclick = async () => {
 };
 function showGit(id, git) {
   H.git[id] = git;
-  document.querySelectorAll(`[data-id="${id}"] .gitchip`).forEach((el) => { el.outerHTML = gitChip(id); });
+  document.querySelectorAll(`[data-id="${CSS.escape(id)}"] .gitchip`).forEach((el) => { el.outerHTML = gitChip(id); });
 }
 async function loadGit(p) {
   if (!p.exists) return;
@@ -157,12 +161,12 @@ function tagColor(name) {
   for (const ch of name) h = (h * 31 + ch.codePointAt(0)) >>> 0;
   return TAG_PALETTE[h % TAG_PALETTE.length];
 }
-const tagChip = (t) => `<button class="tagchip" data-act="tag" data-tag="${esc(t)}" style="--tag:${tagColor(t)}" title="Show projects tagged ${esc(t)}">${esc(t)}</button>`;
+const tagChip = (t) => `<button class="tagchip" data-act="tag" data-tag="${esc(t)}" style="--tag:${esc(tagColor(t))}" title="Show projects tagged ${esc(t)}">${esc(t)}</button>`;
 function folderOptions(selected, { none = "— Not in a folder —", exclude = null } = {}) {
   const ex = [].concat(exclude || []);
   return `<option value="">${esc(none)}</option>` + folderTree(null, 0, [], "name")
     .filter(({ f }) => !ex.some((x) => isInside(f.id, x)))
-    .map(({ f, depth }) => `<option value="${f.id}" ${f.id === selected ? "selected" : ""}>${"   ".repeat(depth)}${esc(f.name)}</option>`)
+    .map(({ f, depth }) => `<option value="${esc(f.id)}" ${f.id === selected ? "selected" : ""}>${"   ".repeat(depth)}${esc(f.name)}</option>`)
     .join("");
 }
 const currentFolder = () => (H.view.kind === "folder" ? H.view.id : "");
@@ -182,9 +186,9 @@ function sharedRepo(fid) {
 }
 function syncChip(fid) {
   const sr = sharedRepo(fid);
-  if (sr) return `<button class="chip sync-chip" data-act="sync" data-fid="${sr.owner.id}" title="${esc(sr.repo)}">⎇ One repository${sr.owner.id === fid ? "" : ` (${esc(sr.owner.name)})`}</button>`;
+  if (sr) return `<button class="chip sync-chip" data-act="sync" data-fid="${esc(sr.owner.id)}" title="${esc(sr.repo)}">⎇ One repository${sr.owner.id === fid ? "" : ` (${esc(sr.owner.name)})`}</button>`;
   const s = (folderById(fid) || {}).sync;
-  return s && s.mode === "separate" ? `<button class="chip sync-chip" data-act="sync" data-fid="${fid}">⎇ A repository per project</button>` : "";
+  return s && s.mode === "separate" ? `<button class="chip sync-chip" data-act="sync" data-fid="${esc(fid)}">⎇ A repository per project</button>` : "";
 }
 
 /* ------------------------------------------------------------------ location, history, selection
@@ -312,13 +316,13 @@ const pinMark = (p) => (p.pinned ? `<span class="pin-mark" title="Pinned">${icon
 // A PDF thumbnail, or a placeholder until it is drawn (see thumbnails below).
 function thumbHTML(p) {
   const url = p.pdf_mtime && thumbs.get(`${p.id}:${p.pdf_mtime}`);
-  return `<div class="thumb" data-thumb="${p.id}">${url ? `<img src="${url}" alt="">`
+  return `<div class="thumb" data-thumb="${esc(p.id)}">${url ? `<img src="${url}" alt="">`
     : `<div class="ph"><div class="ini">${p.exists ? initials(p.name) : "!"}</div><small>${!p.exists ? "Folder not found" : p.pdf_mtime ? "" : "No PDF yet"}</small></div>`}</div>`;
 }
 function itemAttrs(it) {
   const sel = H.sel.has(it.key);
   return `class="it ${it.k === "f" ? "is-folder" : "is-project"} ${sel ? "sel" : ""} ${H.cursor === it.key ? "cur" : ""} ${it.k === "p" && !it.p.exists ? "missing" : ""}"
-    data-key="${it.key}" ${it.k === "f" ? `data-fid="${it.id}" data-drop="${it.id}"` : `data-id="${it.id}"`}
+    data-key="${esc(it.key)}" ${it.k === "f" ? `data-fid="${esc(it.id)}" data-drop="${esc(it.id)}"` : `data-id="${esc(it.id)}"`}
     role="option" aria-selected="${sel}" draggable="true"`;
 }
 function rowHTML(it, flat) {
@@ -364,7 +368,7 @@ function headHTML(flat) {
 /* ------------------------------------------------------------------ sidebar (navigation pane) */
 function sideRow({ act, attrs = "", ico, label, n, active, cls = "", depth = 0, twisty = "", more = "", drop = null, drag = "" }) {
   return `<div class="side-row ${cls} ${active ? "active" : ""}" role="button" tabindex="0" data-act="${act}" ${attrs}
-      style="--depth:${depth}" ${drop !== null ? `data-drop="${drop}"` : ""} ${drag}>
+      style="--depth:${depth}" ${drop !== null ? `data-drop="${esc(drop)}"` : ""} ${drag}>
     ${twisty}${ico}<span class="label">${label}</span>
     <span class="n">${n || ""}</span>${more}</div>`;
 }
@@ -388,18 +392,18 @@ function renderSide() {
     if (f.parent && (hidden.has(f.parent) || H.collapsed.has(f.parent))) { hidden.add(f.id); return ""; }
     const kids = childFolders(f.id).length, open = !H.collapsed.has(f.id);
     const twisty = kids
-      ? `<button class="twisty ${open ? "open" : ""}" data-act="twisty" data-fid="${f.id}" tabindex="-1" aria-label="${open ? "Collapse" : "Expand"}">${icon("right")}</button>`
+      ? `<button class="twisty ${open ? "open" : ""}" data-act="twisty" data-fid="${esc(f.id)}" tabindex="-1" aria-label="${open ? "Collapse" : "Expand"}">${icon("right")}</button>`
       : `<span class="twisty"></span>`;
     return sideRow({
-      act: "folder", attrs: `data-fid="${f.id}" title="${esc(f.note || f.name)}"`, cls: "side-folder", depth, twisty,
+      act: "folder", attrs: `data-fid="${esc(f.id)}" title="${esc(f.note || f.name)}"`, cls: "side-folder", depth, twisty,
       ico: icon("folder"), label: esc(f.name), n: count((p) => inFolder(p, f.id)),
       active: v.kind === "folder" && v.id === f.id, drop: f.id, drag: `draggable="true"`,
-      more: `<button class="more" data-act="folder-menu" data-fid="${f.id}" tabindex="-1" aria-label="Folder actions">${icon("more")}</button>`,
+      more: `<button class="more" data-act="folder-menu" data-fid="${esc(f.id)}" tabindex="-1" aria-label="Folder actions">${icon("more")}</button>`,
     });
   }).join("");
   const tags = allTags().map((t) => sideRow({
     act: "tag", attrs: `data-tag="${esc(t.name)}"`, cls: "side-tag",
-    ico: `<span class="dot" style="--tag:${tagColor(t.name)}"></span>`, label: esc(t.name), n: t.n,
+    ico: `<span class="dot" style="--tag:${esc(tagColor(t.name))}"></span>`, label: esc(t.name), n: t.n,
     active: v.kind === "tag" && v.id === t.name,
     more: `<button class="more" data-act="tag-menu" data-tag="${esc(t.name)}" tabindex="-1" aria-label="Tag actions">${icon("more")}</button>`,
   })).join("");
@@ -423,7 +427,7 @@ function renderBars(n) {
   const sep = `<span class="sep">${icon("right")}</span>`;
   const path = v.kind === "folder" ? folderPath(v.id) : [];
   $("#crumbs").innerHTML = root + (v.kind === "folder"
-    ? path.map((f) => sep + `<button class="crumb" data-act="folder" data-fid="${f.id}" data-drop="${f.id}">${esc(f.name)}</button>`).join("")
+    ? path.map((f) => sep + `<button class="crumb" data-act="folder" data-fid="${esc(f.id)}" data-drop="${esc(f.id)}">${esc(f.name)}</button>`).join("")
     : v.kind === "all" ? "" : sep + `<span class="crumb here">${esc(locationName())}</span>`);
   $("#search").placeholder = `Search ${locationName()}`;
   const fid = v.kind === "folder" ? v.id : null, f = fid && folderById(fid);
@@ -467,7 +471,7 @@ function previewHTML() {
   if (sel.length === 1 && sel[0].k === "p") {
     const p = sel[0].p, fid = folderOf(p);
     const title = p.title && p.title.toLowerCase() !== p.name.toLowerCase() ? `<div class="pv-title">${esc(p.title)}</div>` : "";
-    return `<div class="pv-project" data-id="${p.id}">${thumbHTML(p)}
+    return `<div class="pv-project" data-id="${esc(p.id)}">${thumbHTML(p)}
       <h2>${runDot(p)}${esc(p.name)}</h2>${title}
       <div class="pv-actions">
         <button class="${p.running ? "" : "primary"}" data-act="open" ${!p.exists || H.busy.has(p.id) ? "disabled" : ""}>${H.busy.has(p.id) ? "Starting…" : p.running ? "Show editor" : "Open"}</button>
@@ -478,7 +482,7 @@ function previewHTML() {
         <dt>Modified</dt><dd>${p.edited ? `${fmtDate(p.edited)} <span class="muted">(${ago(p.edited)})</span>` : "—"}</dd>
         <dt>Opened</dt><dd>${p.opened ? `${fmtDate(p.opened)} <span class="muted">(${ago(p.opened)})</span>` : "—"}</dd>
         ${p.exists ? `<dt>Files</dt><dd>${p.files ? plural(p.files, ".tex file") : "No .tex files"}</dd>` : ""}
-        <dt>In</dt><dd><button class="linkish" ${fid ? `data-act="folder" data-fid="${fid}"` : `data-act="view" data-view="all"`}>${icon("folder")}${esc(whereText(fid))}</button></dd>
+        <dt>In</dt><dd><button class="linkish" ${fid ? `data-act="folder" data-fid="${esc(fid)}"` : `data-act="view" data-view="all"`}>${icon("folder")}${esc(whereText(fid))}</button></dd>
         <dt>Path</dt><dd class="pv-path">${esc(p.path)}</dd>
         <dt>Tags</dt><dd>${(p.tags || []).map(tagChip).join("") || `<button class="linkish" data-act="tags">Add tags…</button>`}</dd>
       </dl></div>`;
@@ -488,13 +492,13 @@ function previewHTML() {
     const all = H.projects.filter((p) => inFolder(p, f.id)).length;
     return `<div class="pv-folder"><div class="thumb folder-thumb">${icon("folder")}</div><h2>${esc(f.name)}</h2>
       ${f.note ? `<p class="pv-note">${esc(f.note)}</p>` : ""}
-      <div class="pv-actions">${sel.length ? `<button class="primary" data-act="folder" data-fid="${f.id}">Open</button>` : ""}
-        <button class="icon" data-act="folder-menu" data-fid="${f.id}" title="Folder actions" aria-label="Folder actions">${icon("more")}</button></div>
+      <div class="pv-actions">${sel.length ? `<button class="primary" data-act="folder" data-fid="${esc(f.id)}">Open</button>` : ""}
+        <button class="icon" data-act="folder-menu" data-fid="${esc(f.id)}" title="Folder actions" aria-label="Folder actions">${icon("more")}</button></div>
       <dl><dt>Contains</dt><dd>${folderCounts(f.id)}</dd>
         <dt>In total</dt><dd>${plural(all, "project")}</dd>
         <dt>Modified</dt><dd>${folderTime(f, "edited") ? fmtDate(folderTime(f, "edited")) : "—"}</dd>
         <dt>In</dt><dd>${esc(whereText(f.parent))}</dd>
-        <dt>GitHub</dt><dd>${syncChip(f.id) || `<button class="linkish" data-act="sync" data-fid="${f.id}">Set up sync…</button>`}</dd></dl></div>`;
+        <dt>GitHub</dt><dd>${syncChip(f.id) || `<button class="linkish" data-act="sync" data-fid="${esc(f.id)}">Set up sync…</button>`}</dd></dl></div>`;
   }
   return `<div class="pv-none">${icon("doc")}<p>Select a project to see its first page and details.</p></div>`;
 }
@@ -514,6 +518,7 @@ function render() {
   if (H.cursor && !shownKeys.includes(H.cursor)) H.cursor = null;
   renderSide(); renderBars(items.length);
   const view = $("#view");
+  io.disconnect();                 // the thumbnails drawn below are observed anew (attachThumb)
   view.className = H.mode === "icons" ? "icons" : "details";
   view.innerHTML = !items.length ? ""
     : H.mode === "icons" ? items.map((it) => tileHTML(it, flat)).join("")
@@ -546,6 +551,7 @@ function paintSelection() {
   }
   renderBars(shownKeys.length);
   if (H.preview) {
+    $("#preview").querySelectorAll("[data-thumb]").forEach((el) => io.unobserve(el));    // replaced now
     $("#preview").innerHTML = previewHTML(); $("#preview").querySelectorAll("[data-thumb]").forEach(attachThumb);
     const sel = selected();
     if (sel.length === 1 && sel[0].k === "p") withGit(sel[0].id);      // its git chip
@@ -582,7 +588,7 @@ async function drawThumb(p) {
     const url = canvas.toDataURL("image/jpeg", 0.88);
     for (const k of thumbs.keys()) if (k.startsWith(p.id + ":") && k !== key) thumbs.delete(k);
     thumbs.set(key, url);
-    document.querySelectorAll(`[data-thumb="${p.id}"]`).forEach((el) => { el.innerHTML = `<img src="${url}" alt="">`; });
+    document.querySelectorAll(`[data-thumb="${CSS.escape(p.id)}"]`).forEach((el) => { el.innerHTML = `<img src="${url}" alt="">`; });
   } catch {
     thumbs.delete(key);
   }
@@ -723,7 +729,7 @@ function select(keys, { cursor = keys[keys.length - 1], anchor = true } = {}) {
   H.sel = new Set(keys); H.cursor = cursor || null;
   if (anchor) H.anchor = H.cursor;
   paintSelection();
-  const el = H.cursor && document.querySelector(`#view [data-key="${H.cursor}"]`);
+  const el = H.cursor && document.querySelector(`#view [data-key="${CSS.escape(H.cursor)}"]`);
   if (el) el.scrollIntoView({ block: "nearest" });
 }
 function rangeTo(key) {
@@ -1145,7 +1151,7 @@ function syncRow(r, plan) {
   const open = r.running && changes ? `<span class="chip err" title="Close its editor first">editor open</span>` : "";
   const gh = r.github ? ` <a href="${esc(r.github)}" target="_blank" rel="noopener">GitHub ↗</a>` : "";
   return `<tr class="${r.action}"><td><b>${esc(r.name)}</b>${r.sub ? `<small>${esc(r.sub)}</small>` : ""}</td>
-    <td>${SYNC_NOW[r.kind] || r.kind}${gh}</td><td>${then} ${open}</td></tr>`;
+    <td>${esc(SYNC_NOW[r.kind] || r.kind)}${gh}</td><td>${then} ${open}</td></tr>`;
 }
 function renderSync() {
   const f = $("#form-sync"), plan = H.syncPlan, gh = (plan && plan.github) || H.github || {};
@@ -1296,7 +1302,7 @@ $("#form-publish").addEventListener("submit", async (e) => {
 function tagChoices(checked) {
   const names = [...new Set([...allTags().map((t) => t.name), ...checked])];
   $("#tag-choices").innerHTML = names.length
-    ? names.map((t) => `<label class="tagpick" style="--tag:${tagColor(t)}"><input type="checkbox" value="${esc(t)}" ${checked.includes(t) ? "checked" : ""}><span>${esc(t)}</span></label>`).join("")
+    ? names.map((t) => `<label class="tagpick" style="--tag:${esc(tagColor(t))}"><input type="checkbox" value="${esc(t)}" ${checked.includes(t) ? "checked" : ""}><span>${esc(t)}</span></label>`).join("")
     : `<p class="hint">No tags yet: add the first one below.</p>`;
 }
 const checkedTags = () => [...document.querySelectorAll("#tag-choices input:checked")].map((i) => i.value);
@@ -1489,5 +1495,6 @@ async function watchFetch() {
 /* ------------------------------------------------------------------ start */
 load().then(loadAllGit).then(watchFetch);
 loadSettings();
-setInterval(() => { if (document.visibilityState === "visible" && !document.querySelector("dialog[open]")) load(); }, 10000);
+// Every 10 s while the page is shown and no dialog is open (see poller).
+load.start(() => !document.querySelector("dialog[open]"));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load().then(loadOpenedGit); });

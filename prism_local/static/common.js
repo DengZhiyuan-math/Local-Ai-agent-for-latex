@@ -8,6 +8,8 @@ const store = {
 };
 
 let projectKey = null;             // fixed for this page's lifetime; never follow a reused port
+// Never throws: when the server cannot be reached, the answer is {_status: 0, error}, so
+// every caller handles it like any other failed request (and re-enables its buttons).
 async function api(path, body) {
   if (projectKey && path.startsWith("/api/agent")) {
     if (body !== undefined) body = { ...body, project_key: projectKey };
@@ -17,13 +19,44 @@ async function api(path, body) {
     method: "POST", headers: { "Content-Type": "application/json", "X-Prism-Local": "1" },
     body: JSON.stringify(body),
   };
-  const r = await fetch(path, opts);
+  let r;
+  try { r = await fetch(path, opts); } catch { return { _status: 0, error: "server not reachable" }; }
   let data = {};
   try { data = await r.json(); } catch { /* non-JSON */ }
+  if (!data || typeof data !== "object") data = {};
   data._status = r.status;
   return data;
 }
-const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+/* Polling. nap() waits `ms`, or `hiddenMs` while the page is hidden (null: until it is
+   shown again), and stops waiting the moment a hidden page is shown. */
+function nap(ms, hiddenMs = null) {
+  return new Promise((res) => {
+    const hidden = document.visibilityState === "hidden", wait = hidden ? hiddenMs : ms;
+    const timer = wait === null ? null : setTimeout(done, wait);
+    function wake() { if (document.visibilityState === "visible") done(); }
+    function done() { clearTimeout(timer); document.removeEventListener("visibilitychange", wake); res(); }
+    if (hidden) document.addEventListener("visibilitychange", wake);
+  });
+}
+// A poll that never runs twice at once. Calling it during a run queues one more run after
+// it (however many calls come in meanwhile), so a caller still sees what changed before it
+// called. start() runs it every `ms` after the last run ended (see nap), while when() holds.
+function poller(fn, ms, hiddenMs = null) {
+  let running = null, again = null, started = false;
+  function run() {
+    if (running) return again || (again = running.then(() => { again = null; return run(); }));
+    running = Promise.resolve().then(fn).catch((e) => console.error(e)).finally(() => { running = null; });
+    return running;
+  }
+  run.start = async (when = () => true) => {
+    if (started) return;
+    started = true;
+    for (;;) { await nap(ms, hiddenMs); if (when()) await (running || run()); }
+  };
+  return run;
+}
 
 /* theme */
 function applyTheme(t) {

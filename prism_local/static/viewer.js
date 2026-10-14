@@ -38,10 +38,22 @@ function jumped(m) {
   setTimeout(() => { if ($("#viewer-note").textContent === msg) note(DEFAULT_NOTE); }, 5000);
 }
 
-async function checkPdf() {
-  const r = await api("/api/pdfstat").catch(() => null);
-  if (r && (r.mtime !== PV.mtime || r.main !== PV.main)) await PV.load(r.mtime, r.main);
+// The PDF being downloaded now: asked for again meanwhile (the poll, the editor's
+// message), it is not downloaded a second time.
+let loading = null;
+function loadPdf(mtime, main) {
+  if (loading && loading.mtime === mtime && loading.main === main) return loading.done;
+  if (!loading && mtime === PV.mtime && main === PV.main) return;
+  const l = { mtime, main };
+  l.done = Promise.resolve(PV.load(mtime, main)).finally(() => { if (loading === l) loading = null; });
+  loading = l;
+  return l.done;
 }
+// Every 2 s, one request at a time; not while this tab is hidden (at once when shown).
+const checkPdf = poller(async () => {
+  const r = await api("/api/pdfstat");
+  if (r._status === 200) await loadPdf(r.mtime, r.main);
+}, 2000);
 
 if (pdfChannel) {
   pdfChannel.onmessage = async (ev) => {
@@ -49,7 +61,7 @@ if (pdfChannel) {
     if (m.type === "jumped") jumped(m);
     else if (m.type === "reload") location.reload();      // the editor restarted with new code
     else if (m.type === "close") window.close();          // "Show here" in the editor
-    else if (m.type === "pdf" && (m.mtime !== PV.mtime || m.main !== PV.main)) await PV.load(m.mtime, m.main);
+    else if (m.type === "pdf") await loadPdf(m.mtime, m.main);
     else if (m.type === "forward") {
       await checkPdf();
       PV.highlight(m.r);
@@ -69,4 +81,4 @@ window.addEventListener("storage", (e) => { if (e.key === "prism.theme") applyTh
 
 note(DEFAULT_NOTE);
 checkPdf();
-setInterval(checkPdf, 2000);
+checkPdf.start();

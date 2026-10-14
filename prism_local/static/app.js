@@ -164,6 +164,13 @@ function modeFor(path) { return path.endsWith(".md") ? "markdown" : "stex"; }
 function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }
 function isDirty(t) { return !t.doc.isClean(t.gen); }
 
+// The file of a tab being opened, asked for once: two quick clicks share the request (and
+// get one tab), and the files of the last session download together (see init).
+const opening = new Map();       // path -> the /api/file request
+function fileRequest(path) {
+  if (!opening.has(path)) opening.set(path, api("/api/file?path=" + encodeURIComponent(path)));
+  return opening.get(path);
+}
 async function openFile(path, line) {
   if (S.files.some((f) => f.path === path && f.editable === false)) {
     window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
@@ -171,11 +178,15 @@ async function openFile(path, line) {
   }
   let t = S.tabs.find((x) => x.path === path);
   if (!t) {
-    const r = await api("/api/file?path=" + encodeURIComponent(path));
-    if (r._status !== 200) return toast(`Cannot open ${path}: ${r.error || r._status}`);
-    const doc = CodeMirror.Doc(r.content, modeFor(path));
-    t = { path, doc, mtime: r.mtime, gen: doc.changeGeneration(true) };
-    S.tabs.push(t);
+    const r = await fileRequest(path);
+    opening.delete(path);
+    t = S.tabs.find((x) => x.path === path);          // opened meanwhile, by the same request
+    if (!t) {
+      if (r._status !== 200) return toast(`Cannot open ${path}: ${r.error || r._status}`);
+      const doc = CodeMirror.Doc(r.content, modeFor(path));
+      t = { path, doc, mtime: r.mtime, gen: doc.changeGeneration(true) };
+      S.tabs.push(t);
+    }
   }
   S.active = path;
   cm.swapDoc(t.doc);
@@ -437,9 +448,12 @@ function renderOutline() {
 }
 $("#outline").addEventListener("click", (e) => { const li = e.target.closest("li[data-file]"); if (li) openFile(li.dataset.file, +li.dataset.line); });
 $("#btn-refresh-outline").onclick = () => loadSymbols();
+// Asked for from several places: only the answer to the latest request is used.
+let symbolsSeq = 0;
 async function loadSymbols() {
-  const r = await api("/api/symbols").catch(() => null);
-  if (r && r._status === 200) { S.symbols = r; renderOutline(); }
+  const seq = ++symbolsSeq;
+  const r = await api("/api/symbols");
+  if (seq === symbolsSeq && r._status === 200) { S.symbols = r; renderOutline(); }
 }
 // Labels, outline and macros follow your own edits too, a moment after they are saved
 // (a new \label is offered by \cref{ right away).
@@ -507,9 +521,16 @@ function renameProject() {
 $("#projname").addEventListener("click", renameProject);
 $("#projname").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.key === "F2") && e.target === $("#projname")) { e.preventDefault(); renameProject(); } });
 
-async function poll() {
-  const r = await api("/api/tree").catch(() => null);
-  if (!r || r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
+// What changed on disk: files, the PDF, the sync state. Every 2 s (30 s while the tab is
+// hidden, at once when it is shown again), never two at a time (see poller); poll() asks
+// for one more now.
+const poll = poller(pollOnce, 2000, 30000);
+async function pollOnce() {
+  // The build settings come with the first poll (at startup, or until the server answers).
+  const config = BUILD.loaded ? null : loadConfig();
+  const r = await api("/api/tree");
+  await config;
+  if (r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
   const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]));
@@ -676,7 +697,9 @@ $("#sync-kept").addEventListener("click", (e) => {
 $("#sync-clash").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-theirs]"); if (!b) return;
   e.stopPropagation(); syncMenu(false);
+  const seq = ++diffSeq;
   const r = await api("/api/git/theirs?path=" + encodeURIComponent(b.dataset.theirs));
+  if (seq !== diffSeq) return;                        // the diff view was asked for again
   if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
   const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
   $("#diff").innerHTML = [head, "", ...(r.diff || "(the same)").split("\n")].map((l) => {
@@ -685,28 +708,40 @@ $("#sync-clash").addEventListener("click", async (e) => {
   }).join("\n");
   openPanel("diff");
 });
-$("#sync-auto").onchange = async (e) => { const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" }); renderSync(r); };
+$("#sync-auto").onchange = async (e) => {
+  const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" });
+  if (r._status === 200) renderSync(r);
+  else { e.target.checked = !e.target.checked; toast("Could not change sync: " + (r.error || "HTTP " + r._status)); }
+};
 document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) syncMenu(false); });
 
 // History: the commits that changed the open file; one of them shows what it changed and
 // can be put back (as an edit of yours, which is saved and committed like any other).
+// Only the latest request's answer is shown: of the list (the file can change while its
+// history loads), and of the commit shown (a newer click, or a new list).
+let histSeq = 0, histShowSeq = 0;
 async function showHistory(path = S.active) {
   openPanel("history");
   const list = $("#hist-list"), view = $("#hist-view");
+  const seq = ++histSeq; histShowSeq++;
   view.innerHTML = "";
   if (!path) { list.innerHTML = `<li class="none">Open a file to see its history.</li>`; return; }
   list.innerHTML = `<li class="none">Loading the history of ${esc(path)}…</li>`;
-  const r = await api("/api/git/log?path=" + encodeURIComponent(path)).catch(() => ({}));
+  const r = await api("/api/git/log?path=" + encodeURIComponent(path));
+  if (seq !== histSeq) return;
   const commits = r.commits || [];
   if (!commits.length) { list.innerHTML = `<li class="none">${esc(r.error || `No commits of ${path} yet.`)}</li>`; return; }
   list.innerHTML = `<li class="hist-file">${esc(path)} · ${commits.length} version${commits.length > 1 ? "s" : ""}</li>` + commits.map((c, i) =>
-    `<li data-rev="${c.hash}" data-path="${esc(path)}"><span class="hist-when" title="${esc(new Date(c.at * 1000).toLocaleString())}">${esc(ago(c.at))}</span>`
-    + `<span class="hist-msg">${esc(c.message)}</span><span class="hist-hash">${c.hash.slice(0, 7)}${i === 0 ? " · latest" : ""}</span></li>`).join("");
+    `<li data-rev="${esc(c.hash)}" data-path="${esc(path)}"><span class="hist-when" title="${esc(new Date(c.at * 1000).toLocaleString())}">${esc(ago(c.at))}</span>`
+    + `<span class="hist-msg">${esc(c.message)}</span><span class="hist-hash">${esc(c.hash.slice(0, 7))}${i === 0 ? " · latest" : ""}</span></li>`).join("");
 }
 $("#hist-list").addEventListener("click", async (e) => {
   const li = e.target.closest("li[data-rev]"); if (!li) return;
   document.querySelectorAll("#hist-list li.sel").forEach((x) => x.classList.remove("sel")); li.classList.add("sel");
-  const r = await api(`/api/git/show?rev=${li.dataset.rev}&path=${encodeURIComponent(li.dataset.path)}`);
+  const seq = ++histShowSeq;
+  const r = await api(`/api/git/show?rev=${encodeURIComponent(li.dataset.rev)}&path=${encodeURIComponent(li.dataset.path)}`);
+  if (seq !== histShowSeq) return;
+  if (r._status !== 200) { $("#hist-view").innerHTML = `<div class="hist-bar">${esc("Could not show this version: " + (r.error || "HTTP " + r._status))}</div>`; return; }
   const diff = (r.diff || "").split("\n").filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join("\n");
   $("#hist-view").innerHTML = `<div class="hist-bar"><b>${esc(li.querySelector(".hist-msg").textContent)}</b>`
     + (r.content != null ? `<button class="tiny" id="hist-restore">Restore this version</button>` : "") + `</div>`
@@ -797,6 +832,7 @@ function showCompletions(ed, explicit) {
 async function loadConfig() {
   const r = await api("/api/config");
   if (r._status !== 200) return;
+  BUILD.loaded = true;
   BUILD.modes = r.modes || [];
   BUILD.cmds = r.build || {};
   BUILD.main = String(r.main || "main.tex").replace(/\\/g, "/").replace(/^(\.\/)+/, "");
@@ -869,14 +905,14 @@ $("#btn-compile").onclick = () => S.building ? api("/api/build/stop", {}) : comp
 $("#btn-clean-build").onclick = () => { compileMenu(false); compile(true); };
 
 /* Compile menu: build mode and auto-compile, on the ▾ half of the Compile button. */
-const BUILD = { modes: [], cmds: {}, main: "main.tex", mode: store.get("buildmode", "draft") };
+const BUILD = { loaded: false, modes: [], cmds: {}, main: "main.tex", mode: store.get("buildmode", "draft") };
 const MODE_INFO = {
   draft: ["Draft", "continue on errors"], strict: ["Strict", "stop at first error"], check: ["Check", ""],
 };
 function renderCompileMenu() {
   $("#build-modes").innerHTML = BUILD.modes.map((m) => {
     const [name, note] = MODE_INFO[m] || [m, ""];
-    return `<label class="dd-item" title="${esc(BUILD.cmds[m] || "")}"><input type="radio" name="build-mode" value="${m}" ${m === BUILD.mode ? "checked" : ""}> ${esc(name)}${note ? `<small>${esc(note)}</small>` : ""}</label>`;
+    return `<label class="dd-item" title="${esc(BUILD.cmds[m] || "")}"><input type="radio" name="build-mode" value="${esc(m)}" ${m === BUILD.mode ? "checked" : ""}> ${esc(name)}${note ? `<small>${esc(note)}</small>` : ""}</label>`;
   }).join("") || `<div class="dd-item"><small>No build command (see README)</small></div>`;
   updateCompileLabel();
 }
@@ -906,7 +942,7 @@ function renderProblems() {
   const b = $("#problem-count");
   b.textContent = d.length ? String(d.length) : ""; b.className = "badge" + (errs ? "" : " warn");
   $("#problems").innerHTML = d.length ? d.map((x, i) => `
-    <li data-i="${i}"><span class="sev ${x.severity}">${x.severity}</span><span class="loc">${esc(x.file || "?")}${x.line ? ":" + x.line : ""}</span>${esc(x.message)}</li>`).join("")
+    <li data-i="${i}"><span class="sev ${esc(x.severity)}">${esc(x.severity)}</span><span class="loc">${esc(x.file || "?")}${x.line ? ":" + x.line : ""}</span>${esc(x.message)}</li>`).join("")
     : `<li class="none">No errors or warnings from the build.</li>`;
 }
 $("#problems").addEventListener("click", (e) => {
@@ -941,11 +977,16 @@ $("#panel-toggle").onclick = () => {
   const p = $("#panel"); p.classList.toggle("collapsed");
   $("#panel-toggle").classList.toggle("flip", !p.classList.contains("collapsed")); cm.refresh();
 };
+// The diff view shows the answer to the latest request only (also GitHub's version, above).
+let diffSeq = 0;
 async function showDiff(path) {
+  const seq = ++diffSeq;
   const r = await api("/api/diff" + (path ? "?path=" + encodeURIComponent(path) : ""));
+  if (seq !== diffSeq) return;
   const what = path ? path : "this project";
   let text;
-  if (r.repo === false) text = `${what === "this project" ? "This project" : what} is not in a git repository, so there is nothing to compare with.\nCreate one from the GitHub button at the top (Not on GitHub).`;
+  if (r._status !== 200) text = `Could not get the changes in ${what}: ${r.error || "HTTP " + r._status}`;
+  else if (r.repo === false) text = `${what === "this project" ? "This project" : what} is not in a git repository, so there is nothing to compare with.\nCreate one from the GitHub button at the top (Not on GitHub).`;
   else {
     const parts = [];
     if (r.untracked && r.untracked.length) parts.push(`New files, not committed yet: ${r.untracked.join(", ")}`);
@@ -1084,13 +1125,15 @@ function sidebarHidden(h) {
 sidebarHidden(store.get("sidebar.hidden", false));
 $("#btn-sidebar").onclick = () => sidebarHidden(!$("#sidebar").classList.contains("hidden"));
 
-let toastTimer = null;
+// A toast shows in the status line for 4 s, then the status comes back: the one under the
+// first of several toasts in a row, not an earlier toast's text.
+let toastTimer = null, toastShown = null, toastPrev = null;
 function toast(msg) {
   const st = $("#build-status");
-  const prev = [st.textContent, st.className];
-  st.textContent = msg; st.className = "status warn";
+  if (!(toastTimer && st.textContent === toastShown)) toastPrev = [st.textContent, st.className];
+  st.textContent = msg; st.className = "status warn"; toastShown = msg;
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { if (st.textContent === msg) [st.textContent, st.className] = prev; }, 4000);
+  toastTimer = setTimeout(() => { toastTimer = null; if (st.textContent === msg) [st.textContent, st.className] = toastPrev; }, 4000);
 }
 
 document.querySelectorAll(".gutter").forEach((g) => {
@@ -1156,7 +1199,7 @@ function loadProvider() {
   renderContext(c && c.session === C.session ? c : null);
   C.snips = provGet("snips") || {};
   const saved = provGet("log");
-  $("#chat-log").innerHTML = saved || "";
+  restoreChatLog(saved || "");
   if (!saved) chatIntro();
 }
 
@@ -1286,7 +1329,35 @@ function chatAppend(html, cls) {
   if (stick || cls === "msg user") log.scrollTop = log.scrollHeight;     // unless you scrolled up to read
   return div;
 }
-function saveChatLog() { provSet("log", $("#chat-log").innerHTML.slice(-400000)); }
+// The conversation is kept as HTML: its latest messages, whole, up to 400 000 characters.
+function saveChatLog() {
+  const kids = $("#chat-log").children;
+  let html = "";
+  for (let i = kids.length - 1; i >= 0; i--) {
+    const h = kids[i].outerHTML;
+    if (html.length + h.length > 400000) break;
+    html = h + html;
+  }
+  provSet("log", html);
+}
+// Earlier versions cut the saved log anywhere, even inside a tag, where the rest of an
+// attribute (a tool's command, say) could read as new HTML. So a restored log keeps only
+// whole elements, and loses scripts, event handlers and links other than web and mail.
+const CHAT_DROP = "script, style, iframe, object, embed, link, meta, base, form, img, video, audio, "
+  + "foreignObject, use, animate, set, animateMotion, animateTransform";
+function restoreChatLog(html) {
+  const t = document.createElement("template");
+  t.innerHTML = html;                                  // inert: nothing in it runs or loads
+  for (const n of [...t.content.childNodes]) if (!/^(DIV|DETAILS)$/.test(n.nodeName)) n.remove();   // the log's own boxes
+  t.content.querySelectorAll(CHAT_DROP).forEach((el) => el.remove());
+  for (const el of t.content.querySelectorAll("*")) {
+    for (const a of [...el.attributes]) {
+      const url = /^(href|src|action|formaction|xlink:href)$/i.test(a.name);
+      if (/^on/i.test(a.name) || (url && !/^(https?:|mailto:)/i.test(a.value.trim()))) el.removeAttribute(a.name);
+    }
+  }
+  $("#chat-log").replaceChildren(t.content);
+}
 function chatIntro() {
   chatAppend(`The agent works in this repository and follows the project's CLAUDE.md / AGENTS.md.
 Pick who runs it in the menu above: Claude Code, Codex CLI, or an API model such as DeepSeek.
@@ -1543,7 +1614,7 @@ const ATT = {
 
   // The commit-and-push of each upload: a badge on its chips (here and in sent messages).
   sync: new Map(),       // path -> {state, message}
-  timer: null,
+  polling: false,
   showSync() {
     const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed" };
     document.querySelectorAll(".att[data-path]").forEach((el) => {
@@ -1555,19 +1626,26 @@ const ATT = {
   },
   watch(path, s) {
     this.sync.set(path, s); this.showSync();
-    if (!this.timer) this.timer = setInterval(() => this.pollSync(), 1500);
+    if (!this.polling) this.pollSync();
   },
+  // Every 1.5 s (15 s while the tab is hidden), one request at a time, while an upload syncs.
   async pollSync() {
-    const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
-    if (!open.length) { clearInterval(this.timer); this.timer = null; return; }
-    const r = await api("/api/upload/sync?paths=" + encodeURIComponent(open.join("\n"))).catch(() => null);
-    if (!r) return;
-    for (const p of open) {
-      if (!r[p]) continue;
-      this.sync.set(p, r[p]);
-      if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
-    }
-    this.showSync();
+    this.polling = true;
+    try {
+      for (;;) {
+        await nap(1500, 15000);
+        const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
+        if (!open.length) return;
+        const r = await api("/api/upload/sync?paths=" + encodeURIComponent(open.join("\n")));
+        if (r._status !== 200) continue;
+        for (const p of open) {
+          if (!r[p]) continue;
+          this.sync.set(p, r[p]);
+          if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
+        }
+        this.showSync();
+      }
+    } finally { this.polling = false; }
   },
 
   size(n) { return n >= 1048576 ? (n / 1048576).toFixed(1) + " MB" : n >= 1024 ? Math.round(n / 1024) + " KB" : n + " B"; },
@@ -1705,10 +1783,17 @@ async function chatSend() {
   };
   const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
   try {
+    // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
+    let retry = 1000;
     while (!done) {
-      let d;
-      try { d = await api(`/api/agent/events?job=${r.job}&after=${after}`); }
-      catch { await new Promise((res) => setTimeout(res, 1000)); continue; }
+      const d = await api(`/api/agent/events?job=${r.job}&after=${after}`);
+      if (d._status === 0) {
+        status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
+        await new Promise((res) => setTimeout(res, retry));
+        retry = Math.min(retry * 2, 30000);
+        continue;
+      }
+      if (retry > 1000) { retry = 1000; status("working…"); }
       if (d._status !== 200) break;
       const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
       let pending = false;
@@ -1940,8 +2025,9 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (u) {
     if (S.tabs.some(isDirty) && !(await saveAll())) return;
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
+    if (r._status === 0) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
-    u.textContent = `undone (${r.restored.length})` + (r.skipped.length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
+    u.textContent = `undone (${(r.restored || []).length})` + ((r.skipped || []).length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
     u.disabled = true; saveChatLog(); AH.clear("changed"); await poll();
   }
 });
@@ -2170,11 +2256,25 @@ function askAboutSelection() {
   else { const t = activeTab(); if (t) insertMention("@" + t.path); else $("#chat-input").focus(); }
 }
 cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelection, "Ctrl-L": askAboutSelection });
+// The providers and the project's identity, without which nothing can be sent: asked for
+// again, less and less often, until the server answers.
+async function loadAgentInfo() {
+  for (let wait = 1000; ; wait = Math.min(wait * 2, 30000)) {
+    const r = await api("/api/agent/info");
+    if (r._status !== 0) {
+      if (wait > 1000) { $("#chat-status").className = "status"; $("#chat-status").textContent = ""; }
+      return r;
+    }
+    $("#chat-status").className = "status err";
+    $("#chat-status").textContent = "server not reachable; the agent is not ready yet";
+    await nap(wait, wait);
+  }
+}
 {
   chatIntro();
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
   renderQuota(store.get("chat.rate", null));
-  api("/api/agent/info").then((r) => {
+  loadAgentInfo().then((r) => {
     renderProviders(r);
     const p = prov();
     if (!p.available) return chatAppend(`<div class="err">${esc(p.reason || "No AI provider is set up.")}</div>`, "card");
@@ -2185,19 +2285,20 @@ cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelec
 
 /* ------------------------------------------------------------------ start */
 (async function init() {
-  await loadConfig();
-  await poll();
-  await loadSymbols();
-  loadSnippets();
-  const sess = store.get("session", null);
-  const exists = (p) => S.files.some((f) => f.path === p);
-  if (sess && sess.tabs) {
-    for (const p of sess.tabs.filter(exists)) if (p !== sess.active) await openFile(p);
-    if (sess.active && exists(sess.active)) await openFile(sess.active);
+  try {
+    loadSnippets();
+    await poll();          // the files and the build settings (and, once the files are known, the symbols)
+    const sess = store.get("session", null);
+    const exists = (p) => S.files.some((f) => f.path === p);
+    const paths = sess && sess.tabs ? sess.tabs.filter((p) => exists(p) && p !== sess.active) : [];
+    if (sess && sess.active && exists(sess.active)) paths.push(sess.active);
+    paths.forEach(fileRequest);                         // downloaded together, opened in order
+    for (const p of paths) await openFile(p);
+    // No saved session: open the file the server builds (prism.json's "main", or the guess).
+    if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
+    renderProblems();
+  } finally {
+    poll.start();          // whatever failed above, the editor keeps following the project
   }
-  // No saved session: open the file the server builds (prism.json's "main", or the guess).
-  if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
-  renderProblems();
-  setInterval(poll, 2000);
 })();
 updateScope();
