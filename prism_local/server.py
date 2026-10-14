@@ -303,27 +303,86 @@ def strip_comment(line: str) -> str:
     return re.sub(r"(?<!\\)%.*", "", line)
 
 
-def document_order() -> list[str]:
-    """Project .tex files in the order the main file \\input's them (depth first)."""
-    order: list[str] = []
+def _scan_tex(text: str) -> dict:
+    """What a .tex, .sty or .cls file holds for document_order and symbols, line by line
+    in the order symbols() takes it: its \\input's, theorem definitions, and its sections,
+    \\begin's, macros and labels (events: (what, line, name, title))."""
+    inputs, theorems, events = [], [], []
+    for n, raw in enumerate(text.splitlines(), 1):
+        line = strip_comment(raw)
+        inputs += [m.group(1).strip() for m in INPUT_RE.finditer(line)]
+        for m in NEWTHEOREM_RE.finditer(line):
+            theorems.append((m.group(1).strip(), (m.group(2) or m.group(1)).strip()))
+        for m in DECLARETHEOREM_RE.finditer(line):
+            name = m.group(2).strip()
+            opt = re.search(r"(?:^|,)\s*(?:name|title)\s*=\s*\{?([^,}]+)", m.group(1) or "")
+            theorems.append((name, opt.group(1).strip() if opt else name.capitalize()))
+        m = SECTION_RE.search(line)
+        if m:
+            g = group(line, m.end() - 1)          # a title that runs on: this line's part
+            events.append(("section", n, m.group(1), plain_text(g[0] if g else line[m.end():])))
+        for m in BEGIN_RE.finditer(line):
+            events.append(("begin", n, m.group(1), plain_text(m.group(2) or "")))
+        for m in MACRO_RE.finditer(line):
+            events.append(("macro", n, m.group(1), None))
+        for m in LABEL_RE.finditer(line):
+            events.append(("label", n, m.group(1), None))
+    return {"inputs": inputs, "theorems": theorems, "events": events}
+
+
+def _scan_bib(text: str) -> list[tuple]:
+    """The entries of a .bib file: (key, type, line)."""
+    keys, line, at = [], 1, 0
+    for m in BIBKEY_RE.finditer(text):
+        line += text.count("\n", at, m.start())
+        at = m.start()
+        if m.group(1).lower() not in ("string", "preamble", "comment"):
+            keys.append((m.group(2), m.group(1).lower(), line))
+    return keys
+
+
+# Each file's scan, kept while its size and modification time stay the same: the page asks
+# for the outline after every save, and for the file order every two seconds.
+_SCANS: dict[tuple, tuple] = {}
+
+
+def scan(rel: str, kind: str = "tex"):
+    """_scan_tex (kind "tex") or _scan_bib ("bib") of a project file, read only when it
+    changed since the last scan; None when it cannot be read."""
+    p = ROOT / rel
+    try:
+        st = p.stat()
+        key, stamp = (ROOT, rel, kind), (st.st_mtime_ns, st.st_size)
+        hit = _SCANS.get(key)
+        if hit and hit[0] == stamp:
+            return hit[1]
+        text = p.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None
+    found = _scan_bib(text) if kind == "bib" else _scan_tex(text)
+    if len(_SCANS) > 4 * MAX_FILES:      # files deleted or renamed long ago
+        _SCANS.clear()
+    _SCANS[key] = (stamp, found)
+    return found
+
+
+def document_order(files: list[str] | None = None) -> list[str]:
+    """Project .tex files in the order the main file \\input's them (depth first).
+    `files`: list_files(), when the caller has it already."""
+    order: dict[str, None] = {}
 
     def visit(rel: str) -> None:
         if rel in order:
             return
-        order.append(rel)
-        try:
-            text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return
-        for line in text.splitlines():
-            for m in INPUT_RE.finditer(strip_comment(line)):
-                child = resolve_tex_name(m.group(1).strip())
-                if child:
-                    visit(child)
+        order[rel] = None
+        for name in (scan(rel) or {"inputs": []})["inputs"]:
+            child = resolve_tex_name(name)
+            if child:
+                visit(child)
 
     visit(CFG.main)
-    rest = [f for f in list_files() if f.endswith(".tex") and f not in order]
-    return order + rest
+    rest = [f for f in (list_files() if files is None else files) if f.endswith(".tex") and f not in order]
+    return list(order) + rest
 
 
 def theorem_envs(files: list[str]) -> dict[str, str]:
@@ -332,14 +391,8 @@ def theorem_envs(files: list[str]) -> dict[str, str]:
     for rel in files:
         if Path(rel).suffix not in (".tex", ".sty", ".cls"):
             continue
-        for raw in (ROOT / rel).read_text(encoding="utf-8", errors="replace").splitlines():
-            line = strip_comment(raw)
-            for m in NEWTHEOREM_RE.finditer(line):
-                envs.setdefault(m.group(1).strip(), (m.group(2) or m.group(1)).strip())
-            for m in DECLARETHEOREM_RE.finditer(line):
-                name = m.group(2).strip()
-                opt = re.search(r"(?:^|,)\s*(?:name|title)\s*=\s*\{?([^,}]+)", m.group(1) or "")
-                envs.setdefault(name, opt.group(1).strip() if opt else name.capitalize())
+        for name, title in (scan(rel) or {"theorems": []})["theorems"]:
+            envs.setdefault(name, title)
     return envs or {e: e.capitalize() for e in STANDARD_THEOREMS}
 
 
@@ -348,38 +401,25 @@ def symbols() -> dict:
     files = list_files()
     envs = theorem_envs(files)
     outline_envs = set(envs)
-    for rel in document_order():
-        if not (ROOT / rel).is_file():
+    for rel in document_order(files):
+        found = scan(rel)
+        if found is None:
             continue
         env = None
-        text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-        for n, raw in enumerate(text.splitlines(), 1):
-            line = strip_comment(raw)
-            m = SECTION_RE.search(line)
-            if m:
-                g = group(line, m.end() - 1)          # a title that runs on: this line's part
-                outline.append({"file": rel, "line": n, "kind": m.group(1),
-                                "title": plain_text(g[0] if g else line[m.end():])})
-                env = m.group(1)
-            for m in BEGIN_RE.finditer(line):
-                if m.group(1) in outline_envs:
-                    outline.append({"file": rel, "line": n, "kind": m.group(1),
-                                    "title": plain_text(m.group(2) or "")})
-                env = m.group(1)
-            for m in MACRO_RE.finditer(line):
-                macros.append({"name": m.group(1), "file": rel, "line": n})
-            for m in LABEL_RE.finditer(line):
-                labels.append({"label": m.group(1), "file": rel, "line": n,
-                               "kind": env or ""})
-    keys = []
-    for rel in (f for f in files if f.endswith(".bib")):
-        bib = ROOT / rel
-        text = bib.read_text(encoding="utf-8", errors="replace")
-        for m in BIBKEY_RE.finditer(text):
-            if m.group(1).lower() not in ("string", "preamble", "comment"):
-                keys.append({"key": m.group(2), "type": m.group(1).lower(),
-                             "file": bib.relative_to(ROOT).as_posix(),
-                             "line": text.count("\n", 0, m.start()) + 1})
+        for what, n, name, title in found["events"]:
+            if what == "section":
+                outline.append({"file": rel, "line": n, "kind": name, "title": title})
+                env = name
+            elif what == "begin":
+                if name in outline_envs:
+                    outline.append({"file": rel, "line": n, "kind": name, "title": title})
+                env = name
+            elif what == "macro":
+                macros.append({"name": name, "file": rel, "line": n})
+            else:
+                labels.append({"label": name, "file": rel, "line": n, "kind": env or ""})
+    keys = [{"key": key, "type": kind, "file": rel, "line": line}
+            for rel in files if rel.endswith(".bib") for key, kind, line in scan(rel, "bib") or []]
     return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
             "environments": list(envs), "env_titles": envs}
 

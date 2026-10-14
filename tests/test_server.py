@@ -8,6 +8,7 @@ import time
 import unittest
 from unittest import mock
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 import server  # noqa: E402
@@ -284,6 +285,31 @@ class Symbols(unittest.TestCase):
         self.assertEqual([(o["kind"], o["title"]) for o in server.symbols()["outline"]],
                          [("chapter", "One"), ("section", "Long a/b^2"),
                           ("subsection", "Rd and SO(n)")])
+
+    def test_unchanged_files_are_not_read_again(self):
+        root = project({"main.tex": "\\newtheorem{thm}{Theorem}\n\\input{a}\n",
+                        "a.tex": "\\section{A}\\label{a}\n", "refs.bib": "@book{knuth,\n}\n"})
+        first = server.symbols()
+        self.assertEqual(server.document_order(), ["main.tex", "a.tex"])
+        reads = []
+        real = Path.read_text
+
+        def counted(p, *a, **k):
+            reads.append(p.name)
+            return real(p, *a, **k)
+        with mock.patch.object(Path, "read_text", counted):
+            self.assertEqual(server.symbols(), first)
+            self.assertEqual(server.document_order(), ["main.tex", "a.tex"])
+            self.assertEqual(reads, [], "nothing changed: nothing is read")
+            (root / "a.tex").write_text("\\section{B}\\label{b}\\input{c}\n", encoding="utf-8")
+            (root / "c.tex").write_text("\\begin{thm}[C]\\end{thm}\n", encoding="utf-8")
+            os.utime(root / "a.tex", ns=(1, 1))      # a new modification time, also on a coarse clock
+            s = server.symbols()
+            self.assertEqual(sorted(reads), ["a.tex", "c.tex"], "only the changed and the new file")
+        self.assertEqual([l["label"] for l in s["labels"]], ["b"])
+        self.assertEqual([(o["kind"], o["title"]) for o in s["outline"]], [("section", "B"), ("thm", "C")])
+        self.assertEqual(server.document_order(), ["main.tex", "a.tex", "c.tex"])
+        self.assertEqual(s["bibkeys"], [{"key": "knuth", "type": "book", "file": "refs.bib", "line": 1}])
 
 
 @unittest.skipUnless(shutil.which("pdflatex") and not os.environ.get("PRISM_SKIP_TEX"),
