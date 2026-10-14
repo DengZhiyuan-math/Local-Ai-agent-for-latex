@@ -400,8 +400,11 @@ const PV = {
       el.className = "pdf-link";
       Object.assign(el.style, { left: Math.min(x1, x2) + "px", top: Math.min(y1, y2) + "px",
         width: Math.abs(x2 - x1) + "px", height: Math.abs(y2 - y1) + "px" });
-      if (a.url || a.unsafeUrl) {
-        el.href = a.url || a.unsafeUrl; el.target = "_blank"; el.rel = "noopener noreferrer";
+      // Only web and mail links open: a PDF (which a co-author can change) may hold any
+      // URL, a javascript: one too. Its links inside the document work as before.
+      const url = [a.url, a.unsafeUrl].find((u) => typeof u === "string" && /^(https?:|mailto:)/i.test(u));
+      if (url) {
+        el.href = url; el.target = "_blank"; el.rel = "noopener noreferrer";
         el.title = el.href;
       } else if (a.dest) {
         el.href = "#"; el.dataset.dest = JSON.stringify(a.dest);
