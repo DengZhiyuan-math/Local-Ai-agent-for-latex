@@ -121,25 +121,80 @@ exit 0
 """
 
 
+# What decides a repository's sync target (_candidate) and its hooks: its config (also a
+# worktree's), HEAD, and your own git config. Their contents are the key of the cache
+# below, so any change is seen at once; a system-wide config or an [include]d file is not
+# read, so an entry is also renewed after CACHE_TTL seconds at the latest.
+CACHE_TTL = 60
+_CACHE: dict[tuple, tuple] = {}
+_CACHE_LOCK = threading.Lock()
+
+
+def _config_key(git_dir: Path) -> tuple:
+    common = git_dir
+    try:                                  # a worktree keeps its config in the main repository
+        common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+    except OSError:
+        pass
+    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config"
+
+    def read(f: Path) -> bytes | None:
+        try:
+            return f.read_bytes()
+        except OSError:
+            return None
+    return tuple(read(f) for f in (common / "config", git_dir / "config.worktree", git_dir / "HEAD",
+                                   Path.home() / ".gitconfig", xdg))
+
+
+def _cached(kind: str, git_dir: Path, compute: Callable[[], object]):
+    """compute(), or its result from less than CACHE_TTL seconds ago while git_dir's
+    configuration (_config_key) is unchanged. A ValueError it raises is kept like a result."""
+    key, stamp = (kind, registry.norm(git_dir)), _config_key(git_dir)
+    with _CACHE_LOCK:
+        hit = _CACHE.get(key)
+    if hit and hit[0] == stamp and time.monotonic() - hit[1] < CACHE_TTL:
+        value = hit[2]
+    else:
+        try:
+            value = compute()
+        except ValueError as e:
+            value = e
+        with _CACHE_LOCK:
+            _CACHE[key] = (stamp, time.monotonic(), value)
+    if isinstance(value, ValueError):
+        raise ValueError(str(value))
+    return value
+
+
 def install_guard(git_dir: Path) -> bool:
     """Put GUARD in the repository's hooks, unless it has a pre-push hook of its own or
     uses a hooks folder of its own (core.hooksPath). True when the guard is in place."""
+    hook = _cached("hooks", git_dir, lambda: _hook_path(git_dir))
+    if hook is None:
+        return False
     try:
-        r = gitenv.git(git_dir, "config", "--get", "core.hooksPath", timeout=20)
-        if r.stdout.strip():
-            return False
-        r = gitenv.git(git_dir, "rev-parse", "--git-path", "hooks", timeout=20)
-        if r.returncode:
-            return False
-        hook = (git_dir / r.stdout.strip()).resolve() / "pre-push"
         if hook.exists():
             return GUARD_MARK in hook.read_text(encoding="utf-8", errors="replace")
         hook.parent.mkdir(parents=True, exist_ok=True)
         hook.write_bytes(GUARD.encode("utf-8"))      # \n line ends: sh reads it on Windows too
         hook.chmod(0o755)
         return True
-    except (OSError, subprocess.SubprocessError):
+    except OSError:
         return False
+
+
+def _hook_path(git_dir: Path) -> Path | None:
+    """Where the repository's pre-push hook goes; None when it uses a hooks folder of its own."""
+    try:
+        if gitenv.git(git_dir, "config", "--get", "core.hooksPath", timeout=20).stdout.strip():
+            return None
+        r = gitenv.git(git_dir, "rev-parse", "--git-path", "hooks", timeout=20)
+        if r.returncode:
+            return None
+        return (git_dir / r.stdout.strip()).resolve() / "pre-push"
+    except (OSError, subprocess.SubprocessError):
+        return None
 
 
 def shared_marker(top: Path) -> bool:
@@ -359,9 +414,17 @@ class GitSync:
         return ok
 
     # ------------------------------------------------------------ remote
-    def _candidate(self) -> dict:
+    def _candidate(self, fresh: bool = False) -> dict:
+        """The sync target the repository's configuration names (see _target), looked up
+        again only when that configuration changed (_cached), unless `fresh`: everything
+        that pushes, fetches or binds asks fresh."""
         if not self.check_repo():
             raise ValueError("This project has no repository to sync")
+        if fresh:
+            return self._target()
+        return dict(_cached("target", self.git_dir, self._target))
+
+    def _target(self) -> dict:
         actual = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir").stdout.strip().splitlines()
         if len(actual) != 2 or registry.norm(Path(actual[0]).resolve()) != registry.norm(self.top) \
                 or registry.norm(Path(actual[1]).resolve()) != registry.norm(self.git_dir.resolve()):
@@ -412,18 +475,18 @@ class GitSync:
     def bind_target(self, expected: dict | None = None) -> None:
         """Called only after explicit menu confirmation, or after creating a known repo."""
         with self.lock:
-            candidate = self._candidate()
+            candidate = self._candidate(fresh=True)
             if expected is not None and public_target(candidate) != expected:
                 raise ValueError("Sync target changed since confirmation; open the menu again")
             write_bytes(self._settings_file(), json.dumps({**self._settings(), "sync_target": candidate}).encode())
             self.target, self.blocked_reason = candidate, None
 
-    def validate_target(self) -> bool:
+    def validate_target(self, fresh: bool = False) -> bool:
         with self.lock:
             bound = self._settings().get("sync_target")
             self.target = None
             try:
-                candidate = self._candidate()
+                candidate = self._candidate(fresh)
                 self.target = candidate
                 # git_dir is the current local location, not the bound remote identity.
                 same = isinstance(bound, dict) and all(candidate[k] == bound.get(k) for k in
@@ -453,7 +516,7 @@ class GitSync:
         return "refs/remotes/" + self.upstream if self.upstream else "refs/remotes/prism-local/missing"
 
     def fetch(self, manual: bool = False) -> subprocess.CompletedProcess | None:
-        if not self.validate_target() or (not manual and not self.enabled):
+        if not self.validate_target(fresh=True) or (not manual and not self.enabled):
             return None
         t = self.target
         self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
@@ -487,7 +550,7 @@ class GitSync:
                     return
                 self.state = "pushing"
                 try:
-                    if not self.validate_target():
+                    if not self.validate_target(fresh=True):
                         return
                     args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
                             self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
@@ -946,8 +1009,13 @@ class GitSync:
     # ------------------------------------------------------------ for the editor
     def status(self) -> dict:
         own = self.check_repo()
-        if own:
-            self.validate_target()
+        # The editor asks every two seconds: while a commit, fetch or push holds the lock
+        # (minutes on a slow network), it gets what is known instead of waiting in line.
+        if own and self.lock.acquire(blocking=False):
+            try:
+                self.validate_target()
+            finally:
+                self.lock.release()
         st = {"own": own, "enabled": own and self.enabled,
               "target": public_target(self.target),
               "bound_target": public_target(self._settings().get("sync_target")) if own else None,

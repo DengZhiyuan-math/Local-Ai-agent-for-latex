@@ -53,6 +53,57 @@ class Targets(unittest.TestCase):
         self.assertEqual(self.g._settings()["sync_target"]["branch_ref"], "refs/heads/main")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
+    def test_status_runs_no_git_for_the_target_until_the_config_changes(self):
+        self.g.bind_target()
+        self.g.status()
+        with mock.patch.object(gitsync.gitenv, "git", wraps=gitsync.gitenv.git) as run:
+            for _ in range(3):
+                self.assertIsNone(self.g.status()["blocked_reason"])
+            run.assert_not_called()
+            git(self.root, "remote", "set-url", "origin", str(self.tool))     # another repository
+            st = self.g.status()
+        self.assertIn("Sync target changed", st["blocked_reason"])
+        self.assertTrue(run.called, "a changed config is looked at again at once")
+
+    def test_push_checks_the_target_afresh(self):
+        self.g.bind_target()
+        self.g.status()
+        (self.root / "main.tex").write_text("mine\n")
+        self.g.commit(["main.tex"], "edit")
+        # A change the cache does not see (a system-wide config, say): the push still does.
+        with mock.patch.object(gitsync, "_config_key", return_value=("same",)):
+            gitsync._CACHE.clear()
+            self.g.status()
+            git(self.root, "remote", "set-url", "origin", str(self.tool))
+            self.assertIsNone(self.g.status()["blocked_reason"], "status may use what it knew")
+            self.g.push()
+        self.assertIn("Sync target changed", self.g.blocked_reason)
+        self.assertNotEqual(git(self.root, "rev-parse", "HEAD"),
+                            subprocess.run(["git", "rev-parse", "main"], cwd=self.tool,
+                                           capture_output=True, text=True).stdout.strip())
+
+    def test_status_does_not_wait_for_a_sync_in_progress(self):
+        self.g.bind_target()
+        self.g.status()
+        held = __import__("threading").Event()
+        release = __import__("threading").Event()
+
+        def hold():
+            with self.g.lock:
+                held.set()
+                release.wait(10)
+        t = __import__("threading").Thread(target=hold)
+        t.start()
+        held.wait(5)
+        try:
+            start = __import__("time").monotonic()
+            st = self.g.status()
+            self.assertLess(__import__("time").monotonic() - start, 1.0)
+            self.assertEqual(st["target"]["branch_ref"], "refs/heads/main", "what is known")
+        finally:
+            release.set()
+            t.join()
+
     def test_same_repository_reached_another_way_rebinds_quietly(self):
         self.g.bind_target()
         git(self.root, "config", "branch.main.remote", "origin")
