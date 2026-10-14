@@ -1,4 +1,4 @@
-"""prism-local updates its own checkout before a server starts (selfupdate.py)."""
+"""prism-local updates its own checkout when a server starts (selfupdate.py)."""
 import os
 import subprocess
 import sys

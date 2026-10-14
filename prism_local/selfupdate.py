@@ -1,10 +1,10 @@
-"""prism-local updates itself: before a server starts, the app's own repository (the
-folder this file is in, when it is a git clone) takes what is new on GitHub.
+"""prism-local updates itself: when a server starts, in the background, the app's own
+repository (the folder this file is in, when it is a git clone) takes what is new on GitHub.
 
 Only a fast-forward, and only when that cannot touch work of yours: the checkout is on a
 branch that tracks one on GitHub, has no uncommitted changes and no merge or rebase in
 progress, and has no commits GitHub lacks. Otherwise it is left alone and the server log
-says why. At most once every few minutes (the launcher, the Home page and each editor
+says why. At most once every few minutes (the Home page and each editor
 all ask; the first one fetches). PRISM_AUTO_UPDATE=0 switches it off.
 
 A server that is already running keeps its code; the editor then offers "Update:

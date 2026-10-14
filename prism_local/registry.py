@@ -382,9 +382,8 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
             return {"error": f"prism-local for this project runs (process {old.get('pid')}) but "
                              "does not answer. Close its pages and try again in a minute.",
                     "log": tail(log), "logfile": str(log)}
-        # A new server runs the code on disk: bring that up to date first (selfupdate.py).
-        import selfupdate
-        news = selfupdate.update()
+        # The new server updates prism-local itself in the background (selfupdate.py), so
+        # opening a project never waits for GitHub.
         log.parent.mkdir(parents=True, exist_ok=True)
         mode = "w"
         try:
@@ -398,9 +397,6 @@ def ensure_server(project: Path | None, port: int | None = None, extra: list[str
         kw = ({"creationflags": subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP}
               if WIN else {"start_new_session": True})
         with open(log, mode, encoding="utf-8") as logf:     # the child keeps its own handle
-            if news:
-                logf.write(f"prism-local update: {news}\n")
-                logf.flush()
             proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=logf,
                                     stderr=subprocess.STDOUT, close_fds=True,
                                     env={**git_env(), "PYTHONIOENCODING": "utf-8"}, **kw)
