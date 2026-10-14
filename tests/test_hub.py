@@ -147,6 +147,14 @@ class Create(TempState):
         self.assertIn(g["branch"], ("main", "master"))
         self.assertGreater(g["changes"], 0)
 
+    def test_a_new_repository_is_announced_to_the_editor_unless_it_is_this_process(self):
+        # The editor's own publish runs here holding its sync lock: asking it would wait for that.
+        for pid, told in ((os.getpid(), False), (os.getpid() + 1, True)):
+            with mock.patch.object(hub.registry, "running_instance",
+                                   return_value={"url": "http://127.0.0.1:9/", "pid": pid}),                     mock.patch.object(hub.registry.HTTP, "open") as asked:
+                hub.tell_editor(self.tmp)
+            self.assertEqual(asked.called, told, pid)
+
     def test_git_info_of_some_or_all_projects(self):
         hub.create_project({"name": "g", "parent": str(self.tmp), "template": "empty", "git": True})
         hub.create_project({"name": "plain", "parent": str(self.tmp), "template": "empty", "git": False})

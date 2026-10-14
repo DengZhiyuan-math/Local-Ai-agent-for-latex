@@ -1064,7 +1064,9 @@ def tell_editor(root: Path) -> None:
     """The project's open editor, if any, looks for its new repository (gitsync.recheck)."""
     inst = registry.running_instance(registry.instance_file(registry.project_key(root)), "prism-local",
                                      root, timeout=1.0, cleanup=False)
-    if not inst:
+    # Not when this process is that editor (its own publish): it looks again itself, and asking
+    # it here would wait for the sync lock its publish holds.
+    if not inst or inst.get("pid") == os.getpid():
         return
     req = registry.urllib.request.Request(inst["url"] + "api/git/recheck", data=b"{}", method="POST",
                                           headers={"Content-Type": "application/json", "X-Prism-Local": "1"})

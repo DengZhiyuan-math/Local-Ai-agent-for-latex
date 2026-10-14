@@ -29,6 +29,7 @@ import re
 import subprocess
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 from urllib.parse import urlsplit, urlunsplit
@@ -228,6 +229,52 @@ def record_move(old: Path, new: Path) -> str | None:
         return None
 
 
+class RepoBusy(RuntimeError):
+    """Another prism-local process is changing the repository; try again later."""
+
+
+REPO_WAIT = 30           # seconds a commit, pull or push waits while another process changes the repository
+_REPO_LOCKS: dict[str, list] = {}
+_REPO_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def repo_lock(git_dir: Path | None, timeout: float | None = None):
+    """Held while prism-local changes a repository (commit, merge, push): one process at a
+    time, also across processes: two editors in a repository shared by several projects, or
+    an editor still pushing as it closes while the project opens again. It is an OS file
+    lock (.git/prism-local.lock), gone when its process ends, so a crash never leaves it
+    behind. Re-entrant within a thread. Raises RepoBusy after `timeout` (REPO_WAIT) seconds."""
+    timeout = REPO_WAIT if timeout is None else timeout
+    if git_dir is None:
+        yield
+        return
+    path = git_dir / "prism-local.lock"
+    with _REPO_LOCKS_GUARD:
+        entry = _REPO_LOCKS.setdefault(registry.norm(path), [threading.RLock(), 0, None])
+    deadline = time.monotonic() + timeout
+    if not entry[0].acquire(timeout=max(timeout, 0)):
+        raise RepoBusy("git is busy in another prism-local window; will try again")
+    try:
+        if entry[1] == 0:                   # the first hold in this process: take the file
+            held = registry.FileLock(path, timeout=max(deadline - time.monotonic(), 0))
+            try:
+                held.__enter__()
+            except (TimeoutError, OSError):
+                raise RepoBusy("git is busy in another prism-local window; will try again")
+            entry[2] = held
+        entry[1] += 1
+        try:
+            yield
+        finally:
+            entry[1] -= 1
+            if entry[1] == 0:
+                held, entry[2] = entry[2], None
+                held.__exit__(None, None, None)
+    finally:
+        entry[0].release()
+
+
 def _slug(name: str) -> str:
     return "".join(c if c.isalnum() else "-" for c in name).strip("-")[:30] or "github"
 
@@ -345,10 +392,16 @@ class GitSync:
         return bool(self._settings().get("sync", True))
 
     def set_enabled(self, on: bool) -> None:
-        with self.lock:
-            f = self._settings_file()
-            if f:
-                write_bytes(f, json.dumps({**self._settings(), "sync": bool(on)}).encode())
+        self._update_settings(sync=bool(on))
+
+    def _update_settings(self, **changes) -> None:
+        """Change keys of .git/prism-local.json, keeping the others. The editor and the Home
+        page both write it: under a file lock, so neither drops what the other wrote."""
+        f = self._settings_file()
+        if not f:
+            return
+        with registry.FileLock(f.with_name(f.name + ".lock"), timeout=10):
+            write_bytes(f, json.dumps({**self._settings(), **changes}).encode())
 
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
@@ -386,7 +439,7 @@ class GitSync:
             return False
         if self.shared:      # the repository has the project's name in every message
             message = f"{self.root_fn().name}: {message}"
-        with self.lock:
+        with self.lock, repo_lock(self.git_dir):
             # In a shared repository another editor may be committing right now.
             deadline = time.monotonic() + (LOCK_WAIT if self.shared else 0)
             self._clear_stale_lock()
@@ -478,7 +531,7 @@ class GitSync:
             candidate = self._candidate(fresh=True)
             if expected is not None and public_target(candidate) != expected:
                 raise ValueError("Sync target changed since confirmation; open the menu again")
-            write_bytes(self._settings_file(), json.dumps({**self._settings(), "sync_target": candidate}).encode())
+            self._update_settings(sync_target=candidate)
             self.target, self.blocked_reason = candidate, None
 
     def validate_target(self, fresh: bool = False) -> bool:
@@ -498,7 +551,7 @@ class GitSync:
                 # and branch reached another way (ssh instead of https, an upstream set by
                 # `git push -u`) is rebound quietly.
                 if public_target(candidate) != public_target(bound):
-                    write_bytes(self._settings_file(), json.dumps({**self._settings(), "sync_target": candidate}).encode())
+                    self._update_settings(sync_target=candidate)
                 self.blocked_reason = None
             except (ValueError, OSError, subprocess.SubprocessError) as exc:
                 self.blocked_reason = str(exc)
@@ -543,7 +596,7 @@ class GitSync:
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
         (co-authors pushing one after another), up to `tries` times. Never forced."""
         attempts = tries if retry else 1
-        with self.lock:
+        with self.lock, repo_lock(self.git_dir):
             for attempt in range(attempts):
                 self._remote_state()
                 if self.blocked_reason or (not manual and not self.enabled) or not self.has_remote or not self.ahead:
@@ -585,7 +638,7 @@ class GitSync:
         a merge commit that keeps both sides. Nothing is ever rewritten or thrown away: when
         the two sides changed the same lines, the merge is called off, both versions stay
         where they are (GitHub's there, yours committed here), and `error` says which files."""
-        with self.lock:
+        with self.lock, repo_lock(self.git_dir):
             self.last_fetch = time.time()
             if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
                 return
@@ -873,7 +926,7 @@ class GitSync:
         GitHub's branch, taking your version of the lines both changed (git merge -X ours:
         everything else of theirs comes in as usual), and push. Their version stays in
         their commits; nothing leaves the history."""
-        with self.lock:
+        with self.lock, repo_lock(self.git_dir):
             if self.changes():
                 self.commit_all("Combined with GitHub's version")
             r = self.fetch(manual=True)
@@ -932,6 +985,8 @@ class GitSync:
     def _safe(self, fn) -> None:
         try:
             fn()
+        except RepoBusy:
+            pass                            # another window is at it; the next tick tries again
         except (OSError, subprocess.SubprocessError, RuntimeError) as e:
             self.error = str(e)[-300:]
 
@@ -983,8 +1038,15 @@ class GitSync:
         except OSError:
             return
         if msg.startswith(("Merge changes from GitHub", "Put back commits dropped from GitHub")):
-            self._clear_stale_lock()
-            self.git("merge", "--abort", timeout=60)
+            # Unless a prism-local process is merging right now (it holds repo_lock): another
+            # project's editor in the same repository, or this project's last editor still
+            # closing. A crashed one holds nothing.
+            try:
+                with repo_lock(self.git_dir, timeout=0):
+                    self._clear_stale_lock()
+                    self.git("merge", "--abort", timeout=60)
+            except RepoBusy:
+                pass
 
     def start(self) -> None:
         threading.Thread(target=self.run, daemon=True).start()

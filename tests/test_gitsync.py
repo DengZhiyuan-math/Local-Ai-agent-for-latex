@@ -2,7 +2,9 @@
 import shutil
 import subprocess
 import sys
+import threading
 import time
+from unittest import mock
 import unittest
 from pathlib import Path
 
@@ -254,6 +256,91 @@ class SharedRepositoryTest(unittest.TestCase):
     def test_no_marker_no_sync(self):
         (self.top / gitsync.SHARED_MARKER).unlink()
         self.assertFalse(gitsync.GitSync(lambda: self.a, lambda: "build").check_repo())
+
+
+HOLD = """import sys, time
+sys.path.insert(0, sys.argv[1])
+import gitsync
+from pathlib import Path
+with gitsync.repo_lock(Path(sys.argv[2])):
+    print("held", flush=True)
+    sys.stdin.readline()
+"""
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class OtherProcesses(unittest.TestCase):
+    """Another prism-local process changing the same repository: an editor still pushing as
+    it closes while the project opens again, or another project's editor in a shared one."""
+
+    setUp = GitSyncTest.setUp
+
+    def hold(self):
+        """Another process holding the repository; returns a function that lets it go."""
+        p = subprocess.Popen([sys.executable, "-c", HOLD, str(Path(gitsync.__file__).parent), str(self.g.git_dir)],
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+        self.assertEqual(p.stdout.readline().strip(), "held")
+
+        def release():
+            p.stdin.close()
+            p.wait(10)
+            p.stdout.close()
+        self.addCleanup(lambda: p.poll() is None and release())
+        return release
+
+    def test_a_merge_another_process_is_making_is_not_called_off(self):
+        merge_head = self.g.git_dir / "MERGE_HEAD"
+        merge_head.write_text(git(self.root, "rev-parse", "HEAD") + "\n")
+        (self.g.git_dir / "MERGE_MSG").write_text("Merge changes from GitHub\n")
+        release = self.hold()
+        with mock.patch.object(self.g, "git", wraps=self.g.git) as run:
+            self.g._finish_crashed_merge()
+        self.assertNotIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
+        release()
+        with mock.patch.object(self.g, "git", wraps=self.g.git) as run:
+            self.g._finish_crashed_merge()                # its process is gone: a crash
+        self.assertIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
+
+    def test_sync_waits_its_turn_without_an_error(self):
+        release = self.hold()
+        (self.root / "main.tex").write_text("mine\n", encoding="utf-8")
+        with mock.patch.object(gitsync, "REPO_WAIT", 0.3):
+            with self.assertRaises(gitsync.RepoBusy):
+                self.g.commit(["main.tex"], "edit")
+            self.g._safe(self.g.push)
+        self.assertIsNone(self.g.error, "busy is not an error: the next tick tries again")
+        release()
+        self.assertTrue(self.g.commit(["main.tex"], "edit"))
+
+    def test_the_lock_is_reentrant_and_shared_by_threads(self):
+        with gitsync.repo_lock(self.g.git_dir):
+            with gitsync.repo_lock(self.g.git_dir, timeout=0):
+                pass                                       # the same thread again
+            got = []
+            t = threading.Thread(target=lambda: got.append(self._try()))
+            t.start()
+            t.join()
+            self.assertEqual(got, [False], "another thread waits")
+        self.assertTrue(self._try())
+
+    def _try(self):
+        try:
+            with gitsync.repo_lock(self.g.git_dir, timeout=0.2):
+                return True
+        except gitsync.RepoBusy:
+            return False
+
+    def test_settings_written_at_once_keep_every_key(self):
+        others = [gitsync.GitSync(lambda: self.root, lambda: "build") for _ in range(4)]
+        threads = [threading.Thread(target=lambda g=g, i=i: [g._update_settings(**{f"k{i}": n}) for n in range(20)])
+                   for i, g in enumerate(others)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        data = self.g._settings()
+        self.assertEqual({k: data.get(k) for k in ("k0", "k1", "k2", "k3")}, {f"k{i}": 19 for i in range(4)})
+        self.assertEqual(data["sync_target"]["branch_ref"], "refs/heads/main", "bound earlier, still there")
 
 
 if __name__ == "__main__":
