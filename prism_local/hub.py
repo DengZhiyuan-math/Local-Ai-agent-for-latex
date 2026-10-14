@@ -138,6 +138,17 @@ def list_projects() -> dict:
             "home": str(Path.home())}
 
 
+def all_git_info(ids: set[str] | None = None) -> dict:
+    """git_info of the projects in the list that exist (or of those in `ids`), by id. One
+    request for all, so the page does not queue a hundred requests ahead of a click on Open
+    (browsers run six at a time)."""
+    roots = [Path(e["path"]) for e in registry.load_projects()["projects"]]
+    roots = [r for r in roots if (ids is None or registry.project_key(r) in ids) and r.is_dir()]
+    with ThreadPoolExecutor(max_workers=8) as ex:
+        infos = list(ex.map(git_info, roots))
+    return {registry.project_key(r): info for r, info in zip(roots, infos)}
+
+
 def default_parent(data: dict) -> str:
     chosen = load_settings()["default_parent"]
     if chosen and Path(chosen).is_dir():
@@ -161,6 +172,10 @@ def git_info(root: Path) -> dict | None:
     def git(*args):      # read-only, and never holding .git/index.lock (see server.git)
         return subprocess.run(["git", "--no-optional-locks", *args], cwd=root, capture_output=True,
                               text=True, encoding="utf-8", errors="replace", timeout=8, env=git_env(), **NO_WINDOW)
+    # Git finds a repository only through a .git in the folder or one above it (git_env
+    # drops GIT_DIR and the like): without one, there is no repository, and no git to run.
+    if not any((p / ".git").exists() for p in (root, *root.parents)):
+        return None
     try:
         top = git("rev-parse", "--show-toplevel")
         if top.returncode != 0:
@@ -1332,6 +1347,9 @@ class Handler(httpbase.Handler):
                 return self._json({k: v for k, v in FETCH.items()})
             if path == "/api/git":
                 return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
+            if path == "/api/git/all":
+                ids = set(filter(None, q["ids"].split(","))) if "ids" in q else None
+                return self._json({"git": all_git_info(ids)})
             if path == "/api/pdf":
                 pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
                 if not pdf or not pdf.is_file():

@@ -70,12 +70,46 @@ $("#btn-restart").onclick = async () => {
   b.disabled = false; b.textContent = "Update: restart";
   toast(r.error || "The Home page did not come back. Open prism-local again.", true);
 };
+function showGit(id, git) {
+  H.git[id] = git;
+  document.querySelectorAll(`[data-id="${id}"] .gitchip`).forEach((el) => { el.outerHTML = gitChip(id); });
+}
 async function loadGit(p) {
   if (!p.exists) return;
   const r = await api("/api/git?id=" + encodeURIComponent(p.id)).catch(() => null);
-  if (r && r._status === 200) { H.git[p.id] = r.git; document.querySelectorAll(`[data-id="${p.id}"] .gitchip`).forEach((el) => { el.outerHTML = gitChip(p.id); }); }
+  if (r && r._status === 200) showGit(p.id, r.git);
 }
-function loadAllGit() { return Promise.all(H.projects.map(loadGit)); }
+// The projects opened or added in the last week (and any running) in one request: a
+// request per project would queue a click on Open behind them (browsers send six at a
+// time to one server). Older projects are looked at when a menu or the preview needs them.
+const ACTIVE_DAYS = 7;
+async function loadAllGit() {
+  H.gitAt = Date.now() / 1000;
+  const since = H.gitAt - ACTIVE_DAYS * 86400;
+  const ids = H.projects.filter((p) => p.exists && (p.running || Math.max(p.opened || 0, p.added || 0) >= since)).map((p) => p.id);
+  await loadGitOf(ids);
+}
+async function loadGitOf(ids) {
+  if (!ids.length) return;
+  const r = await api("/api/git/all?ids=" + encodeURIComponent(ids.join(","))).catch(() => null);
+  if (r && r._status === 200) for (const [id, git] of Object.entries(r.git)) showGit(id, git);
+}
+// A project not looked at yet (not active lately): look now, so that a menu does not offer
+// "Create GitHub repository…" for a project that has one.
+const gitLooking = new Map();
+function withGit(id) {
+  const p = byId(id);
+  if (!p || !p.exists || H.git[id] !== undefined) return Promise.resolve();
+  if (!gitLooking.has(id)) gitLooking.set(id, loadGit(p).finally(() => gitLooking.delete(id)));
+  return gitLooking.get(id);
+}
+// Back on this page: only an editor changes a project's repository (its commits and
+// pushes), so only the projects running or opened since the last check are asked again.
+async function loadOpenedGit() {
+  const since = H.gitAt || 0;
+  H.gitAt = Date.now() / 1000;
+  await loadGitOf(H.projects.filter((p) => p.exists && (p.running || (p.opened || 0) >= since - 5)).map((p) => p.id));
+}
 
 /* ------------------------------------------------------------------ folders and tags
    Folders (a research topic, its sub-projects, …) and tags only organize this list;
@@ -511,7 +545,11 @@ function paintSelection() {
     el.setAttribute("aria-selected", on);
   }
   renderBars(shownKeys.length);
-  if (H.preview) { $("#preview").innerHTML = previewHTML(); $("#preview").querySelectorAll("[data-thumb]").forEach(attachThumb); }
+  if (H.preview) {
+    $("#preview").innerHTML = previewHTML(); $("#preview").querySelectorAll("[data-thumb]").forEach(attachThumb);
+    const sel = selected();
+    if (sel.length === 1 && sel[0].k === "p") withGit(sel[0].id);      // its git chip
+  }
 }
 
 /* ------------------------------------------------------------------ PDF thumbnails
@@ -659,7 +697,7 @@ document.addEventListener("click", (e) => {
     case "open": return openProject(id);
     case "pin": e.stopPropagation(); return setPinned(id, !byId(id).pinned);
     case "remove": return removeProject(id);
-    case "menu": e.stopPropagation(); return showMenu(act, projectMenu(id));
+    case "menu": e.stopPropagation(); return withGit(id).then(() => showMenu(act, projectMenu(id)));
     case "tags": return openTags(id);
     case "new": return openNew();
     case "add": return openAdd();
@@ -762,7 +800,10 @@ document.addEventListener("contextmenu", (e) => {
   else if (tag) menu = tagMenu(tag.dataset.tag);
   else if (e.target.closest("#view-wrap")) { if (H.sel.size) select([]); menu = backgroundMenu(); }
   if (!menu) return;
-  e.preventDefault(); showMenu(null, menu, { x: e.clientX, y: e.clientY });
+  e.preventDefault();
+  const one = H.sel.size <= 1 && (it && !it.dataset.fid ? it.dataset.id : pv && pv.dataset.id);
+  if (one && H.git[one] === undefined) return withGit(one).then(() => showMenu(null, projectMenu(one), { x: e.clientX, y: e.clientY }));
+  showMenu(null, menu, { x: e.clientX, y: e.clientY });
 });
 
 /* ------------------------------------------------------------------ menus
@@ -1449,4 +1490,4 @@ async function watchFetch() {
 load().then(loadAllGit).then(watchFetch);
 loadSettings();
 setInterval(() => { if (document.visibilityState === "visible" && !document.querySelector("dialog[open]")) load(); }, 10000);
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { load(); loadAllGit(); } });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load().then(loadOpenedGit); });

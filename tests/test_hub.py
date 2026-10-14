@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
@@ -145,6 +146,18 @@ class Create(TempState):
             self.skipTest("git not available")
         self.assertIn(g["branch"], ("main", "master"))
         self.assertGreater(g["changes"], 0)
+
+    def test_git_info_of_some_or_all_projects(self):
+        hub.create_project({"name": "g", "parent": str(self.tmp), "template": "empty", "git": True})
+        hub.create_project({"name": "plain", "parent": str(self.tmp), "template": "empty", "git": False})
+        g, plain = (hub.registry.project_key((self.tmp / n).resolve()) for n in ("g", "plain"))
+        if any((p / ".git").exists() for p in self.tmp.resolve().parents) or not (self.tmp / "g" / ".git").exists():
+            self.skipTest("git not available, or the temp folder is inside a repository")
+        with mock.patch.object(hub.subprocess, "run", wraps=hub.subprocess.run) as run:
+            self.assertIsNone(hub.git_info(self.tmp / "plain"))
+            run.assert_not_called()                 # no .git anywhere: no git is run
+        self.assertEqual(set(hub.all_git_info()), {g, plain})
+        self.assertEqual(list(hub.all_git_info({g})), [g])
 
 
 class FoldersAndTags(TempState):
