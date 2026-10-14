@@ -123,7 +123,9 @@ class Codex(CliBackend):
     @staticmethod
     def permission_config(job: Job) -> list[str]:
         root = job.root.resolve()
-        rules = {"/": "read"}
+        # On Windows "/" is not absolute and Codex rejects the profile; ":root" names
+        # the filesystem root there.
+        rules = {":root" if os.name == "nt" else "/": "read"}
         if job.mode == "edit":
             if job.scope:
                 rules.update({str(project_path(root, rel)): "write" for rel in job.scope})
