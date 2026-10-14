@@ -23,6 +23,7 @@ import time
 from pathlib import Path
 
 import registry
+import settings
 import sessionmeta
 from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, executable, find_bin, kill_tree
 
@@ -92,10 +93,9 @@ def use_config_dir() -> None:
     use another login than the terminal. Read again before each check: no restart needed.
     Settings that cannot be read change nothing (the turn is refused, see allowed_account)."""
     try:
-        data = registry.read_state(registry.state_dir() / "settings.json")
+        cfg = str(settings.load()["claude_config_dir"] or "").strip()
     except registry.StateUnreadable:
         return
-    cfg = str(data.get("claude_config_dir") or "").strip()
     cfg = str(Path(cfg).expanduser()) if cfg else _STARTED_CONFIG_DIR
     if cfg:
         os.environ["CLAUDE_CONFIG_DIR"] = cfg
@@ -175,8 +175,7 @@ def claude_account(exe: str | None, root: Path | None = None, max_age: float = 3
 def allowed_account() -> str:
     """The only Claude account prism-local may use (Home → Settings); empty: any. Raises
     registry.StateUnreadable when the settings cannot be read: then it is not known."""
-    data = registry.read_state(registry.state_dir() / "settings.json")
-    return str(data.get("claude_account") or "").strip()
+    return str(settings.load()["claude_account"] or "").strip()
 
 
 def unknown_account(e: Exception) -> str:

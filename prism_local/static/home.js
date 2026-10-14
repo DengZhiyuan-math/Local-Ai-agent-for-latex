@@ -1263,7 +1263,7 @@ Nothing is deleted. Editors of these projects open at the new place afterwards.`
   await loadSyncPlan();
 });
 
-/* a GitHub repository for one project (hub.publish_project) */
+/* a GitHub repository for one project (publish.publish_project) */
 async function openPublish(id) {
   const p = byId(id), f = $("#form-publish"), dlg = $("#dlg-publish"), btn = f.querySelector("button[type=submit]");
   f.reset(); dlgError(dlg, ""); f.dataset.id = id;

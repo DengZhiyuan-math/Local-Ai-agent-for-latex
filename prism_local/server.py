@@ -39,10 +39,7 @@ from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
-# The Home page's GitHub helpers (Publish). Imported here, at the start: imported at the
-# first use, after a self-update had pulled new code, it would be the new hub.py next to
-# the old versions of the modules it uses.
-import hub  # noqa: E402
+import publish  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 import sources  # noqa: E402
@@ -940,7 +937,7 @@ class Handler(httpbase.Handler):
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
-            return self._json(hub.publish_info(ROOT))
+            return self._json(publish.publish_info(ROOT))
         if path == "/api/git/theirs":            # GitHub's version, after a clash
             resolve(q["path"])
             return self._json(GITSYNC.theirs(q["path"]))
@@ -1027,7 +1024,7 @@ class Handler(httpbase.Handler):
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
             with GITSYNC.lock:
-                r = hub.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
+                r = publish.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
                                         list(body.get("leave_out") or []), files_lock=SAVE_LOCK)
             GITSYNC.recheck()                   # a repository exists now
             return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)

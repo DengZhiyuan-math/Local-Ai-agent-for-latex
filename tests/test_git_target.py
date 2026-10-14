@@ -113,32 +113,27 @@ class Targets(unittest.TestCase):
                          self.g.target["configuration_fingerprint"])
 
     def test_create_rejects_target_changed_before_binding(self):
-        import hub
+        import github
+        import publish
+        from fake_github import FakeGitHub
         git(self.root, "remote", "remove", "origin")
-        real_run, real_bind = subprocess.run, self.g.bind_target
-
-        def created(cmd, *args, **kwargs):
-            if cmd[0] == "/fixture/gh":
-                git(self.root, "remote", "add", "origin", "https://github.com/owner/paper.git")
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            return real_run(cmd, *args, **kwargs)
+        real_bind = self.g.bind_target
 
         def changed_before_binding(expected=None):
             git(self.root, "remote", "set-url", "origin", "https://github.com/owner/tool.git")
             real_bind(expected)
 
-        with mock.patch.object(hub, "gh_status", return_value={
-                "logged_in": True, "gh": "/fixture/gh", "account": "owner"}), \
-                mock.patch.object(hub, "project_sync", return_value=self.g), \
-                mock.patch.object(hub.subprocess, "run", side_effect=created), \
+        gh = FakeGitHub(account="owner")
+        with mock.patch.object(github, "GITHUB", gh), \
+                mock.patch.object(publish, "project_sync", return_value=self.g), \
                 mock.patch.object(self.g, "bind_target", side_effect=changed_before_binding), \
-                mock.patch.object(self.g, "push") as push, \
-                mock.patch.object(hub, "protect_branch") as protect:
-            result = hub.create_github_repo(self.root, "owner", "paper")
+                mock.patch.object(self.g, "push") as push:
+            result = publish.create_github_repo(self.root, "owner", "paper")
         self.assertIn("changed since confirmation", result.get("error", ""))
         self.assertEqual(result["url"], "https://github.com/owner/paper")
+        self.assertEqual(gh.created, ["owner/paper"])
         push.assert_not_called()
-        protect.assert_not_called()
+        self.assertEqual(gh.protected, [], "no protection asked for")
         self.assertNotIn("sync_target", self.g._settings())
         self.assertEqual((self.root / "main.tex").read_text(), "base\n")
 
@@ -146,28 +141,23 @@ class Targets(unittest.TestCase):
         """Publishing commits everything (git add -A): not while a save replaces a file (on
         Windows git cannot open it then), so it holds the editor's save lock it is given."""
         import gitenv
-        import hub
+        import github
+        import publish
         import threading
+        from fake_github import FakeGitHub
         git(self.root, "remote", "remove", "origin")
         (self.root / "new.tex").write_text("new\n")
         held, lock = [], threading.RLock()
-        real_git, real_run = gitenv.git, subprocess.run
+        real_git = gitenv.git
 
         def run_git(cwd, *args, **kw):
             if args and args[0] in ("add", "commit"):
                 held.append(lock._is_owned())
             return real_git(cwd, *args, **kw)
 
-        def gh_fails(cmd, *args, **kwargs):
-            if cmd[0] == "/fixture/gh":
-                return subprocess.CompletedProcess(cmd, 1, "", "no network")
-            return real_run(cmd, *args, **kwargs)
-
-        with mock.patch.object(hub, "gh_status", return_value={
-                "logged_in": True, "gh": "/fixture/gh", "account": "owner"}), \
-                mock.patch.object(gitenv, "git", run_git), \
-                mock.patch.object(hub.subprocess, "run", side_effect=gh_fails):
-            r = hub.create_github_repo(self.root, "owner", "paper", files_lock=lock)
+        with mock.patch.object(github, "GITHUB", FakeGitHub(account="owner", fail="no network")), \
+                mock.patch.object(gitenv, "git", run_git):
+            r = publish.create_github_repo(self.root, "owner", "paper", files_lock=lock)
         self.assertIn("no network", r.get("error", ""))
         self.assertTrue(held)
         self.assertEqual(set(held), {True}, "git add and commit ran holding the files")

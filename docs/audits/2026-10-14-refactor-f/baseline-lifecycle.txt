@@ -1,0 +1,20 @@
+test_opening_a_project_while_its_editor_restarts_starts_no_second_one (test_lifecycle.ServerLifecycle.test_opening_a_project_while_its_editor_restarts_starts_no_second_one)
+A restart (after an update): the server stops listening, removes its instance ... C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\subprocess.py:1127: ResourceWarning: subprocess 40652 is still running
+  _warn("subprocess %s is still running" % self.pid,
+Object allocated at (most recent call last):
+  File "C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\unittest\case.py", lineno 634
+    self._callTestMethod(testMethod)
+  File "C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\unittest\case.py", lineno 589
+    if method() is not None:
+  File "C:\Users\dengz\AppData\Local\Temp\prism-f-baseline-tphqmdh_\tests\test_lifecycle.py", lineno 253
+    first = registry.ensure_server(root)
+  File "C:\Users\dengz\AppData\Local\Temp\prism-f-baseline-tphqmdh_\prism_local\registry.py", lineno 453
+    return _ensure(inst, log, app, project, script, target, cwd, port, tries, extra, timeout)
+  File "C:\Users\dengz\AppData\Local\Temp\prism-f-baseline-tphqmdh_\prism_local\registry.py", lineno 493
+    proc = subprocess.Popen(cmd, cwd=cwd, stdin=subprocess.DEVNULL, stdout=logf,
+ok
+
+----------------------------------------------------------------------
+Ran 1 test in 11.896s
+
+OK

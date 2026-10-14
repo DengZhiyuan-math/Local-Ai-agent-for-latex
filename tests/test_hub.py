@@ -17,7 +17,9 @@ HUB = REPO / "prism_local" / "hub.py"
 PROJECT = REPO / "examples" / "minimal"
 sys.path.insert(0, str(REPO / "prism_local"))
 import hub  # noqa: E402
+import publish  # noqa: E402
 import registry  # noqa: E402
+import settings  # noqa: E402
 
 HEADERS = {"Content-Type": "application/json", "X-Prism-Local": "1"}
 
@@ -86,7 +88,7 @@ class Registry(TempState):
         damaged = b'{"claude_account": "me@example.com", '
         (state / "settings.json").write_bytes(damaged)
         with self.assertRaises(registry.StateUnreadable):
-            hub.save_settings({"git_init": True})
+            settings.save({"git_init": True})
         self.assertEqual((state / "settings.json").read_bytes(), damaged, "left as it was")
         problem = backend_claude.ClaudeCode("claude").preflight(PROJECT)
         self.assertIn("Nothing was sent", problem or "")
@@ -408,36 +410,54 @@ class FolderSync(TempState):
         self.assertTrue(r["moved"])
         self.assertIn("could not be committed", r["warning"] or "")
 
-    def test_publish_one_project(self):
+    def github(self):
+        """GitHub as a stand-in; real git pushes into local bare repositories."""
         from unittest import mock
+        import github
+        import gitenv
+        from fake_github import FakeGitHub
+        gh = FakeGitHub(remotes=self.tmp / "github")
+        for p in (mock.patch.object(github, "GITHUB", gh),
+                  mock.patch.object(gitenv, "git", gh.git)):
+            p.start()
+            self.addCleanup(p.stop)
+        return gh
+
+    def test_publish_one_project(self):
         root = self.projects / "ex 1"
         (root / "conversations").mkdir()
         (root / "conversations" / "chat.json").write_text("{}", encoding="utf-8")
-        info = hub.publish_info(root)
+        info = publish.publish_info(root)
         self.assertEqual((info["kind"], info["name"], info["github"]), ("none", "ex-1", None))
         self.assertEqual([d["dir"] for d in info["private_dirs"]], ["conversations"])
-        calls = []
-        with mock.patch.object(hub, "create_github_repo",
-                               side_effect=lambda r, o, n, **kw: calls.append((r, o, n)) or {"url": "https://github.com/me/" + n}):
-            r = hub.publish_project(root, "my-ex", leave_out=["conversations"])
-        self.assertEqual(r, {"url": "https://github.com/me/my-ex", "created": True})
-        self.assertEqual(calls, [(root, "", "my-ex")])
+        gh = self.github()
+        r = publish.publish_project(root, "my-ex", leave_out=["conversations"])
+        self.assertEqual((r["url"], r["created"]), ("https://github.com/me/my-ex", True), r)
+        self.assertEqual((gh.created, gh.protected), (["me/my-ex"], [("me/my-ex", "main")]))
+        self.assertEqual(self.git(root, "log", "--format=%s").strip(), "Initial commit")
+        self.assertNotIn("conversations/chat.json", self.git(root, "ls-files"))
+        bound = hub.project_sync(root)._settings()["sync_target"]
+        self.assertEqual(bound["repository_identity"], "github.com/me/my-ex")
         self.assertEqual(hub.repo_kind(root)[0], "own")
+        self.assertEqual(self.git(gh.repositories["me/my-ex"], "rev-parse", "main"),
+                         self.git(root, "rev-parse", "HEAD"))
+        self.assertEqual(self.git(gh.repositories["me/my-ex"], "show", "main:main.tex"), "ex 1\n")
         ignore = (root / ".gitignore").read_text(encoding="utf-8").splitlines()
         self.assertIn("conversations/", ignore)
         self.assertIn("build/", ignore)
-        self.assertTrue(hub.publish_info(root)["private_dirs"][0]["ignored"])
+        self.assertTrue(publish.publish_info(root)["private_dirs"][0]["ignored"])
 
     def test_publish_in_a_shared_repository_publishes_that_repository(self):
-        from unittest import mock
         self.assertTrue(hub.apply_sync({"id": self.top["id"], "mode": "shared"})["ok"])
         repo = (self.projects / "Course").resolve()
         root = repo / "练习" / "ex 1"
-        self.assertEqual(hub.publish_info(root)["kind"], "shared")
-        with mock.patch.object(hub, "create_github_repo",
-                               side_effect=lambda r, o, n, **kw: {"url": f"https://github.com/me/{n}", "seen": str(r)}):
-            r = hub.publish_project(root)
-        self.assertEqual((r["seen"], r["url"]), (str(repo), "https://github.com/me/Course"))
+        self.assertEqual(publish.publish_info(root)["kind"], "shared")
+        gh = self.github()
+        r = publish.publish_project(root)
+        self.assertEqual((r["url"], gh.created), ("https://github.com/me/Course", ["me/Course"]), r)
+        self.assertIn("github.com/me/Course", self.git(repo, "remote", "get-url", "origin"))
+        self.assertEqual(self.git(gh.repositories["me/Course"], "rev-parse", "main"),
+                         self.git(repo, "rev-parse", "HEAD"))
 
     def test_big_files_stay_out_of_the_first_commit(self):
         from unittest import mock
@@ -445,9 +465,9 @@ class FolderSync(TempState):
         hub.git_init(root)
         (root / "huge.bin").write_bytes(b"x" * 4096)
         repo = hub.Repository.find(root)
-        with mock.patch.object(hub.sources, "MAX_FILE", 1024), repo.changing():
+        with mock.patch.object(publish.sources, "MAX_FILE", 1024), repo.changing():
             repo.ok("add", "-A")
-            self.assertEqual(hub._unstage_big(repo), ["huge.bin"])
+            self.assertEqual(publish.unstage_big(repo), ["huge.bin"])
         self.assertNotIn("huge.bin", self.git(root, "diff", "--cached", "--name-only"))
 
     def test_separate_creates_missing_repositories(self):
@@ -515,43 +535,61 @@ class CheckGitHub(TempState):
 
 
 class SettingsAndGitHub(TempState):
+    def test_concurrent_settings_updates_keep_both_changes(self):
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+        start = threading.Barrier(2)
+
+        def save(changes):
+            start.wait(5)
+            return settings.save(changes)
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            saved = [pool.submit(save, changes) for changes in (
+                {"github_owner": "my-org"}, {"claude_account": "me@uni.example"})]
+            for future in saved:
+                future.result(timeout=15)
+        current = settings.load()
+        self.assertEqual(current["github_owner"], "my-org")
+        self.assertEqual(current["claude_account"], "me@uni.example")
+
     def test_settings_round_trip_and_checks(self):
-        self.assertEqual(hub.load_settings(), hub.SETTINGS_DEFAULTS)
-        st = hub.save_settings({"default_parent": str(self.tmp), "github_repo": True,
+        self.assertEqual(settings.load(), settings.DEFAULTS)
+        st = settings.save({"default_parent": str(self.tmp), "github_repo": True,
                                 "github_owner": "my-org"})
         self.assertEqual((st["github_repo"], st["github_owner"]), (True, "my-org"))
-        self.assertEqual(hub.load_settings(), st)
+        self.assertEqual(settings.load(), st)
         self.assertEqual(Path(hub.default_parent({"projects": []})), self.tmp.resolve())
         with self.assertRaises(ValueError):
-            hub.save_settings({"github_owner": "not an owner!"})
+            settings.save({"github_owner": "not an owner!"})
         with self.assertRaises(ValueError):
-            hub.save_settings({"default_parent": str(self.tmp / "missing")})
-        self.assertEqual(hub.save_settings({"claude_account": " me@uni.example "})["claude_account"],
+            settings.save({"default_parent": str(self.tmp / "missing")})
+        self.assertEqual(settings.save({"claude_account": " me@uni.example "})["claude_account"],
                          "me@uni.example")
         with self.assertRaises(ValueError):
-            hub.save_settings({"claude_account": "not an email"})
+            settings.save({"claude_account": "not an email"})
 
     def test_claude_profile_folder(self):
         import backend_claude
         prof = self.tmp / "profile"
         prof.mkdir()
         with self.assertRaises(ValueError):
-            hub.save_settings({"claude_config_dir": str(self.tmp / "missing")})
+            settings.save({"claude_config_dir": str(self.tmp / "missing")})
         old = os.environ.get("CLAUDE_CONFIG_DIR")
         self.addCleanup(lambda: os.environ.pop("CLAUDE_CONFIG_DIR", None) if old is None
                         else os.environ.__setitem__("CLAUDE_CONFIG_DIR", old))
-        self.assertEqual(hub.save_settings({"claude_config_dir": f' "{prof}" '})["claude_config_dir"],
+        self.assertEqual(settings.save({"claude_config_dir": f' "{prof}" '})["claude_config_dir"],
                          str(prof.resolve()))
         backend_claude.use_config_dir()
         self.assertEqual(os.environ["CLAUDE_CONFIG_DIR"], str(prof.resolve()))
-        hub.save_settings({"claude_config_dir": ""})          # back to the environment as started
+        settings.save({"claude_config_dir": ""})          # back to the environment as started
         backend_claude.use_config_dir()
         self.assertEqual(os.environ.get("CLAUDE_CONFIG_DIR", ""), backend_claude._STARTED_CONFIG_DIR)
 
     def test_repo_names(self):
-        self.assertEqual(hub.repo_name("dyn num paper"), "dyn-num-paper")
-        self.assertEqual(hub.repo_name("我的论文"), "latex-project")
-        self.assertEqual(hub.repo_name("我的论文 v2"), "v2")
+        self.assertEqual(publish.repo_name("dyn num paper"), "dyn-num-paper")
+        self.assertEqual(publish.repo_name("我的论文"), "latex-project")
+        self.assertEqual(publish.repo_name("我的论文 v2"), "v2")
 
     def test_project_inside_another_repository_has_none_of_its_own(self):
         g = hub.git_info(PROJECT)                  # examples/minimal, inside this repository
@@ -560,10 +598,15 @@ class SettingsAndGitHub(TempState):
         self.assertTrue(g["nested"])
 
     def test_github_refuses_bad_names_before_calling_github(self):
-        hub._gh_cache.update(at=time.time(), status={"gh": "gh", "logged_in": True, "account": "me"})
-        self.addCleanup(hub._gh_cache.clear)
-        self.assertIn("error", hub.create_github_repo(self.tmp, name="bad name!"))
-        self.assertIn("error", hub.create_github_repo(self.tmp, owner="bad owner!"))
+        import github
+        from fake_github import FakeGitHub
+        gh = FakeGitHub()
+        with mock.patch.object(github, "GITHUB", gh):
+            self.assertIn("error", publish.create_github_repo(self.tmp, name="bad name!"))
+            self.assertIn("error", publish.create_github_repo(self.tmp, owner="bad owner!"))
+        self.assertEqual(gh.created, [])
+        with mock.patch.object(github, "GITHUB", FakeGitHub(logged_in=False)):
+            self.assertIn("not logged in", publish.create_github_repo(self.tmp)["error"])
 
 
 class HubServer(unittest.TestCase):

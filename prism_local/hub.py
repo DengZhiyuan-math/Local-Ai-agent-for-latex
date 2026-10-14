@@ -17,7 +17,6 @@ state-changing request, and uses the Python standard library only.
 from __future__ import annotations
 
 import gitenv
-from gitenv import git_env
 
 import argparse
 import json
@@ -35,8 +34,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitsync  # noqa: E402
+import github  # noqa: E402
+import settings  # noqa: E402
 import sources  # noqa: E402
 from projectconfig import Config  # noqa: E402
+from publish import (create_github_repo, ensure_ignore, git_init, github_of, project_sync, publish_info,  # noqa: E402
+                     publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
 from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
 import registry  # noqa: E402
@@ -44,7 +47,6 @@ import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
-from proc import NO_WINDOW  # noqa: E402
 from texutil import tex_title  # noqa: E402
 
 PRESENCE = Presence()
@@ -130,7 +132,7 @@ def all_git_info(ids: set[str] | None = None) -> dict:
 
 
 def default_parent(data: dict) -> str:
-    chosen = load_settings()["default_parent"]
+    chosen = settings.load()["default_parent"]
     if chosen and Path(chosen).is_dir():
         return chosen
     if data.get("last_parent") and Path(data["last_parent"]).is_dir():
@@ -388,37 +390,6 @@ def disk_name(name: str) -> str:
 inside = registry.inside
 
 
-def repo_top(p: Path) -> Path | None:
-    try:
-        r = gitenv.git(p, "rev-parse", "--show-toplevel", timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
-
-
-def repo_kind(p: Path) -> tuple[str, Path | None]:
-    """own | shared | nested (inside some other repository) | none, and the repository's top."""
-    top = repo_top(p) if p.is_dir() else None
-    if top is None:
-        return "none", None
-    if registry.norm(top) == registry.norm(p.resolve()):
-        return "own", top
-    return ("shared" if gitsync.shared_marker(top) else "nested"), top
-
-
-def github_of(top: Path | None) -> str | None:
-    if top is None:
-        return None
-    sync = project_sync(top)
-    if not sync.validate_target():
-        return None
-    return gitsync.github_url(sync.target) or gitsync.redact_url(sync.target["push_url"])
-
-
-def project_sync(root: Path) -> gitsync.GitSync:
-    return gitsync.GitSync(lambda: root, lambda: "build")
-
-
 def folder_projects(data: dict, fid: str) -> list[tuple[dict, list[str]]]:
     """The projects in folder fid and its subfolders, with the subfolders' path from fid."""
     out = []
@@ -528,7 +499,7 @@ def sync_plan(fid: str, mode: str | None = None, repo: str | None = None) -> dic
             "repo": str(top), "repo_exists": top.is_dir(), "repo_kind": top_kind,
             "repo_github": github_of(top) if top_kind == "own" else None,
             "repo_inside": str(top_top) if top_kind in ("shared", "nested") else None,
-            "others": others[:20], "projects": rows, "github": gh_status()}
+            "others": others[:20], "projects": rows, "github": github.GITHUB.status()}
 
 
 def _repoint(pid: str, new: Path) -> None:
@@ -540,28 +511,19 @@ def _repoint(pid: str, new: Path) -> None:
     registry.update_projects(fn)
 
 
-def _ensure_ignore(top: Path) -> None:
-    gi = top / ".gitignore"
-    have = gi.read_text(encoding="utf-8").splitlines() if gi.exists() else []
-    add = [x for x in sources.gitignore(shared=True) if x not in have]
-    if add:
-        text = "\n".join(have + add) + "\n"
-        write_bytes(gi, text.lstrip("\n").encode("utf-8"))
-
-
-def _publish(root: Path, github: bool, owner: str, name: str, report: list[str]) -> str | None:
-    """Push to origin, or create a private GitHub repository for `root` first."""
+def _publish(root: Path, create: bool, owner: str, name: str, report: list[str]) -> str | None:
+    """Push to origin, or, with `create`, make a private GitHub repository for `root` first."""
     sync = project_sync(root)
     if run_git(root, "remote").stdout.strip():
         if not sync.validate_target():
             report.append("Local files kept; sync paused: " + sync.blocked_reason)
             return None
         url = github_of(root)
-        sync.push(manual=True)
-        if sync.error or sync.blocked_reason:
-            report.append("Not pushed: " + (sync.blocked_reason or sync.error))
+        pushed = sync.push(manual=True)
+        if pushed.state != "synced":
+            report.append("Not pushed: " + str(pushed.message))
         return url
-    if not github:
+    if not create:
         return None
     r = create_github_repo(root, owner, name)
     if "error" in r:
@@ -580,7 +542,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
     if repo_kind(top)[0] != "own":
         git_init(top)
         report.append(f"New repository in {top}")
-    _ensure_ignore(top)
+    ensure_ignore(top)
     marker = top / gitsync.SHARED_MARKER
     if not gitsync.shared_marker(top):
         marker.write_bytes((json.dumps({"shared": True, "folder": f["name"]}, ensure_ascii=False,
@@ -613,7 +575,7 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
     repo = Repository.find(top)
     with repo.changing():
         repo.ok("add", "-A", timeout=300)
-        big = _unstage_big(repo)
+        big = unstage_big(repo)
         if big:
             report.append("Not committed, too large for GitHub: " + ", ".join(big))
         tree = repo.ok("write-tree").strip()
@@ -713,8 +675,8 @@ def apply_sync(body: dict) -> dict:
     open_ = [r["name"] for r in changing if r["running"]]
     if open_:
         raise ValueError("close the editors of these projects first: " + ", ".join(open_))
-    if body.get("github") and not gh_status().get("logged_in"):
-        raise ValueError(gh_status().get("error") or "GitHub CLI is not ready")
+    if body.get("github") and not github.GITHUB.status().get("logged_in"):
+        raise ValueError(github.GITHUB.status().get("error") or "GitHub CLI is not ready")
     report: list[str] = []
     data = registry.load_projects()
     f = _folder(data, fid)
@@ -793,289 +755,11 @@ def remove_tag(name: str) -> dict:
     return registry.update_projects(fn)
 
 
-# ---------------------------------------------------------------- settings
-
-SETTINGS_DEFAULTS = {"default_parent": "", "git_init": True, "github_repo": False,
-                     "github_owner": "", "claude_account": "",
-                     "claude_config_dir": ""}
-EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
-REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")
-OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")
-
-
-def settings_path() -> Path:
-    return registry.state_dir() / "settings.json"
-
-
-def load_settings() -> dict:
-    """Raises registry.StateUnreadable rather than taking a damaged file for the defaults."""
-    data = registry.read_state(settings_path())
-    return {k: data.get(k, v) for k, v in SETTINGS_DEFAULTS.items()}
-
-
-def save_settings(body: dict) -> dict:
-    # Read, change and write under a lock: two windows saving at once keep both changes.
-    with registry.FileLock(settings_path().with_suffix(".lock"), timeout=10):
-        return _save_settings(body)
-
-
-def _save_settings(body: dict) -> dict:
-    cur = load_settings()
-    if "default_parent" in body:
-        p = str(body["default_parent"] or "").strip().strip('"')
-        if p and not Path(os.path.expanduser(p)).is_dir():
-            raise ValueError(f"not a folder: {p}")
-        cur["default_parent"] = str(Path(os.path.expanduser(p)).resolve()) if p else ""
-    for k in ("git_init", "github_repo"):
-        if k in body:
-            cur[k] = bool(body[k])
-    if "claude_account" in body:
-        acct = str(body["claude_account"] or "").strip()
-        if acct and not EMAIL_RE.fullmatch(acct):
-            raise ValueError("the Claude account must be an email address")
-        cur["claude_account"] = acct
-    if "claude_config_dir" in body:
-        d = str(body["claude_config_dir"] or "").strip().strip('"')
-        if d and not Path(os.path.expanduser(d)).is_dir():
-            raise ValueError(f"not a folder: {d}")
-        cur["claude_config_dir"] = str(Path(os.path.expanduser(d)).resolve()) if d else ""
-    if "github_owner" in body:
-        owner = str(body["github_owner"] or "").strip()
-        if owner and not OWNER_RE.fullmatch(owner):
-            raise ValueError("not a GitHub user or organization name")
-        cur["github_owner"] = owner
-    registry.write_json(settings_path(), cur)
-    return cur
-
-
-# ---------------------------------------------------------------- GitHub
-
-_gh_cache: dict = {}
-
-
-def gh_status(refresh: bool = False) -> dict:
-    """Whether the GitHub CLI (gh) is installed and logged in, and as whom."""
-    if _gh_cache and not refresh and time.time() - _gh_cache["at"] < 120:
-        return _gh_cache["status"]
-    exe = shutil.which("gh")
-    status = {"gh": exe, "logged_in": False, "account": None}
-    if not exe:
-        status["error"] = "GitHub CLI not found. Install it from https://cli.github.com, then run: gh auth login"
-    else:
-        try:
-            r = subprocess.run([exe, "auth", "status", "--hostname", "github.com"],
-                               capture_output=True, text=True, encoding="utf-8", errors="replace",
-                               timeout=20, env={**os.environ, "GH_PROMPT_DISABLED": "1"},
-                               **NO_WINDOW)
-            out = r.stdout + r.stderr
-            m = re.search(r"Logged in to github\.com (?:account|as) (\S+)", out)
-            if m and r.returncode == 0:
-                status.update(logged_in=True, account=m.group(1).strip("()"))
-            else:
-                status["error"] = "GitHub CLI is not logged in. Run: gh auth login"
-        except (OSError, subprocess.SubprocessError) as e:
-            status["error"] = f"gh auth status failed: {e}"
-    _gh_cache.update(at=time.time(), status=status)
-    return status
-
+# ---------------------------------------------------------------- accounts
 
 def claude_status(refresh: bool = False) -> dict:
     """The account Claude Code is logged in to, and anything that would override it."""
     return claude_account(claude_bin(), None, max_age=0 if refresh else 30)
-
-
-def repo_name(folder: str) -> str:
-    """A GitHub repository name for a folder name: letters, digits, '.', '-', '_'."""
-    name = re.sub(r"[^A-Za-z0-9._-]+", "-", folder).strip("-.")
-    return name[:100] or "latex-project"
-
-
-def run_git(root: Path, *args: str, timeout: float = 60) -> subprocess.CompletedProcess:
-    return gitenv.git(root, *args, timeout=timeout, check=True)
-
-
-def git_init(root: Path) -> None:
-    """A repository of the project's own, with build output ignored, line ends kept the
-    same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
-    gi = root / ".gitignore"
-    if not gi.exists():
-        lines = sources.gitignore(Config(root).outdir)
-        write_bytes(gi, ("\n".join(lines) + "\n").encode("utf-8"))
-    ga = root / ".gitattributes"
-    if not ga.exists():
-        write_bytes(ga, GITATTRIBUTES.encode("utf-8"))
-    if not (root / ".git").exists():
-        try:
-            run_git(root, "init", "-q", "-b", "main")
-        except subprocess.CalledProcessError:          # git older than 2.28
-            run_git(root, "init", "-q")
-    if (root / ".git").is_dir():
-        gitsync.install_guard(root / ".git")
-
-
-# Text files are stored with \n line ends whatever each co-author's git does with them
-# (core.autocrlf differs between Windows, macOS and Linux setups): without this, one
-# person's CRLF commit would make every line of a shared file clash with everyone else's.
-GITATTRIBUTES = "* text=auto\n*.pdf binary\n*.png binary\n*.jpg binary\n*.jpeg binary\n"
-
-
-def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=None) -> dict:
-    """Commit the project and push it to a new private GitHub repository. The commit holds
-    the repository and `files_lock` (the editor's save lock, when the editor publishes; else
-    the repository's FilesLock): no save lands in the middle of git add.
-
-    Returns {"url"} or {"error"}. The project itself is never removed on failure."""
-    st = gh_status()
-    if not st.get("logged_in"):
-        return {"error": st.get("error") or "GitHub CLI is not ready"}
-    if owner and not OWNER_RE.fullmatch(owner):
-        return {"error": "not a GitHub user or organization name"}
-    name = name.strip() or repo_name(root.name)
-    if not REPO_RE.fullmatch(name):
-        return {"error": f"not a GitHub repository name: {name}"}
-    full = f"{owner}/{name}" if owner else name
-    try:
-        git_init(root)
-        if run_git(root, "remote").stdout.strip():
-            return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
-        repo = Repository.find(root, files=(lambda: files_lock) if files_lock else None)
-        if repo is None:
-            return {"error": "git init failed"}
-        with repo.changing():
-            repo.ok("add", "-A")
-            _unstage_big(repo)
-            if repo.ok("status", "--porcelain", "--untracked-files=no").strip():
-                repo.ok("commit", "-q", "-m", "Initial commit")
-        r = subprocess.run([st["gh"], "repo", "create", full, "--private", "--source", ".",
-                            "--remote", "origin"],
-                           cwd=root, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=180,
-                           env={**git_env(), "GH_PROMPT_DISABLED": "1"}, **NO_WINDOW)
-    except subprocess.CalledProcessError as e:
-        return {"error": f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[:400]}"}
-    except (OSError, subprocess.SubprocessError, RuntimeError) as e:   # RepoBusy, too
-        return {"error": str(e)}
-    if r.returncode != 0:
-        return {"error": (r.stderr or r.stdout).strip()[:500] or "gh repo create failed"}
-    url = f"https://github.com/{owner or st['account']}/{name}"
-    sync = project_sync(root)
-    try:
-        candidate = sync._candidate()
-        if candidate["repository_identity"] != f"github.com/{owner or st['account']}/{name}".lower():
-            return {"error": "Created repository differs from the effective Git sync target; local files kept"}
-        if candidate["branch_ref"] != candidate["local_branch"]:
-            return {"error": "Created repository target differs from the current branch; local files kept"}
-        sync.bind_target(gitsync.public_target(candidate))
-        sync.push(manual=True)
-        if sync.error or sync.blocked_reason:
-            return {"error": sync.blocked_reason or sync.error, "url": url}
-    except (ValueError, OSError, subprocess.SubprocessError) as exc:
-        return {"error": str(exc), "url": url}
-    return {"url": url, "protection": protect_branch(st["gh"], url, root)}
-
-
-def protect_branch(gh: str, url: str, root: Path) -> str:
-    """Ask GitHub itself to refuse force pushes to, and deletion of, the repository's branch,
-    for every co-author whatever tool they use. GitHub offers this for private repositories
-    only on paid plans (Pro, Team …): on a free plan it says so, and prism-local's own guard
-    and self-repair (gitsync.py) are the protection. Returns what happened, in a few words."""
-    full = url.split("github.com/", 1)[-1].strip("/")
-    try:
-        branch = run_git(root, "rev-parse", "--abbrev-ref", "HEAD").stdout.strip() or "main"
-        body = json.dumps({"required_status_checks": None, "enforce_admins": False,
-                           "required_pull_request_reviews": None, "restrictions": None,
-                           "allow_force_pushes": False, "allow_deletions": False})
-        r = subprocess.run([gh, "api", "-X", "PUT", f"repos/{full}/branches/{branch}/protection",
-                            "--input", "-"], input=body, capture_output=True, text=True, encoding="utf-8",
-                           errors="replace", timeout=60, env={**os.environ, "GH_PROMPT_DISABLED": "1"},
-                           **NO_WINDOW)
-    except (OSError, subprocess.SubprocessError) as e:
-        return f"not set ({e})"
-    if r.returncode == 0:
-        return "on: GitHub refuses force pushes and branch deletion"
-    if "Upgrade to GitHub Pro" in (r.stdout + r.stderr):
-        return "not available for private repositories on GitHub's free plan"
-    return "not set: " + (r.stderr or r.stdout).strip()[-200:]
-
-
-def _unstage_big(repo: Repository) -> list[str]:
-    """Files GitHub would refuse (sources.MAX_FILE and over) stay out of the commit. In
-    repo.changing()."""
-    staged = repo.ok("diff", "--cached", "--name-only", "-z").split("\0")
-    big = [x for x in staged if x and (repo.top / x).is_file() and (repo.top / x).stat().st_size > sources.MAX_FILE]
-    if big:
-        repo.ok("rm", "-q", "--cached", "--", *big)
-    return big
-
-
-# Folders of a project that are better kept off GitHub unless you choose otherwise.
-PRIVATE_DIRS = {"conversations": "saved AI chat transcripts"}
-
-
-def publish_info(root: Path) -> dict:
-    """What creating a GitHub repository for the project would do, or why it cannot."""
-    kind, top = repo_kind(root)
-    info = {"kind": kind, "top": str(top) if top else None, "github": None,
-            "name": repo_name(root.name), "private_dirs": [], "gh": gh_status()}
-    if kind == "own":
-        info["github"] = github_of(root)
-    if kind == "shared":
-        info["github"] = github_of(top)
-        info["name"] = repo_name(top.name)
-    for d, what in PRIVATE_DIRS.items():
-        if (root / d).is_dir():
-            ignored = top is not None and gitenv.git(root, "check-ignore", "-q", d + "/", timeout=20).returncode == 0
-            info["private_dirs"].append({"dir": d, "what": what, "ignored": ignored})
-    return info
-
-
-def publish_project(root: Path, name: str = "", owner: str = "", leave_out: list | None = None,
-                    files_lock=None) -> dict:
-    """Give the project a private GitHub repository: git init if needed, a .gitignore
-    (build output, LaTeX's auxiliary files, and the folders in `leave_out`), a commit of
-    everything, gh repo create, push. A project in a folder's shared repository publishes
-    that repository. `files_lock`: see create_github_repo. Returns {"url", "created"} or
-    {"error"}."""
-    info = publish_info(root)
-    if info["kind"] == "nested":
-        return {"error": f"This folder is inside another repository ({info['top']}), which is "
-                         "not a project's: move the project out of it first."}
-    if info["github"] and info["github"].startswith("https://github.com/"):
-        return {"url": info["github"], "created": False}
-    target = Path(info["top"]) if info["kind"] == "shared" else root
-    owner = owner or load_settings()["github_owner"]
-    try:
-        git_init(target)
-        _ensure_ignore(target)
-        if info["kind"] != "shared" and leave_out:
-            gi = target / ".gitignore"
-            have = gi.read_text(encoding="utf-8").splitlines()
-            add = [f"{d.strip('/')}/" for d in leave_out if d.strip("/") in PRIVATE_DIRS
-                   and f"{d.strip('/')}/" not in have]
-            if add:
-                write_bytes(gi, ("\n".join(have + add) + "\n").encode("utf-8"))
-    except (OSError, subprocess.SubprocessError) as e:
-        return {"error": f"git init failed: {e}"}
-    r = create_github_repo(target, owner, name or info["name"], files_lock=files_lock)
-    if "url" in r:
-        tell_editor(root)
-    return {**r, "created": "url" in r}
-
-
-def tell_editor(root: Path) -> None:
-    """The project's open editor, if any, looks for its new repository (gitsync.recheck)."""
-    inst = registry.running_instance(registry.instance_file(registry.project_key(root)), "prism-local",
-                                     root, timeout=1.0, cleanup=False)
-    # Not when this process is that editor (its own publish): it looks again itself, and asking
-    # it here would wait for the sync lock its publish holds.
-    if not inst or inst.get("pid") == os.getpid():
-        return
-    req = registry.urllib.request.Request(inst["url"] + "api/git/recheck", data=b"{}", method="POST",
-                                          headers={"Content-Type": "application/json", "X-Prism-Local": "1"})
-    try:
-        registry.HTTP.open(req, timeout=10).close()
-    except OSError:
-        pass                    # an editor of an older version: its GitHub menu looks again
 
 
 TEMPLATES = {
@@ -1163,7 +847,7 @@ def create_project(body: dict) -> dict:
         f.write_bytes(text.replace("@TITLE@", title).replace("@AUTHOR@", author).encode("utf-8"))
     (root / "prism.json").write_bytes((json.dumps({"main": "main.tex", "outdir": "build"},
                                                   indent=2) + "\n").encode("utf-8"))
-    git_note, github = None, None
+    git_note, created = None, None
     if shared and inside(root, shared):
         # Part of the folder's repository: the editor records it there.
         body = {**body, "git": False, "github": False}
@@ -1173,15 +857,15 @@ def create_project(body: dict) -> dict:
         except (OSError, subprocess.SubprocessError) as e:
             git_note = f"git init failed: {e}"
     if body.get("github") and not git_note:
-        github = create_github_repo(root, str(body.get("github_owner") or "").strip(),
-                                    str(body.get("github_name") or ""))
+        created = create_github_repo(root, str(body.get("github_owner") or "").strip(),
+                                     str(body.get("github_name") or ""))
 
     def fn(data):
         _add(data, root, str(body.get("folder_id") or ""))
         data["last_parent"] = str(parent.resolve())
     registry.update_projects(fn)
     return {"id": registry.project_key(root), "path": str(root), "git_note": git_note,
-            "github": github}
+            "github": created}
 
 
 def change_project(pid: str, body: dict) -> dict:
@@ -1336,8 +1020,8 @@ class Handler(httpbase.Handler):
                 return self._json({**list_projects(),
                                    "updated": httpbase.code_stamp() > STARTED_CODE + 1})
             if path == "/api/settings":
-                return self._json({"settings": load_settings(),
-                                   "github": gh_status(refresh=q.get("refresh") == "1"),
+                return self._json({"settings": settings.load(),
+                                   "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
                                    "claude": claude_status(q.get("refresh") == "1")})
             if path == "/api/folders/sync":
                 return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
@@ -1366,7 +1050,7 @@ class Handler(httpbase.Handler):
     def post(self, path, body):
         try:
             if path == "/api/settings":
-                return self._json({"settings": save_settings(body), "github": gh_status(),
+                return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
                                    "claude": claude_status()})
             if path == "/api/projects/add":
                 return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))

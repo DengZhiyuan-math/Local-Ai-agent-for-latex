@@ -663,7 +663,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   else if (r && r.error) toast(r.error);
   await poll();
 });
-// Create a private GitHub repository for the project (hub.publish_project, through this server).
+// Create a private GitHub repository for the project (publish.publish_project, through this server).
 async function loadPublish() {
   const f = $("#sync-publish"), go = $("#pub-go"), note = $("#pub-note");
   if (f.dataset.loaded) return;

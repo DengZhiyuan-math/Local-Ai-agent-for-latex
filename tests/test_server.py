@@ -44,6 +44,8 @@ class Imports(unittest.TestCase):
         loaded = set(subprocess.run([sys.executable, "-c", code, str(prism)], capture_output=True,
                                     text=True, check=True).stdout.split())
         self.assertEqual(late - loaded, set(), "imported only at their first use")
+        self.assertTrue({"publish", "github", "settings"}.issubset(loaded))
+        self.assertNotIn("hub", loaded, "the editor imports publishing without Home's server state")
 
 
 class Config(unittest.TestCase):

@@ -1,0 +1,8 @@
+test_project_modules_are_all_loaded_at_the_start (test_server.Imports.test_project_modules_are_all_loaded_at_the_start)
+A server runs for days, and a self-update fast-forwards the code under it: a ... ok
+test_concurrent_settings_updates_keep_both_changes (test_hub.SettingsAndGitHub.test_concurrent_settings_updates_keep_both_changes) ... ok
+
+----------------------------------------------------------------------
+Ran 2 tests in 0.237s
+
+OK

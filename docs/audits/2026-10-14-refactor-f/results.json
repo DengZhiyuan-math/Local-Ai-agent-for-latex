@@ -1,0 +1,104 @@
+{
+  "date": "2026-10-14",
+  "timezone": "Europe/Berlin",
+  "stage": "F",
+  "base_commit": "59699609b67602c45fc7ef9394bfffba2501840a",
+  "status": "implemented and tested; working-tree validation snapshot before the F-only commit",
+  "validation": {
+    "red": {
+      "tests": 3,
+      "errors": 3,
+      "seconds": 2.519
+    },
+    "targeted": {
+      "tests": 90,
+      "passed": 89,
+      "skipped": 1,
+      "seconds": 65.731
+    },
+    "integration": {
+      "tests": 2,
+      "passed": 2,
+      "seconds": 0.237
+    },
+    "full": {
+      "tests": 394,
+      "passed": 370,
+      "skipped": 24,
+      "failures": 0,
+      "errors": 0,
+      "seconds": 614.089,
+      "resource_warnings": 1,
+      "skip_reasons": {
+        "Linux and macOS": 1,
+        "process groups: Linux and macOS": 1,
+        "needs a TeX distribution (pdflatex on PATH)": 11,
+        "opt-in Windows sandbox startup": 3,
+        "desktop dialogs: Linux": 1,
+        "signals: Linux and macOS": 1,
+        "requires native macOS tools": 3,
+        "file modes: Linux and macOS": 1,
+        "needs a TeX distribution": 1,
+        "needs symlinks": 1
+      }
+    },
+    "stress": {
+      "completed": 100,
+      "passed": 100,
+      "workers": 4,
+      "seconds": 497.938
+    },
+    "baseline_lifecycle": {
+      "tests": 1,
+      "passed": 1,
+      "seconds": 11.896,
+      "same_resource_warning_reproduced": true
+    }
+  },
+  "preserved_codex_changes": {
+    "prism_local/backend_codex.py": {
+      "before": "30823592393AD3ED87F374C794D3E2B229995259CA527A67E99B63126CF02FF2",
+      "after": "30823592393AD3ED87F374C794D3E2B229995259CA527A67E99B63126CF02FF2",
+      "unchanged": true
+    },
+    "README.md": {
+      "before": "11C6B5F3AD5218275EE95BABD7FAE6C9B783604AC6074EF000A72C0C3AB5B5F7",
+      "after": "11C6B5F3AD5218275EE95BABD7FAE6C9B783604AC6074EF000A72C0C3AB5B5F7",
+      "unchanged": true
+    },
+    "tests/test_codex_discovery.py": {
+      "before": "A7DD0FFC37C7F74E7859C7315D08D98F0B301987FC8DDB8F858F8A09182D29CA",
+      "after": "A7DD0FFC37C7F74E7859C7315D08D98F0B301987FC8DDB8F858F8A09182D29CA",
+      "unchanged": true
+    },
+    "tests/test_codex_runtime.py": {
+      "before": "5E93657E8C5D57D5E7C487DA564ACF90650E3900C897CF23B13A7B7282436164",
+      "after": "5E93657E8C5D57D5E7C487DA564ACF90650E3900C897CF23B13A7B7282436164",
+      "unchanged": true
+    }
+  },
+  "f_file_sha256": {
+    "prism_local/backend_claude.py": "E003B7F5D63949F8FF516EBEEEE2418F2223BA161BCF169EC38480C2A2C792C6",
+    "prism_local/hub.py": "A4746B9263424C3631C1AF626C943AF05765C16EB1F9992AC6067A3AFD013E85",
+    "prism_local/server.py": "3CA061ACB59903A35EE228E4B71317E58518B9FE56C955978A45EA5289E742ED",
+    "prism_local/settings.py": "6AF6152A72C710A89633563222BFA31C96DEFE0308B16E76767C7B468A748065",
+    "prism_local/github.py": "D2727306D77D9F7AB607BF15D8F919A2A53DA2BEFDD734ABF9A0C4EC76B2B3E0",
+    "prism_local/publish.py": "9D9AF213354E65B431675938DD0D6CCD9AFD9790E62081CCF52A033E62D5C710",
+    "prism_local/static/app.js": "ED108BE2757FCA63EE7ADC545C1A1D6325AA75DD72B36C507B59C5D335DEA6D4",
+    "prism_local/static/home.js": "D1FE1E6165FADA2CF7D444FD3EC7A842C3EC76025AD4C2A97BE36ADD5BFCBCB0",
+    "tests/test_git_target.py": "F2DE73D1534BEDB8BA50CEFDD7A8E75023989CC0870D386A819DDC01505951B5",
+    "tests/test_hub.py": "B218B6122BE78AFCD6F893D2F6AB3703FB2061D3D38AA7DC8238CD31A4683F30",
+    "tests/test_server.py": "AC159100754B70C1A3DE0978A6AC309D427ECE49FD71964A4ACE7FF5EBE75BCF",
+    "tests/fake_github.py": "BACF0D165539A411A63DB71025161DC71EA8FDE5891FCF09FB925D6D3506413C",
+    "tests/test_github.py": "C8CE2F77164BA17C1C98E093011D0BE327519C377238E59D667E2DE4FE8E9A94",
+    "tests/test_publish.py": "826A295D00F039DF983B0BF77534988E7EBFBD5C3AB36C10D46A050DD9A88FA7"
+  },
+  "evidence_sha256": {
+    "red-tests.txt": "c1040392d382ca1180dba1b3694967471abfe9cadebccbc780b2122062379d42",
+    "targeted-tests.txt": "5712d0156d6dd85ae5d508eeb7e554c27f18268d619db5a8a525e808ab77947c",
+    "integration-tests.txt": "c1f616865bbb90d7a1b1585bd10373dc3258e1c6a34b32d3c64f95a7f4931987",
+    "full-tests.txt": "3e431a0eb1a4d9cdb2c925f2353538bedab0da8912efa95e8ce92b36105a95ad",
+    "baseline-lifecycle.txt": "d948eab079407d645d82293154dc979b802310d194da17487c5f89e6431f079e",
+    "stress-results.json": "822f8b32f087f785b32d7ff1bcf8d5d2819799ebe2fcb57827b8e286838ed653"
+  }
+}

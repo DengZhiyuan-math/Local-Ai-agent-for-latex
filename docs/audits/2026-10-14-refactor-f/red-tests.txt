@@ -1,0 +1,53 @@
+test_wrong_created_target_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_created_target_reports_the_link_without_binding_or_pushing) ... ERROR
+test_wrong_remote_branch_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_remote_branch_reports_the_link_without_binding_or_pushing) ... ERROR
+test_busy_first_push_reports_the_created_repository (test_publish.Publish.test_busy_first_push_reports_the_created_repository) ... ERROR
+
+======================================================================
+ERROR: test_wrong_created_target_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_created_target_reports_the_link_without_binding_or_pushing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_publish.py", line 111, in test_wrong_created_target_reports_the_link_without_binding_or_pushing
+    self.assert_created_failure(result)
+  File "D:\DynNum\prism-local\tests\test_publish.py", line 46, in assert_created_failure
+    self.assertEqual(result["url"], "https://github.com/me/paper")
+                     ~~~~~~^^^^^^^
+KeyError: 'url'
+
+======================================================================
+ERROR: test_wrong_remote_branch_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_remote_branch_reports_the_link_without_binding_or_pushing)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_publish.py", line 126, in test_wrong_remote_branch_reports_the_link_without_binding_or_pushing
+    self.assert_created_failure(result)
+  File "D:\DynNum\prism-local\tests\test_publish.py", line 46, in assert_created_failure
+    self.assertEqual(result["url"], "https://github.com/me/paper")
+                     ~~~~~~^^^^^^^
+KeyError: 'url'
+
+======================================================================
+ERROR: test_busy_first_push_reports_the_created_repository (test_publish.Publish.test_busy_first_push_reports_the_created_repository)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_publish.py", line 132, in test_busy_first_push_reports_the_created_repository
+    result = publish.publish_project(self.root)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DynNum\prism-local\prism_local\publish.py", line 215, in publish_project
+    r = create_github_repo(target, owner, name or info["name"], files_lock=files_lock)
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "D:\DynNum\prism-local\prism_local\publish.py", line 162, in create_github_repo
+    pushed = sync.push(manual=True)
+             ^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\unittest\mock.py", line 1139, in __call__
+    return self._mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\unittest\mock.py", line 1143, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Users\dengz\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\Lib\unittest\mock.py", line 1198, in _execute_mock_call
+    raise effect
+repository.RepoBusy: fixture git is busy
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.519s
+
+FAILED (errors=3)
