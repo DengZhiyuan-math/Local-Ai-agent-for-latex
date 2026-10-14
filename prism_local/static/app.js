@@ -256,8 +256,16 @@ function saveTab(t, force = false) {
 }
 async function saveTabNow(t, force) {
   if (!isDirty(t) && !force) return true;
-  const gen = t.doc.changeGeneration();
-  const r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force });
+  let gen, r;
+  // git is committing or merging (a repository's hooks can take long): the server says so
+  // instead of keeping the request waiting; the edits stay here and go as soon as it is done.
+  for (let waited = false; ; waited = true) {
+    gen = t.doc.changeGeneration();
+    r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force });
+    if (!(r._status === 503 && r.busy)) break;
+    if (!waited) toast(`${t.path}: git is busy with the files — saving as soon as it is done.`);
+    await new Promise((res) => setTimeout(res, 1000));
+  }
   if (r._status === 409 && r.conflict) {
     t.conflict = "disk"; showBanner(t);
     toast(`${t.path} changed on disk — not saved. Resolve in the banner.`);

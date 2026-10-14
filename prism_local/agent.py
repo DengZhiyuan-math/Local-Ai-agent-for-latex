@@ -78,6 +78,9 @@ class AgentManager:
         # the server commits them to the project's repository (gitsync.py).
         self.on_start: Callable[[], None] = lambda: None
         self.on_changed: Callable[[list[str], str], None] = lambda paths, why: None
+        # Held while Undo writes the files: the editor's save lock (gitsync.FilesLock), which a
+        # sync's commit and merge hold too, so a merge never undoes the Undo.
+        self.writes = threading.RLock()
 
     def backend(self, provider: str | None) -> Backend | None:
         return self.backends.get(provider or self.default)
@@ -360,7 +363,8 @@ class AgentManager:
             return {"error": "unknown turn"}
         rels = [rel for rel in sorted(set(job.before) | set(job.after))
                 if job.before.get(rel) != job.after.get(rel)]
-        restored = self._restore(job, rels)
+        with self.writes:
+            restored = self._restore(job, rels)
         if restored:
             try:
                 self.on_changed(restored, "Undo of an agent turn")

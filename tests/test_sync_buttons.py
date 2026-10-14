@@ -320,6 +320,22 @@ class SyncButtons(unittest.TestCase):
         self.assertNotIn("prism-local]", remote_main, "a line added at the end never clashes")
         self.assertClean()
 
+    def test_a_save_while_git_holds_the_files_says_busy(self):
+        """git holding the files long (a repository's hook, in another editor of it): a save
+        answers busy after a moment rather than holding the page's connection, and saves once
+        git is done."""
+        lock = gitsync.FilesLock(lambda: self.mine / ".git")
+        self.assertTrue(lock.acquire(timeout=10))
+        try:
+            started = time.monotonic()
+            status, r = self.req("/api/file", {"path": "main.tex", "content": "not yet\n"})
+            self.assertEqual((status, r.get("busy")), (503, True), r)
+            self.assertLess(time.monotonic() - started, 10)
+        finally:
+            lock.release()
+        self.save_file("main.tex", "saved after\n")
+        self.assertEqual(self.read("main.tex"), "saved after\n")
+
     # ------------------------------------------------------------ checks
     def test_requests_from_elsewhere_are_refused(self):
         status, _ = self.req("/api/git/sync", {"action": "commit"}, headers={"Content-Type": "application/json"})

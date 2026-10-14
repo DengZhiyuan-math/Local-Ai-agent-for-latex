@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
-from gitsync import GitSync  # noqa: E402
+from gitsync import FilesLock, GitSync  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
@@ -42,7 +42,10 @@ import selfupdate  # noqa: E402
 
 MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
-SAVE_LOCK = threading.Lock()
+# The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
+# and merges; also by the other editors of a shared repository (gitsync.FilesLock).
+SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
+SAVE_WAIT = 3           # seconds a save waits for git before the page is told to try again
 
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
@@ -328,12 +331,19 @@ def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> 
     """Write an editor buffer to disk, unless the file changed on disk since the editor
     loaded it (a conflict). The file keeps its line ends (the editor sends \\n)."""
     p = resolve(rel)
-    with SAVE_LOCK:     # check-then-write must not interleave with another save
+    # Check-then-write must not interleave with another save, nor with git committing or
+    # merging. git's work takes moments, but a repository's hooks may take long: then the
+    # page is told to try again, rather than kept waiting with a connection held.
+    if not SAVE_LOCK.acquire(timeout=SAVE_WAIT):
+        return {"busy": True, "error": "git is busy with the files; saving as soon as it is done"}, 503
+    try:
         if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
                 and not force:
             return {"conflict": True, "mtime": mtime(p)}, 409
         write_bytes(p, with_line_ends_of(content, p).encode("utf-8"))
         return {"ok": True, "mtime": mtime(p)}, 200
+    finally:
+        SAVE_LOCK.release()
 
 
 # ---------------------------------------------------------------- symbols
@@ -909,9 +919,10 @@ SYNC = SyncTex()
 SYNC_LOCK = threading.Lock()
 AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve)
 # The project's changes, recorded in its repository and synced with GitHub (gitsync.py).
-GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy())
+GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
 AGENT.on_start = GITSYNC.before_turn
 AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
+AGENT.writes = SAVE_LOCK
 
 
 # The project's name as the Home page lists it (Rename): read again only when the list changed.

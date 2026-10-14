@@ -501,6 +501,45 @@ class Snapshots(unittest.TestCase):
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
 
+    def test_undo_writes_holding_the_save_lock_and_commits_after(self):
+        """Undo writes the files while holding the editor's save lock (a sync's merge holds it
+        too: a merge that gives up would put back what it saw), and lets go of it before the
+        commit, which waits for the sync."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    (job.root / "a.tex").write_bytes(b"ONE\n")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
+            lock, seen = threading.RLock(), {}
+            m.writes = lock
+            real = m._restore
+
+            def restore(job, rels):
+                seen["restore"] = lock._is_owned()
+                return real(job, rels)
+
+            def free():                      # as a sync's merge, on its own thread
+                seen["commit"] = lock.acquire(timeout=1)
+                if seen["commit"]:
+                    lock.release()
+
+            def changed(paths, why):
+                t = threading.Thread(target=free)
+                t.start()
+                t.join()
+
+            m._restore, m.on_changed = restore, changed
+            self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
+            self.assertTrue(seen["restore"], "Undo writes holding the save lock")
+            self.assertTrue(seen["commit"], "and lets go of it before the commit")
+            self.assertEqual((root / "a.tex").read_bytes(), b"one\n")
+
 
 def wait_done(job, timeout=10):
     end = time.time() + timeout

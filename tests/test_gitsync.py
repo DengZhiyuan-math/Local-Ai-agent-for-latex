@@ -63,6 +63,53 @@ class GitSyncTest(unittest.TestCase):
         self.assertIsNone(self.g.dirty_since)
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"), "pushed")
 
+    def test_files_lock_is_held_across_processes(self):
+        """Another editor of the repository (another process) writing the files, or its git
+        committing or merging: this one waits, and gets the lock once it is done."""
+        lock = gitsync.FilesLock(lambda: self.root / ".git")
+        code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import gitsync; "
+                "from pathlib import Path; l = gitsync.FilesLock(lambda: Path(sys.argv[2])); "
+                "l.acquire(); print('held', flush=True); time.sleep(1.5)")
+        p = subprocess.Popen([sys.executable, "-c", code, str(Path(gitsync.__file__).parent), str(self.root / ".git")],
+                             stdout=subprocess.PIPE, text=True)
+        self.addCleanup(p.wait)
+        self.assertEqual(p.stdout.readline().strip(), "held")
+        self.assertFalse(lock.acquire(timeout=0.3), "the other process holds it")
+        p.wait()
+        p.stdout.close()
+        self.assertTrue(lock.acquire(timeout=5), "free once it is done")
+        with lock:                            # re-entrant
+            pass
+        lock.release()
+        self.assertTrue(lock.acquire(timeout=0), "and let go")
+        lock.release()
+
+    def test_a_save_during_a_commit_keeps_its_autosave_due(self):
+        """git may look at a file just before a save writes it: a save that came in while a
+        commit ran keeps the next autosave due, or its edit would wait for another one."""
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.touched()
+        real = self.g.commit
+
+        def commit(paths, message):
+            ok = real(paths, message)
+            self.g.touched()                # a save, its bytes not seen by git
+            return ok
+
+        self.g.commit = commit
+        self.g.commit_all("Autosave")
+        self.assertIsNotNone(self.g.dirty_since, "still due")
+        self.g.commit = real
+        self.g.commit_all("Autosave")
+        self.assertIsNone(self.g.dirty_since)
+
+    def test_a_save_half_way_is_not_a_change(self):
+        """The temporary file a save writes before it replaces the file (fsutil.replace_file)
+        is gone a moment later: committing it would fail, or record it."""
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        (self.root / "main.tex.4242.17.prism-tmp").write_text("two\n", encoding="utf-8")
+        self.assertEqual(self.g.changes(), ["main.tex"])
+
     def test_no_autosave_while_you_type(self):
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
         self.g.touched()

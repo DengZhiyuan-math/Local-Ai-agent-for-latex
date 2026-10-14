@@ -12,6 +12,7 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -36,6 +37,22 @@ def identity(cwd, name):
 
 
 PAPER = "\\section{Intro}\nFirst paragraph.\n\nSecond paragraph.\n\nThird paragraph.\n"
+
+
+class SaveLock:
+    """The editor's save lock (server.SAVE_LOCK), knowing which thread holds it."""
+    def __init__(self):
+        self._lock, self.owner, self.depth = threading.RLock(), None, 0
+
+    def __enter__(self):
+        self._lock.acquire()
+        self.owner, self.depth = threading.get_ident(), self.depth + 1
+
+    def __exit__(self, *exc):
+        self.depth -= 1
+        if not self.depth:
+            self.owner = None
+        self._lock.release()
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
@@ -535,6 +552,75 @@ class Collaboration(unittest.TestCase):
         self.assertIn("B's first", self.remote_file("main.tex"))
         self.assertSafe()
 
+    def test_a_merge_cut_off_by_its_timeout_is_called_off(self):
+        """git killed by its timeout in the middle of a merge leaves it half-way, and every
+        commit fails from then on: it is called off at once, and the next sync merges."""
+        self.write("A", "main.tex", PAPER.replace("First", "A's first"))
+        self.save("A")
+        d, g = self.people["B"]
+        self.write("B", "main.tex", PAPER.replace("Third", "B's third"))
+        real = g.git
+
+        def cut_off(*args, **kw):
+            if args[:2] == ("merge", "--no-edit"):
+                real(args[0], "--no-commit", *args[1:], **kw)     # stopped before its commit
+                raise subprocess.TimeoutExpired(["git", *args], kw.get("timeout", 60))
+            return real(*args, **kw)
+
+        g.git = cut_off
+        self.pull("B")
+        self.assertFalse((d / ".git" / "MERGE_HEAD").exists(), "called off")
+        self.assertIn("B's third", self.read("B", "main.tex"))
+        g.git = real
+        self.pull("B")
+        text = self.read("B", "main.tex")
+        self.assertIn("A's first", text)
+        self.assertIn("B's third", text)
+        self.save("B")
+        self.assertIn("B's third", self.remote_file("main.tex"))
+        self.assertSafe()
+
+    def test_a_save_while_git_merges_is_kept(self):
+        """A merge that gives up puts the files back as they were when it started, undoing a
+        save made meanwhile, and on Windows git cannot open a file a save is replacing. Git
+        reads and changes the files only while the sync holds the editor's save lock: a save
+        waits for it and lands after it."""
+        d, g = self.people["B"]
+        g.writes = SaveLock()
+        real, unguarded, saves = g.git, [], []
+
+        def save(line):                     # what the editor does (server.save_file)
+            with g.writes:
+                f = d / "main.tex"
+                f.write_text(f.read_text(encoding="utf-8") + line + "\n", encoding="utf-8")
+
+        def watched(*args, **kw):
+            if args[0] in ("merge", "checkout", "add", "commit", "status") and g.writes.owner != threading.get_ident():
+                unguarded.append(" ".join(args[:3]))
+            if args[0] in ("merge", "checkout"):
+                saves.append(threading.Thread(target=save, args=(f"% saved during git {args[0]} {len(saves)}",)))
+                saves[-1].start()
+            return real(*args, **kw)
+
+        g.git = watched
+        self.write("A", "main.tex", PAPER.replace("First", "A's first"))
+        self.save("A")
+        self.write("B", "main.tex", PAPER.replace("Third", "B's third"))     # not saved yet
+        self.pull("B")
+        for t in saves:
+            t.join()
+        self.assertTrue(saves, "B merged")
+        self.assertEqual(unguarded, [], "git changed the files while a save could land")
+        text = self.read("B", "main.tex")
+        for i in range(len(saves)):
+            self.assertRegex(text, rf"% saved during git \w+ {i}\n")
+        self.assertIn("A's first", text)
+        self.assertIn("B's third", text)
+        self.save("B")
+        self.assertEqual(unguarded, [], "git read the files while a save could replace them")
+        self.assertIn("% saved during git merge 0", self.remote_file("main.tex"))
+        self.assertSafe()
+
     def test_deleted_there_edited_here(self):
         da, _ = self.people["A"]
         (da / "refs.bib").unlink()
@@ -702,6 +788,40 @@ class SharedFolderCollaboration(unittest.TestCase):
         g.bind_target()
         g._remote_state()
         return d, g
+
+    def test_a_merge_holds_the_other_editors_saves(self):
+        """Each project of a shared repository has its own editor, and one's merge changes the
+        whole repository: the other editor's saves wait for it too (gitsync.FilesLock, one
+        per repository, across processes)."""
+        da, ga = self.clone("A", "练习/ex 1")
+        db, gb = self.clone("B", "答案/ex 1 sol")
+        other = gitsync.GitSync(lambda: db / "练习/ex 1", lambda: "build")      # B's other editor
+        other.check_repo()
+        (da / "练习/ex 1/main.tex").write_text(PAPER.replace("First", "A's exercise"), encoding="utf-8")
+        ga.now("commit")
+        (db / "答案/ex 1 sol/main.tex").write_text(PAPER.replace("First", "B's solution"), encoding="utf-8")
+        real, could_save = gb.git, []
+
+        def try_save():
+            if other.writes.acquire(timeout=0.3):
+                other.writes.release()
+                could_save.append(True)
+            else:
+                could_save.append(False)
+
+        def watched(*args, **kw):
+            if args[0] == "merge":
+                t = threading.Thread(target=try_save)
+                t.start()
+                t.join()
+            return real(*args, **kw)
+
+        gb.git = watched
+        gb.now("commit")                      # meets A's commit: merges
+        self.assertIsNone(gb.error, gb.error)
+        self.assertTrue(could_save, "B merged")
+        self.assertEqual(set(could_save), {False}, "the other editor's save waited for the merge")
+        self.assertIn("A's exercise", git(self.remote, "show", "main:练习/ex 1/main.tex"))
 
     def test_each_editor_its_own_project(self):
         da, ga = self.clone("A", "练习/ex 1")
