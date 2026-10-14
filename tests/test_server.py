@@ -45,6 +45,24 @@ class Config(unittest.TestCase):
         project({"main.tex": "\\documentclass{article}", "a.tex": "\\documentclass{article}"})
         self.assertEqual(server.CFG.main, "main.tex")
 
+    def test_a_started_server_shows_the_pdf_built_last(self):
+        doc = "\\documentclass{article}"
+        root = project({"main.tex": doc, "notes.tex": doc, "sections/intro.tex": "chapter",
+                        "build/main.pdf": "%PDF", "build/notes.pdf": "%PDF", "build/intro.pdf": "%PDF"})
+        os.utime(root / "build/main.pdf", (1000, 1000))
+        os.utime(root / "build/notes.pdf", (2000, 2000))
+        server.show_last_built()
+        self.assertEqual((server.CFG.main, server.CFG.pdf.name), ("notes.tex", "notes.pdf"))
+        self.assertEqual(server.CFG.project_main, "main.tex", "prism.json's main is kept")
+        os.utime(root / "build/main.pdf", (3000, 3000))
+        os.utime(root / "build/intro.pdf", (4000, 4000))
+        server.set_root(root)
+        server.show_last_built()
+        self.assertEqual(server.CFG.main, "main.tex", "a .tex that is no document is skipped")
+        root = project({"main.tex": doc, "notes.tex": doc})
+        server.show_last_built()
+        self.assertEqual(server.CFG.main, "main.tex", "nothing built yet: the project's main")
+
     def test_changes_apply_without_a_restart(self):
         root = project({"main.tex": "", "prism.json": '{"engine": "pdflatex"}'})
         self.assertEqual(server.CFG.engine, "pdflatex")

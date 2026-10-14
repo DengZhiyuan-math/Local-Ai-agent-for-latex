@@ -547,6 +547,26 @@ def stale_document() -> str | None:
     return max(stale)[2] if stale else None
 
 
+def show_last_built() -> None:
+    """Show the PDF of the document built last (its PDF is the newest), not always the
+    project's main, so a reopened editor shows the PDF it showed before."""
+    global CFG
+    best = None
+    for rel in list_files(editable_only=False):
+        src = ROOT / rel
+        if src.suffix != ".tex" or rel.split("/")[0] == CFG.outdir:
+            continue
+        pdf = ROOT / CFG.outdir / f"{src.stem}.pdf"
+        try:
+            if not pdf.exists() or not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
+                continue
+        except OSError:
+            continue
+        best = max(best or (0.0, ""), (mtime(pdf), rel))
+    if best and best[1] != CFG.main:
+        CFG = Config(ROOT, main=best[1])
+
+
 def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
     global CFG
@@ -1052,6 +1072,7 @@ def main():
         if a.ready_file:
             a.ready_file = registry.instance_file(registry.project_key(project))
     set_root(project)
+    show_last_built()
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
