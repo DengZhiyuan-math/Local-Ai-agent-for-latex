@@ -4,10 +4,12 @@ import os
 import subprocess
 import sys
 import threading
+import tempfile
 import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -82,6 +84,19 @@ class ReadyFile(unittest.TestCase):
         if registry.process_started(os.getpid()) is not None:
             self.assertEqual(info["started"], registry.process_started(os.getpid()))
         self.assertTrue(registry.server_alive(info["pid"], info.get("started")))
+
+
+class CodeStamp(unittest.TestCase):
+    def test_the_code_is_looked_at_again_only_every_few_seconds(self):
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(httpbase, "CODE_DIR", Path(tmp)), \
+                mock.patch.dict(httpbase._CODE_STAMP, {"at": None, "stamp": 0.0}):
+            (Path(tmp) / "server.py").write_text("")
+            os.utime(Path(tmp) / "server.py", (1000, 1000))
+            self.assertEqual(httpbase.code_stamp(), 1000)
+            os.utime(Path(tmp) / "server.py", (2000, 2000))
+            self.assertEqual(httpbase.code_stamp(), 1000, "asked again at once: as before")
+            httpbase._CODE_STAMP["at"] -= httpbase.CODE_STAMP_EVERY
+            self.assertEqual(httpbase.code_stamp(), 2000, "a few seconds later: the update is seen")
 
 
 if __name__ == "__main__":

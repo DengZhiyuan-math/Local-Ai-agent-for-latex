@@ -158,6 +158,20 @@ class Files(unittest.TestCase):
             with self.assertRaises(ValueError, msg=bad):
                 server.resolve(bad)
 
+    def test_one_walk_lists_what_list_files_lists(self):
+        root = project({"main.tex": "", "a/b.tex": "", "a/fig.png": "", "build/x.tex": ""})
+        self.assertEqual(server.list_both(), (server.list_files(editable_only=False), server.list_files()))
+        self.assertEqual(server.list_both(), (["main.tex", "a/b.tex", "a/fig.png"], ["main.tex", "a/b.tex"]))
+        if os.name == "nt":
+            # A junction is no link to os.walk: what it leads to outside the project is
+            # never listed (its files are resolved one by one), what it leads to inside is.
+            import _winapi
+            outside = tmpdir()
+            (outside / "secret.tex").write_text("secret", encoding="utf-8")
+            _winapi.CreateJunction(str(outside), str(root / "out"))
+            _winapi.CreateJunction(str(root / "a"), str(root / "in"))
+            self.assertEqual(server.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
+
     def test_save_keeps_the_files_line_ends(self):
         root = project({})
         (root / "crlf.tex").write_bytes(b"a\r\nb\r\n")

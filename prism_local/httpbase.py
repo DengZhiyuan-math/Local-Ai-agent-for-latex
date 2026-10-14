@@ -267,15 +267,24 @@ def idle_watchdog(srv: Server, presence: Presence, busy=lambda: False, what="wor
 
 
 CODE_DIR = Path(__file__).resolve().parent
+# Every open page asks every two seconds; the code changes once per update.
+CODE_STAMP_EVERY = 5.0
+_CODE_STAMP: dict = {"at": None, "stamp": 0.0}
 
 
 def code_stamp() -> float:
     """When prism-local's code on disk last changed. A server keeps running the code it
-    started with; once this is newer (selfupdate.py), its page offers a restart."""
+    started with; once this is newer (selfupdate.py), its page offers a restart. Looked
+    at again at most every CODE_STAMP_EVERY seconds."""
+    now = time.monotonic()
+    if _CODE_STAMP["at"] is not None and now - _CODE_STAMP["at"] < CODE_STAMP_EVERY:
+        return _CODE_STAMP["stamp"]
     try:
-        return max(p.stat().st_mtime for p in (*CODE_DIR.glob("*.py"), *(CODE_DIR / "static").glob("*.*")))
+        stamp = max(p.stat().st_mtime for p in (*CODE_DIR.glob("*.py"), *(CODE_DIR / "static").glob("*.*")))
     except (OSError, ValueError):
-        return 0.0
+        stamp = 0.0
+    _CODE_STAMP.update(at=now, stamp=stamp)
+    return stamp
 
 
 def relaunch(argv: list[str], cwd: str) -> None:

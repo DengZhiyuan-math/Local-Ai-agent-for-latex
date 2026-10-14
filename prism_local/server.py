@@ -176,34 +176,90 @@ def resolve(rel: str, *, editable_only: bool = True) -> Path:
     return p
 
 
-def list_files(*, editable_only: bool = True) -> list[str]:
-    seen: set[str] = set()
-    if CFG.files and editable_only:
-        for g in CFG.files:
-            for p in ROOT.glob(g):
-                rel = p.relative_to(ROOT).as_posix()
-                if p.is_file() and p.suffix in EDITABLE_SUFFIXES and not _excluded(rel):
-                    seen.add(rel)
-    else:
-        for dirpath, dirnames, filenames in os.walk(ROOT):
-            reld = Path(dirpath).relative_to(ROOT).as_posix()
-            reld = "" if reld == "." else reld + "/"
-            dirnames[:] = sorted(d for d in dirnames if not d.startswith(".")
-                                 and d not in SKIP_DIRS and reld + d != CFG.outdir)
-            for f in filenames:
-                rel = reld + f
-                if (not editable_only or Path(f).suffix in EDITABLE_SUFFIXES) and not _excluded(rel):
-                    seen.add(rel)
-            if len(seen) > MAX_FILES:
-                break
-    safe = []
-    for rel in seen:
+def _plain(entry: os.DirEntry, rel: str) -> bool:
+    """A file, not a link, whose path resolve() takes as it is."""
+    try:
+        return "\\" not in rel and not re.match(r"[A-Za-z]:", rel) \
+            and not entry.name.endswith((".", " ")) and not entry.is_symlink() and entry.is_file()
+    except OSError:
+        return False
+
+
+def _walk():
+    """The project's files folder by folder, in the order of os.walk (sorted, depth first,
+    linked folders left out): lists of (rel, plain). plain: a _plain file in a folder that
+    resolves to where the walk found it (not reached through a junction), which is inside
+    the project without resolving the file itself (slow on Windows, for every file)."""
+    stack = [""]
+    while stack:
+        reld = stack.pop()
+        top = ROOT / reld
         try:
-            if resolve(rel, editable_only=editable_only).is_file():
+            with os.scandir(top) as it:
+                entries = list(it)
+            here = top.resolve() == top
+        except (OSError, RuntimeError):
+            continue
+        files, dirs = [], []
+        for e in entries:
+            try:
+                is_dir = e.is_dir()
+            except OSError:
+                is_dir = False
+            if not is_dir:
+                rel = reld + e.name
+                if not _excluded(rel):
+                    files.append((rel, here and _plain(e, rel)))
+            elif not e.name.startswith(".") and e.name not in SKIP_DIRS and reld + e.name != CFG.outdir:
+                dirs.append(e.name)
+        yield files
+        stack += [reld + d + "/" for d in sorted(dirs, reverse=True) if not os.path.islink(top / d)]
+
+
+def _gather(*wanted: bool) -> list[dict[str, bool]]:
+    """For each editable_only in `wanted`, the files list_files considers ({rel: plain}),
+    all from one walk. Each list stops growing after the folder that takes it past MAX_FILES."""
+    found: list[dict[str, bool]] = [{} for _ in wanted]
+    for batch in _walk():
+        for seen, editable_only in zip(found, wanted):
+            if len(seen) <= MAX_FILES:
+                seen.update((rel, plain) for rel, plain in batch
+                            if not editable_only or Path(rel).suffix in EDITABLE_SUFFIXES)
+        if all(len(seen) > MAX_FILES for seen in found):
+            break
+    return found
+
+
+def _checked(seen: dict[str, bool], editable_only: bool) -> list[str]:
+    """The files of `seen` that resolve() allows (a plain one is allowed as it is), sorted."""
+    safe = []
+    for rel, plain in seen.items():
+        try:
+            if plain or resolve(rel, editable_only=editable_only).is_file():
                 safe.append(rel)
         except (ValueError, OSError, RuntimeError):
             pass
     return sorted(safe, key=lambda s: (s != CFG.main, s.count("/") == 0, s))
+
+
+def list_files(*, editable_only: bool = True) -> list[str]:
+    if CFG.files and editable_only:
+        seen: dict[str, bool] = {}
+        for g in CFG.files:
+            for p in ROOT.glob(g):
+                rel = p.relative_to(ROOT).as_posix()
+                if p.is_file() and p.suffix in EDITABLE_SUFFIXES and not _excluded(rel):
+                    seen[rel] = False
+        return _checked(seen, True)
+    return _checked(_gather(editable_only)[0], editable_only)
+
+
+def list_both() -> tuple[list[str], list[str]]:
+    """list_files(editable_only=False) and list_files(), from one walk of the project."""
+    if CFG.files:
+        return list_files(editable_only=False), list_files()
+    every, editable = _gather(False, True)
+    return _checked(every, False), _checked(editable, True)
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
@@ -936,15 +992,15 @@ class Handler(httpbase.Handler):
             return self._send(200, cfg.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
             st = git_status()
-            files = []
-            for f in list_files(editable_only=False):
+            files, (listed, editable) = [], list_both()
+            for f in listed:
                 try:
                     files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
                                   "editable": Path(f).suffix in EDITABLE_SUFFIXES})
                 except FileNotFoundError:       # deleted since it was listed (a build, git)
                     pass
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
-                               "move_error": MOVE["error"], "files": files, "order": document_order(),
+                               "move_error": MOVE["error"], "files": files, "order": document_order(editable),
                                "pdf_main": (cfg := CFG).main, "pdf_mtime": pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
