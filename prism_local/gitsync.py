@@ -22,6 +22,7 @@ a folder inside any other repository (prism-local's examples, say).
 """
 from __future__ import annotations
 
+import functools
 import json
 import subprocess
 import threading
@@ -135,11 +136,25 @@ def _names(paths: list[str]) -> str:
     return ", ".join(names[:3]) + (f" and {len(names) - 3} more" if len(names) > 3 else "")
 
 
+def one_at_a_time(method):
+    """A push or pull: one at a time in this process (GitSync.syncing)."""
+    @functools.wraps(method)
+    def run(self, *args, **kw):
+        with self.syncing:
+            return method(self, *args, **kw)
+    return run
+
+
 class GitSync:
     def __init__(self, root_fn: Callable[[], Path], outdir_fn: Callable[[], str],
                  busy: Callable[[], bool] = lambda: False, writes=None, clock: Callable[[], float] = time.time):
         self.root_fn, self.outdir_fn, self.busy_fn = root_fn, outdir_fn, busy
         self.lock = threading.RLock()         # one git command sequence at a time
+        # One push or pull at a time in this process, its transfer included (the timer's
+        # and a button's would otherwise slip between each other's tries while a co-author
+        # pushes). Commits do not take it: your edits before an agent's turn never wait
+        # for a transfer. Across processes, Repository.transferring.
+        self.syncing = threading.RLock()
         # Held while git reads or changes the files: a commit, with the look at what changed;
         # a merge, from the commit before it to its end (FilesLock). The editor's saves and
         # an Undo take it too (server.SAVE_LOCK).
@@ -383,6 +398,7 @@ class GitSync:
             n = self.git("rev-list", "--count", "HEAD", timeout=20).stdout.strip()
             self.ahead, self.behind = (int(n) if n.isdigit() else 0), 0
 
+    @one_at_a_time
     def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> Outcome:
         """Push. If GitHub has commits this copy lacks (a co-author pushed), bring them in
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
@@ -458,6 +474,7 @@ class GitSync:
             return Outcome("local", "Committed. " + str(pushed.message))
         return Outcome("failed", "Committed, but not pushed: " + str(pushed.message))
 
+    @one_at_a_time
     def pull(self, manual: bool = False) -> None:
         """Fetch, and bring GitHub's commits in. Your changes are committed first. When only
         GitHub moved on, a fast-forward; when both did (co-authors writing at the same time),
@@ -658,6 +675,7 @@ class GitSync:
         return {"path": path, "content": content.stdout if content.returncode == 0 else None,
                 "diff": diff.stdout}
 
+    @one_at_a_time
     def resolve_mine(self) -> None:
         """After a clash, once you have edited the files to hold what both of you want: merge
         GitHub's branch, taking your version of the lines both changed (integrate.combine_mine),
