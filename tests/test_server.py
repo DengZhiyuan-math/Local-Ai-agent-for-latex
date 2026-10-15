@@ -22,7 +22,7 @@ def project(files: dict) -> Path:
         (root / rel).parent.mkdir(parents=True, exist_ok=True)
         (root / rel).write_text(text, encoding="utf-8")
     server.set_root(root)
-    return server.ROOT
+    return server.PROJECT.root
 
 
 class Imports(unittest.TestCase):
@@ -59,7 +59,7 @@ class Config(unittest.TestCase):
         root = project({"a.tex": "% \\documentclass{article}", "b.tex": "\\documentclass{article}",
                         "prism.json": '{"outdir": "..\\\\elsewhere"}'})
         pdf, main, outdir = hub.pdf_path(root)
-        self.assertEqual((main, outdir), (server.CFG.main, server.CFG.outdir))
+        self.assertEqual((main, outdir), (server.PROJECT.config.main, server.PROJECT.config.outdir))
         self.assertEqual((main, outdir), ("b.tex", "build"))
         self.assertEqual(pdf, root / "build" / "b.pdf")
 
@@ -70,24 +70,23 @@ class Config(unittest.TestCase):
         os.utime(root / "build/main.pdf", (1000, 1000))
         os.utime(root / "build/notes.pdf", (2000, 2000))
         server.show_last_built()
-        self.assertEqual((server.CFG.main, server.CFG.pdf.name), ("notes.tex", "notes.pdf"))
-        self.assertEqual(server.CFG.project_main, "main.tex", "prism.json's main is kept")
+        self.assertEqual((server.PROJECT.config.main, server.PROJECT.config.pdf.name), ("notes.tex", "notes.pdf"))
+        self.assertEqual(server.PROJECT.config.project_main, "main.tex", "prism.json's main is kept")
         os.utime(root / "build/main.pdf", (3000, 3000))
         os.utime(root / "build/intro.pdf", (4000, 4000))
         server.set_root(root)
         server.show_last_built()
-        self.assertEqual(server.CFG.main, "main.tex", "a .tex that is no document is skipped")
+        self.assertEqual(server.PROJECT.config.main, "main.tex", "a .tex that is no document is skipped")
         root = project({"main.tex": doc, "notes.tex": doc})
         server.show_last_built()
-        self.assertEqual(server.CFG.main, "main.tex", "nothing built yet: the project's main")
+        self.assertEqual(server.PROJECT.config.main, "main.tex", "nothing built yet: the project's main")
 
     def test_changes_apply_without_a_restart(self):
         root = project({"main.tex": "", "prism.json": '{"engine": "pdflatex"}'})
-        self.assertEqual(server.CFG.engine, "pdflatex")
+        self.assertEqual(server.PROJECT.config.engine, "pdflatex")
         time.sleep(0.02)
         (root / "prism.json").write_text('{"engine": "lualatex"}', encoding="utf-8")
-        server.refresh_config()
-        self.assertEqual(server.CFG.engine, "lualatex")
+        self.assertEqual(server.PROJECT.config.engine, "lualatex")
 
 
 DOC = "\\documentclass{article}\\begin{document}\\input{sec}\\end{document}"
@@ -128,56 +127,54 @@ class ShownDocument(unittest.TestCase):
         seen = {}
 
         def during(cfg):
-            seen["shown"] = server.CFG.main
+            seen["shown"] = server.PROJECT.config.main
             cfg.pdf.write_bytes(b"%PDF half")                 # the engine's first run
             seen["pdf"] = server.pdf_state(cfg)
         r = self.build("notes.tex", during)
         self.assertEqual(seen["shown"], "main.tex", "while notes.tex builds, main.tex's PDF stays")
-        self.assertEqual(server.CFG.main, "notes.tex")
+        self.assertEqual(server.PROJECT.config.main, "notes.tex")
         self.assertIsNotNone(r["pdf_mtime"])
         seen.clear()
         self.build("sec.tex", during)                     # rebuilding main.pdf, which was shown before
         self.assertEqual(seen["pdf"], 1000.0, "reported as it was until the build ends")
-        self.assertNotEqual(server.pdf_state(server.CFG), 1000.0)
+        self.assertNotEqual(server.pdf_state(server.PROJECT.config), 1000.0)
 
     def test_a_changed_prism_json_keeps_a_standalone_document_shown(self):
         self.build("notes.tex")
         time.sleep(0.02)
         (self.root / "prism.json").write_text('{"main": "main.tex", "engine": "lualatex"}', encoding="utf-8")
-        server.refresh_config()
-        self.assertEqual((server.CFG.main, server.CFG.engine), ("notes.tex", "lualatex"))
+        self.assertEqual((server.PROJECT.config.main, server.PROJECT.config.engine), ("notes.tex", "lualatex"))
         self.build("main.tex")
         time.sleep(0.02)
         (self.root / "prism.json").write_text('{"main": "notes.tex"}', encoding="utf-8")
-        server.refresh_config()
-        self.assertEqual(server.CFG.main, "notes.tex", "showing the main: it follows prism.json")
+        self.assertEqual(server.PROJECT.config.main, "notes.tex", "showing the main: it follows prism.json")
 
 
 class Files(unittest.TestCase):
     def test_tree_lists_assets_without_reading_them_as_source(self):
         project({"main.tex": "\\section{Introduction}", "figure.png": "",
                  "reference.pdf": "", ".env": "secret", "build/output.pdf": ""})
-        self.assertEqual(set(server.list_files(editable_only=False)),
+        self.assertEqual(set(server.PROJECT.list_files(editable_only=False)),
                          {"main.tex", "figure.png", "reference.pdf"})
-        self.assertEqual(server.list_files(), ["main.tex"])
+        self.assertEqual(server.PROJECT.list_files(), ["main.tex"])
         self.assertEqual(server.symbols()["outline"][0]["title"], "Introduction")
         for bad in (".env", "build/output.pdf", "../outside.png", ".git/config"):
             with self.assertRaises(ValueError, msg=bad):
-                server.resolve(bad, editable_only=False)
+                server.PROJECT.resolve(bad, editable_only=False)
 
     def test_only_editable_files_inside_the_project(self):
         root = project({"main.tex": "", "fig.tikz": "", "build/main.log": "", "build/x.tex": "",
                         ".git/config": "", "notes/.hidden/x.tex": "", "img.png": ""})
-        self.assertEqual(server.resolve("fig.tikz"), root / "fig.tikz")
+        self.assertEqual(server.PROJECT.resolve("fig.tikz"), root / "fig.tikz")
         for bad in ("../main.tex", "/etc/passwd", "sub\\main.tex", "build/main.log", "build/x.tex",
                     ".git/config", "notes/.hidden/x.tex", "img.png", ""):
             with self.assertRaises(ValueError, msg=bad):
-                server.resolve(bad)
+                server.PROJECT.resolve(bad)
 
     def test_one_walk_lists_what_list_files_lists(self):
         root = project({"main.tex": "", "a/b.tex": "", "a/fig.png": "", "build/x.tex": ""})
-        self.assertEqual(server.list_both(), (server.list_files(editable_only=False), server.list_files()))
-        self.assertEqual(server.list_both(), (["main.tex", "a/b.tex", "a/fig.png"], ["main.tex", "a/b.tex"]))
+        self.assertEqual(server.PROJECT.list_both(), (server.PROJECT.list_files(editable_only=False), server.PROJECT.list_files()))
+        self.assertEqual(server.PROJECT.list_both(), (["main.tex", "a/b.tex", "a/fig.png"], ["main.tex", "a/b.tex"]))
         if os.name == "nt":
             # A junction is no link to os.walk: what it leads to outside the project is
             # never listed (its files are resolved one by one), what it leads to inside is.
@@ -186,7 +183,7 @@ class Files(unittest.TestCase):
             (outside / "secret.tex").write_text("secret", encoding="utf-8")
             _winapi.CreateJunction(str(outside), str(root / "out"))
             _winapi.CreateJunction(str(root / "a"), str(root / "in"))
-            self.assertEqual(server.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
+            self.assertEqual(server.PROJECT.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
 
     def test_no_save_while_the_agent_edits(self):
         """An Edit turn runs: the server holds every save, also from a page that did not see
@@ -256,7 +253,7 @@ class FileMenu(unittest.TestCase):
         for d in ("empty", "a/sub", ".hidden", "node_modules"):
             (root / d).mkdir()
         walked = []
-        server.list_both(walked)
+        server.PROJECT.list_both(walked)
         self.assertEqual(sorted(walked), ["a", "a/sub", "empty"])
 
     def test_new_file_and_folder_with_names_that_work_everywhere(self):
@@ -304,7 +301,7 @@ class FileMenu(unittest.TestCase):
         project({"main.tex": ""})
         with mock.patch.object(server.desktop, "copy_files") as copy:
             self.assertEqual(self.files("copy", paths=["main.tex"]), {"system": True})
-        self.assertEqual(copy.call_args.args[0], [server.ROOT / "main.tex"])
+        self.assertEqual(copy.call_args.args[0], [server.PROJECT.root / "main.tex"])
         with mock.patch.object(server.desktop, "copy_files", side_effect=server.desktop.Unsupported("no")):
             self.assertEqual(self.files("copy", paths=["main.tex"])["system"], False)
 
@@ -312,7 +309,7 @@ class FileMenu(unittest.TestCase):
         project({"main.tex": "", "a/b.tex": ""})
         with mock.patch.object(server.desktop, "trash") as trash:
             self.assertEqual(self.files("trash", paths=["a"]), {"trashed": ["a"]})
-            trash.assert_called_once_with([server.ROOT / "a"])
+            trash.assert_called_once_with([server.PROJECT.root / "a"])
             with self.assertRaises(ValueError):
                 self.files("trash", paths=[""])
 
@@ -475,7 +472,7 @@ class Routes(unittest.TestCase):
                          (404, {"error": "no synctex data; build first"}))
         sp = 1 / server.synctex.SP_TO_BP
         (root / "build").mkdir()
-        server.CFG.synctex.write_bytes(gzip.compress(
+        server.PROJECT.config.synctex.write_bytes(gzip.compress(
             f"Input:1:main.tex\nUnit:1\nMagnification:1000\n{{1\nx1,3:{round(100 * sp)},{round(200 * sp)}\n}}1\n".encode()))
         code, box = self.ask("/api/synctex/forward?file=main.tex&line=3")
         self.assertEqual((code, box["page"], box["line"]), (200, 1, 3))

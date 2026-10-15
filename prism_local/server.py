@@ -17,7 +17,6 @@ from __future__ import annotations
 import gitenv
 
 import argparse
-import fnmatch
 import os
 import re
 import shutil
@@ -34,6 +33,7 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from projectconfig import Config  # noqa: E402
+from project import MAX_FILES, Project  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
                     project_path, with_line_ends_of, write_bytes)
@@ -50,7 +50,6 @@ import registry  # noqa: E402
 import selfupdate  # noqa: E402
 import sources  # noqa: E402
 
-MAX_FILES = 3000
 BUILD_LOCK = threading.Lock()
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -62,149 +61,19 @@ STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition
                      "remark", "example"]
 
 
-# The project's settings, with the document shown now (CFG.main: its PDF is the one in the
-# PDF pane, and the one the agent's compile tool builds when nothing says which). Replaced
-# as a whole, never changed in place; a request reads it once (cfg = CFG) and uses that.
-CFG: Config = None  # type: ignore[assignment]
-ROOT: Path = Path.cwd()
+# The project this editor works on (project.py): its folder, its settings with the
+# document shown, and the files the editor shows.
+PROJECT: Project = None  # type: ignore[assignment]
 
 
 def set_root(root: Path) -> None:
-    global CFG, ROOT
-    CFG = Config(root)
-    ROOT = CFG.root
-
-
-def refresh_config() -> None:
-    """Load prism.json again when it changed, so a new engine or outdir applies at once."""
-    global CFG
-    try:
-        stamp = (ROOT / "prism.json").stat().st_mtime_ns
-    except OSError:
-        stamp = None
-    if stamp != CFG.stamp:
-        # A pull, a merge or an agent changed it: a standalone document (not prism.json's
-        # main) stays shown; the main follows prism.json.
-        old = CFG
-        keep = old.main if old.main != old.project_main and (ROOT / old.main).is_file() else None
-        CFG = Config(ROOT, main=keep)
-
-
-# ---------------------------------------------------------------- files
-
-def _excluded(rel: str) -> bool:
-    parts = rel.split("/")
-    if any(p.startswith(".") for p in parts) or any(p in SKIP_DIRS for p in parts[:-1]):
-        return True
-    if rel.startswith(CFG.outdir + "/"):
-        return True
-    return any(fnmatch.fnmatch(rel, g) for g in CFG.exclude)
-
-
-def resolve(rel: str, *, editable_only: bool = True) -> Path:
-    """Map a project-relative path to a visible file, or raise ValueError."""
-    if not rel or rel.startswith("/") or "\\" in rel:
-        raise ValueError("bad path")
-    p = project_path(ROOT, rel)
-    r = p.relative_to(ROOT).as_posix()
-    if (editable_only and p.suffix not in EDITABLE_SUFFIXES) or _excluded(r):
-        raise ValueError("not an editable file" if editable_only else "not a project file")
-    return p
-
-
-def _plain(entry: os.DirEntry, rel: str) -> bool:
-    """A file, not a link, whose path resolve() takes as it is."""
-    try:
-        return "\\" not in rel and not re.match(r"[A-Za-z]:", rel) \
-            and not entry.name.endswith((".", " ")) and not entry.is_symlink() and entry.is_file()
-    except OSError:
-        return False
-
-
-def _walk(folders: list[str] | None = None):
-    """The project's files folder by folder, in the order of os.walk (sorted, depth first,
-    linked folders left out): lists of (rel, plain). plain: a _plain file in a folder that
-    resolves to where the walk found it (not reached through a junction), which is inside
-    the project without resolving the file itself (slow on Windows, for every file).
-    Each folder visited, empty ones too, is added to `folders`."""
-    stack = [""]
-    while stack:
-        reld = stack.pop()
-        if reld and folders is not None:
-            folders.append(reld[:-1])
-        top = ROOT / reld
-        try:
-            with os.scandir(top) as it:
-                entries = list(it)
-            here = top.resolve() == top
-        except (OSError, RuntimeError):
-            continue
-        files, dirs = [], []
-        for e in entries:
-            try:
-                is_dir = e.is_dir()
-            except OSError:
-                is_dir = False
-            if not is_dir:
-                rel = reld + e.name
-                if not _excluded(rel):
-                    files.append((rel, here and _plain(e, rel)))
-            elif not e.name.startswith(".") and e.name not in SKIP_DIRS and reld + e.name != CFG.outdir:
-                dirs.append(e.name)
-        yield files
-        stack += [reld + d + "/" for d in sorted(dirs, reverse=True) if not os.path.islink(top / d)]
-
-
-def _gather(*wanted: bool, folders: list[str] | None = None) -> list[dict[str, bool]]:
-    """For each editable_only in `wanted`, the files list_files considers ({rel: plain}),
-    all from one walk. Each list stops growing after the folder that takes it past MAX_FILES."""
-    found: list[dict[str, bool]] = [{} for _ in wanted]
-    for batch in _walk(folders):
-        for seen, editable_only in zip(found, wanted):
-            if len(seen) <= MAX_FILES:
-                seen.update((rel, plain) for rel, plain in batch
-                            if not editable_only or Path(rel).suffix in EDITABLE_SUFFIXES)
-        if all(len(seen) > MAX_FILES for seen in found):
-            break
-    return found
-
-
-def _checked(seen: dict[str, bool], editable_only: bool) -> list[str]:
-    """The files of `seen` that resolve() allows (a plain one is allowed as it is), sorted."""
-    safe = []
-    for rel, plain in seen.items():
-        try:
-            if plain or resolve(rel, editable_only=editable_only).is_file():
-                safe.append(rel)
-        except (ValueError, OSError, RuntimeError):
-            pass
-    return sorted(safe, key=lambda s: (s != CFG.main, s.count("/") == 0, s))
-
-
-def list_files(*, editable_only: bool = True) -> list[str]:
-    if CFG.files and editable_only:
-        seen: dict[str, bool] = {}
-        for g in CFG.files:
-            for p in ROOT.glob(g):
-                rel = p.relative_to(ROOT).as_posix()
-                if p.is_file() and p.suffix in EDITABLE_SUFFIXES and not _excluded(rel):
-                    seen[rel] = False
-        return _checked(seen, True)
-    return _checked(_gather(editable_only)[0], editable_only)
-
-
-def list_both(folders: list[str] | None = None) -> tuple[list[str], list[str]]:
-    """list_files(editable_only=False) and list_files(), from one walk of the project; the
-    folders it visited, empty ones too, are added to `folders` (not with CFG.files)."""
-    if CFG.files:
-        return list_files(editable_only=False), list_files()
-    every, editable = _gather(False, True, folders=folders)
-    return _checked(every, False), _checked(editable, True)
+    global PROJECT
+    PROJECT = Project(root)
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     """Read-only git in the project (gitenv.git)."""
-    return gitenv.git(ROOT, *args, timeout=timeout)
+    return gitenv.git(PROJECT.root, *args, timeout=timeout)
 
 
 _GIT_PREFIX: dict = {}
@@ -212,12 +81,12 @@ _GIT_PREFIX: dict = {}
 
 def git_prefix() -> str:
     """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
-    if ROOT not in _GIT_PREFIX:
+    if PROJECT.root not in _GIT_PREFIX:
         try:
-            _GIT_PREFIX[ROOT] = git("rev-parse", "--show-prefix").stdout.strip()
+            _GIT_PREFIX[PROJECT.root] = git("rev-parse", "--show-prefix").stdout.strip()
         except (OSError, subprocess.SubprocessError):
             return ""
-    return _GIT_PREFIX[ROOT]
+    return _GIT_PREFIX[PROJECT.root]
 
 
 def git_status() -> dict[str, str]:
@@ -258,7 +127,7 @@ def mtime(p: Path) -> float:
 def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> tuple[dict, int]:
     """Write an editor buffer to disk, unless the file changed on disk since the editor
     loaded it (a conflict). The file keeps its line ends (the editor sends \\n)."""
-    p = resolve(rel)
+    p = PROJECT.resolve(rel)
     # Check-then-write must not interleave with another save, nor with git committing or
     # merging. git's work takes moments, but a repository's hooks may take long: then the
     # page is told to try again, rather than kept waiting with a connection held.
@@ -274,7 +143,7 @@ def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> 
                 and not force:
             return {"conflict": True, "mtime": mtime(p)}, 409
         write_bytes(p, with_line_ends_of(content, p).encode("utf-8"))
-        AGENT.server_wrote([p.relative_to(ROOT).as_posix()])     # yours, not an Ask turn's
+        AGENT.server_wrote([p.relative_to(PROJECT.root).as_posix()])     # yours, not an Ask turn's
         return {"ok": True, "mtime": mtime(p)}, 200
     finally:
         SAVE_LOCK.release()
@@ -349,10 +218,10 @@ _SCANS: dict[tuple, tuple] = {}
 def scan(rel: str, kind: str = "tex"):
     """_scan_tex (kind "tex") or _scan_bib ("bib") of a project file, read only when it
     changed since the last scan; None when it cannot be read."""
-    p = ROOT / rel
+    p = PROJECT.root / rel
     try:
         st = p.stat()
-        key, stamp = (ROOT, rel, kind), (st.st_mtime_ns, st.st_size)
+        key, stamp = (PROJECT.root, rel, kind), (st.st_mtime_ns, st.st_size)
         hit = _SCANS.get(key)
         if hit and hit[0] == stamp:
             return hit[1]
@@ -368,9 +237,9 @@ def scan(rel: str, kind: str = "tex"):
 
 def document_order(files: list[str] | None = None) -> list[str]:
     """Project .tex files in the order the main file \\input's them (depth first).
-    `files`: list_files(), when the caller has it already."""
-    order = input_chain(CFG.main)
-    rest = [f for f in (list_files() if files is None else files) if f.endswith(".tex") and f not in order]
+    `files`: PROJECT.list_files(), when the caller has it already."""
+    order = input_chain(PROJECT.config.main)
+    rest = [f for f in (PROJECT.list_files() if files is None else files) if f.endswith(".tex") and f not in order]
     return order + rest
 
 
@@ -387,7 +256,7 @@ def theorem_envs(files: list[str]) -> dict[str, str]:
 
 def symbols() -> dict:
     labels, outline, macros = [], [], []
-    files = list_files()
+    files = PROJECT.list_files()
     envs = theorem_envs(files)
     outline_envs = set(envs)
     for rel in document_order(files):
@@ -416,7 +285,7 @@ def symbols() -> dict:
 # ---------------------------------------------------------------- build
 
 def resolve_tex_name(name: str) -> str | None:
-    return build.project_file(ROOT, name)
+    return build.project_file(PROJECT.root, name)
 
 
 # The build in progress (for /api/build/stop), and the PDF it writes with that PDF's mtime
@@ -465,8 +334,8 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
         for n in range(1, 1000):
             cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
             rel = f"{folder}/{cand}" if folder else cand
-            p = project_path(ROOT, rel)
-            if not folder and _excluded(p.relative_to(ROOT).as_posix()):
+            p = project_path(PROJECT.root, rel)
+            if not folder and PROJECT.excluded(p.relative_to(PROJECT.root).as_posix()):
                 raise ValueError("the file is excluded from this project")
             if p.exists():
                 try:
@@ -476,7 +345,7 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
                     pass
                 continue
             write_bytes(p, data)
-            AGENT.server_wrote([p.relative_to(ROOT).as_posix()])     # yours, not a turn's
+            AGENT.server_wrote([p.relative_to(PROJECT.root).as_posix()])     # yours, not a turn's
             return rel
     finally:
         SAVE_LOCK.release()
@@ -491,9 +360,9 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
 def item_path(rel: str, *, folder_only: bool = False) -> Path:
     """The project's file or folder `rel` ("" is the project), as the sidebar shows it."""
     if not rel:
-        return ROOT
-    p = project_path(ROOT, rel)
-    if p != ROOT / rel or _excluded(rel + ("/" if p.is_dir() else "")) or is_metadata(Path(rel)):
+        return PROJECT.root
+    p = project_path(PROJECT.root, rel)
+    if p != PROJECT.root / rel or PROJECT.excluded(rel + ("/" if p.is_dir() else "")) or is_metadata(Path(rel)):
         raise ValueError(f"not a file or folder the editor shows: {rel}")
     if not p.exists():
         raise ValueError(f"not found: {rel}")
@@ -503,7 +372,7 @@ def item_path(rel: str, *, folder_only: bool = False) -> Path:
 
 
 def _rel(p: Path) -> str:
-    return p.relative_to(ROOT).as_posix()
+    return p.relative_to(PROJECT.root).as_posix()
 
 
 class FilesBusy(Conflict):
@@ -571,7 +440,7 @@ def paste_files(folder: str, sources: list[Path]) -> dict:
 
 def rename_item(rel: str, name: str) -> dict:
     src = item_path(rel)
-    if src == ROOT:
+    if src == PROJECT.root:
         raise ValueError("rename the project from its name at the top")
     why = bad_name(name)
     if why:
@@ -593,7 +462,7 @@ def new_item(folder: str, name: str, kind: str) -> dict:
     if why:
         raise ValueError(why)
     p = target / name
-    if _excluded(_rel(p) + ("/" if kind == "folder" else "")):
+    if PROJECT.excluded(_rel(p) + ("/" if kind == "folder" else "")):
         raise ValueError("this project excludes that name; the editor would not show it")
     with files_changing():
         if os.path.lexists(p):
@@ -609,7 +478,7 @@ def new_item(folder: str, name: str, kind: str) -> dict:
 
 def trash_items(rels: list[str]) -> dict:
     paths = [item_path(rel) for rel in rels]
-    if ROOT in paths:
+    if PROJECT.root in paths:
         raise ValueError("delete the project from the Home page")
     with files_changing():
         desktop.trash(paths)
@@ -659,10 +528,10 @@ def rename_project(name: str) -> tuple[dict, int]:
     new folder on the same port (relaunch, --moved-from); the page waits, then reloads."""
     _NAME["mtime"] = None
     folder = registry.folder_name(name)
-    if not name or not folder or folder == ROOT.name:
-        return {"name": registry.rename(ROOT, name), "moving": False}, 200
-    new = ROOT.parent / folder
-    if new.exists() and registry.norm(new) != registry.norm(ROOT):
+    if not name or not folder or folder == PROJECT.root.name:
+        return {"name": registry.rename(PROJECT.root, name), "moving": False}, 200
+    new = PROJECT.root.parent / folder
+    if new.exists() and registry.norm(new) != registry.norm(PROJECT.root):
         return {"error": f"a folder named {folder} already exists next to this project"}, 409
     if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
         return {"error": "wait until the build or the agent's turn has finished"}, 409
@@ -673,7 +542,7 @@ def rename_project(name: str) -> tuple[dict, int]:
     except (instances.Busy, TimeoutError, OSError) as exc:
         return {"error": str(exc)}, 409
     try:
-        registry.rename(ROOT, name)      # the list keeps the exact name; move_folder tidies it
+        registry.rename(PROJECT.root, name)      # the list keeps the exact name; move_folder tidies it
     except BaseException:
         transition.close()
         raise
@@ -689,15 +558,15 @@ def move_argv(new: Path, moving: bool = True) -> list[str]:
             str(Path(__file__).resolve()), str(new), "--port", str(RESTART["port"]),
             "--port-tries", "1", "--no-browser"]
     if moving:
-        argv += ["--moved-from", str(ROOT)]
+        argv += ["--moved-from", str(PROJECT.root)]
     if a.exit_when_idle:
         argv.append("--exit-when-idle")
     if a.idle_timings:
         argv += ["--idle-timings", a.idle_timings]
     if a.ready_file:
         alias = LIFETIME.alias if LIFETIME else None
-        if alias and moving and registry.inside(alias, ROOT):
-            alias = new / alias.relative_to(ROOT)
+        if alias and moving and registry.inside(alias, PROJECT.root):
+            alias = new / alias.relative_to(PROJECT.root)
         argv += ["--ready-file", str(alias or instances.path(new))]
     return argv
 
@@ -705,19 +574,19 @@ def move_argv(new: Path, moving: bool = True) -> list[str]:
 def stale_document() -> str | None:
     """A document whose .tex is newer than its PDF (just edited): the one shown if it is,
     else the most recently edited. None when every PDF is up to date."""
-    stale = []
-    for rel in list_files(editable_only=False):
-        src = ROOT / rel
-        if src.suffix != ".tex" or rel.split("/")[0] == CFG.outdir:
+    stale, cfg = [], PROJECT.config
+    for rel in PROJECT.list_files(editable_only=False):
+        src = PROJECT.root / rel
+        if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
             continue
         try:
             if not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
                 continue
-            pdf = ROOT / CFG.outdir / f"{src.stem}.pdf"
+            pdf = PROJECT.root / cfg.outdir / f"{src.stem}.pdf"
             # Never built: only when edited after the last build (not an old draft lying there).
-            built = pdf if pdf.exists() else CFG.pdf
+            built = pdf if pdf.exists() else cfg.pdf
             if mtime(src) > (mtime(built) if built.exists() else 0):
-                stale.append((rel == CFG.main, mtime(src), rel))
+                stale.append((rel == cfg.main, mtime(src), rel))
         except OSError:
             continue
     return max(stale)[2] if stale else None
@@ -745,13 +614,13 @@ def document_of(rel: str, cfg: Config) -> str:
     that does, else another document that does, else prism.json's main."""
     def is_doc(r: str) -> bool:
         try:
-            return r.endswith(".tex") and build.is_document((ROOT / r).read_text(encoding="utf-8", errors="replace"))
+            return r.endswith(".tex") and build.is_document((PROJECT.root / r).read_text(encoding="utf-8", errors="replace"))
         except OSError:
             return False
     if is_doc(rel):
         return rel
-    firsts = [m for m in dict.fromkeys((cfg.main, cfg.project_main)) if (ROOT / m).is_file()]
-    others = [f for f in list_files() if f.endswith(".tex") and f not in firsts]
+    firsts = [m for m in dict.fromkeys((cfg.main, cfg.project_main)) if (PROJECT.root / m).is_file()]
+    others = [f for f in PROJECT.list_files() if f.endswith(".tex") and f not in firsts]
     for m in firsts + [f for f in others if is_doc(f)]:
         if rel in input_chain(m):
             return m
@@ -761,27 +630,25 @@ def document_of(rel: str, cfg: Config) -> str:
 def show_last_built() -> None:
     """Show the PDF of the document built last (its PDF is the newest), not always the
     project's main, so a reopened editor shows the PDF it showed before."""
-    global CFG
-    best = None
-    for rel in list_files(editable_only=False):
-        src = ROOT / rel
-        if src.suffix != ".tex" or rel.split("/")[0] == CFG.outdir:
+    best, cfg = None, PROJECT.config
+    for rel in PROJECT.list_files(editable_only=False):
+        src = PROJECT.root / rel
+        if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
             continue
-        pdf = ROOT / CFG.outdir / f"{src.stem}.pdf"
+        pdf = PROJECT.root / cfg.outdir / f"{src.stem}.pdf"
         try:
             if not pdf.exists() or not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
                 continue
         except OSError:
             continue
         best = max(best or (0.0, ""), (mtime(pdf), rel))
-    if best and best[1] != CFG.main:
-        CFG = Config(ROOT, main=best[1])
+    if best:
+        PROJECT.show(best[1])
 
 
 def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
-    global CFG
-    shown = CFG
+    shown = PROJECT.config
     if mode not in shown.modes:
         return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
                 "output": f"There is no '{mode}' build.", "main": shown.main, "pdf_mtime": None}
@@ -791,22 +658,22 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
         if active is None:
             # No open file says which (the agent's compile tool, auto-compile after its turn):
             # the document edited since its PDF was built, else the document shown now.
-            main = stale_document() or (shown.main if (ROOT / shown.main).is_file() else shown.project_main)
+            main = stale_document() or (shown.main if (PROJECT.root / shown.main).is_file() else shown.project_main)
         else:
             if not isinstance(active, str):
                 raise ValueError("active must be a project file path")
-            source = resolve(active)
+            source = PROJECT.resolve(active)
             if not source.is_file():
                 raise FileNotFoundError(active)
-            main = document_of(source.relative_to(ROOT).as_posix(), shown)
+            main = document_of(source.relative_to(PROJECT.root).as_posix(), shown)
         # Select outputs in memory. Opening a standalone document does not change prism.json.
         # It is shown once its build has ended: until then the PDF pane keeps what it shows.
-        cfg = Config(ROOT, main=main)
+        cfg = Config(PROJECT.root, main=main)
         t0 = time.time()
         before = mtime(cfg.pdf) if cfg.pdf.exists() else None
         RUNNING["pdf"] = (cfg.pdf, before)
         cmd = cfg.custom.get(mode)
-        b = build.Build(ROOT, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
+        b = build.Build(PROJECT.root, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
                         command=cfg.expand(cmd) if cmd else None, clean=clean,
                         shell_escape=cfg.shell_escape)
         RUNNING["build"] = b
@@ -814,7 +681,7 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
             r = b.run()
         finally:
             RUNNING["pdf"] = None
-            CFG = cfg
+            PROJECT.show(cfg.main)
             AGENT.server_wrote([cfg.outdir])    # a build's output is no agent turn's change
         if cfg.error:
             r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
@@ -836,9 +703,10 @@ def stop_build() -> bool:
 # ---------------------------------------------------------------- synctex
 
 SYNC = synctex.SyncIndex()           # the shown document's, read once until it changes
-AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve, output_fn=lambda: CFG.outdir)
+AGENT = AgentManager(lambda: PROJECT.root, lambda: PROJECT.list_files(), lambda rel: PROJECT.resolve(rel),
+                     output_fn=lambda: PROJECT.config.outdir)
 # The project's changes, recorded in its repository and synced with GitHub (gitsync.py).
-GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
+GITSYNC = GitSync(lambda: PROJECT.root, lambda: PROJECT.config.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
 AGENT.on_start = GITSYNC.before_turn
 AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
 AGENT.writes = SAVE_LOCK
@@ -855,9 +723,9 @@ def project_name() -> str:
         m = None
     if m != _NAME["mtime"] or _NAME["name"] is None:
         try:
-            _NAME["name"] = registry.display_name(ROOT)
+            _NAME["name"] = registry.display_name(PROJECT.root)
         except (OSError, ValueError):
-            _NAME["name"] = ROOT.name
+            _NAME["name"] = PROJECT.root.name
         _NAME["mtime"] = m
     return _NAME["name"]
 
@@ -876,18 +744,17 @@ class Handler(httpbase.Handler):
     pages = {"/": "index.html", "/index.html": "index.html", "/viewer": "viewer.html"}
 
     def get(self, path, q):
-        refresh_config()
         return self._get(path, q)      # errors: httpbase._answer
 
     def _get(self, path, q):
         if path == "/api/ping":
-            return self._json({"app": "prism-local", "root": str(ROOT), "project_key": registry.project_key(ROOT), "pid": os.getpid(),
+            return self._json({"app": "prism-local", "root": str(PROJECT.root), "project_key": registry.project_key(PROJECT.root), "pid": os.getpid(),
                                "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
         if path == "/api/pdfstat":
-            cfg = CFG
+            cfg = PROJECT.config
             return self._json({"main": cfg.main, "mtime": pdf_state(cfg)})
         if path == "/pdf":
-            cfg = CFG
+            cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
                 return self._err(409, "the compiled document changed")
             if RUNNING["pdf"] and RUNNING["pdf"][0] == cfg.pdf:
@@ -898,24 +765,24 @@ class Handler(httpbase.Handler):
         if path == "/api/tree":
             st = git_status()
             walked: list[str] = []
-            files, (listed, editable) = [], list_both(walked)
-            folders = [f for f in walked if not _excluded(f + "/")]
+            files, (listed, editable) = [], PROJECT.list_both(walked)
+            folders = [f for f in walked if not PROJECT.excluded(f + "/")]
             for f in listed:
                 try:
-                    files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
+                    files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(PROJECT.root / f),
                                   "editable": Path(f).suffix in EDITABLE_SUFFIXES})
                 except FileNotFoundError:       # deleted since it was listed (a build, git)
                     pass
-            return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
+            return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": document_order(editable),
-                               "pdf_main": (cfg := CFG).main, "pdf_mtime": pdf_state(cfg),
+                               "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
-            return self._json(publish.publish_info(ROOT))
+            return self._json(publish.publish_info(PROJECT.root))
         if path == "/api/git/theirs":            # GitHub's version, after a clash
-            resolve(q["path"])
+            PROJECT.resolve(q["path"])
             return self._json(GITSYNC.theirs(q["path"]))
         if path == "/api/git/github":
             return self._json({"github": github_url()})
@@ -926,12 +793,12 @@ class Handler(httpbase.Handler):
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))
         if path == "/api/config":
-            cfg = CFG
+            cfg = PROJECT.config
             return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
                                "builder": cfg.builder, "engine": cfg.engine, "error": cfg.error,
                                "build": {m: cfg.describe(m) for m in cfg.modes}})
         if path == "/api/agent/events":
-            if q.get("project_key") != registry.project_key(ROOT):
+            if q.get("project_key") != registry.project_key(PROJECT.root):
                 return self._err(409, "This page belongs to another project. Reopen the project's editor.")
             got = AGENT.events(int(q["job"]), int(q.get("after", 0)), 20.0)
             if got is None:
@@ -941,7 +808,7 @@ class Handler(httpbase.Handler):
             r = AGENT.commands(q.get("provider") or None, refresh=q.get("refresh") == "1")
             return self._json(r, 502 if "error" in r else 200)
         if path == "/api/agent/account":
-            return self._json(AGENT.account(q.get("provider") or None, ROOT, fresh=q.get("fresh") == "1"))
+            return self._json(AGENT.account(q.get("provider") or None, PROJECT.root, fresh=q.get("fresh") == "1"))
         if path == "/api/agent/info":
             return self._json(AGENT.info())
         if path == "/api/symbols":
@@ -950,36 +817,36 @@ class Handler(httpbase.Handler):
             f = snippets_file()
             return self._json({"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None})
         if path == "/api/file":
-            p = resolve(q.get("path", ""))
+            p = PROJECT.resolve(q.get("path", ""))
             return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
                                "mtime": mtime(p)})
         if path == "/api/asset":
             from urllib.parse import quote
-            p = resolve(q.get("path", ""), editable_only=False)
+            p = PROJECT.resolve(q.get("path", ""), editable_only=False)
             ctype = {".pdf": "application/pdf", ".png": "image/png", ".jpg": "image/jpeg",
                      ".jpeg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}.get(p.suffix.lower())
             extra = {} if ctype else {"Content-Disposition": "attachment; filename*=UTF-8''" + quote(p.name)}
             return self._send(200, p.read_bytes(), ctype or "application/octet-stream", extra)
         if path == "/api/diff":
             if q.get("path"):
-                resolve(q["path"])
+                PROJECT.resolve(q["path"])
             return self._json(project_diff(q.get("path") or "."))
         if path == "/api/upload/sync":             # how the uploads' commits and pushes went
             return self._json({p: UPLOAD_SYNC.get(p) for p in q.get("paths", "").split("\n") if p})
         if path == "/api/synctex/forward":
             try:
-                records = SYNC.lookup(CFG.synctex, ROOT)
+                records = SYNC.lookup(PROJECT.config.synctex, PROJECT.root)
             except synctex.NoData as e:
                 return self._err(404, str(e))
             r = records.forward(q["file"], int(q["line"]))
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         if path == "/api/synctex/inverse":
             try:
-                records = SYNC.lookup(CFG.synctex, ROOT)
+                records = SYNC.lookup(PROJECT.config.synctex, PROJECT.root)
             except synctex.NoData as e:
                 return self._err(404, str(e))
-            r = records.inverse(int(q["page"]), float(q["x"]), float(q["y"]), CFG.outdir,
-                                lambda: [f for f in list_files() if f.endswith(".bib")])
+            r = records.inverse(int(q["page"]), float(q["x"]), float(q["y"]), PROJECT.config.outdir,
+                                lambda: [f for f in PROJECT.list_files() if f.endswith(".bib")])
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         return self._err(404, "not found")
 
@@ -991,7 +858,7 @@ class Handler(httpbase.Handler):
         if path == "/api/files/reveal":
             rel = str(body.get("path") or "")
             p = item_path(rel)
-            if p == ROOT:
+            if p == PROJECT.root:
                 desktop.open_folder(p)
             else:
                 desktop.reveal(p)
@@ -1018,11 +885,10 @@ class Handler(httpbase.Handler):
         raise NotFound("unknown file action")
 
     def post(self, path, body):
-        refresh_config()
         return self._post(path, body)      # errors: httpbase._answer
 
     def _post(self, path, body):
-        if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(ROOT):
+        if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(PROJECT.root):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
         if path.startswith("/api/files/"):
             try:
@@ -1033,7 +899,7 @@ class Handler(httpbase.Handler):
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
             with GITSYNC.lock:
-                r = publish.publish_project(ROOT, str(body.get("name") or ""), str(body.get("owner") or ""),
+                r = publish.publish_project(PROJECT.root, str(body.get("name") or ""), str(body.get("owner") or ""),
                                         list(body.get("leave_out") or []), files_lock=SAVE_LOCK)
             GITSYNC.recheck()                   # a repository exists now
             return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)
@@ -1073,7 +939,7 @@ class Handler(httpbase.Handler):
                 if not isinstance(scope, list) or not all(isinstance(f, str) for f in scope):
                     raise ValueError("scope must be a list of files")
                 for f in scope:
-                    resolve(f)          # an editable project file, or ValueError
+                    PROJECT.resolve(f)          # an editable project file, or ValueError
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
                             body.get("effort") or None, scope, body.get("provider") or None,
@@ -1200,8 +1066,8 @@ def serve(a, project, life):
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
-    if not (ROOT / CFG.main).is_file():
-        print(f"prism-local: warning: main file {CFG.main} not found in {ROOT}", file=sys.stderr)
+    if not (PROJECT.root / PROJECT.config.main).is_file():
+        print(f"prism-local: warning: main file {PROJECT.config.main} not found in {PROJECT.root}", file=sys.stderr)
     try:
         srv = httpbase.listen(Handler, a.port, a.port_tries)
     except OSError as e:
@@ -1210,12 +1076,12 @@ def serve(a, project, life):
     url = f"http://127.0.0.1:{port}/"
     AGENT.server_url = url              # the agent's compile tool builds through this server
     stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
-    print(f"prism-local: {url}\n  project: {ROOT}\n  main:    {CFG.main}\n"
-          f"  builds:  {', '.join(CFG.modes)}\n  {stop}", flush=True)
-    if CFG.error:
-        print(f"  warning: {CFG.error}", flush=True)
-    if not is_scratch(ROOT):
-        registry.safe_touch(ROOT)       # list the project on the Home page
+    print(f"prism-local: {url}\n  project: {PROJECT.root}\n  main:    {PROJECT.config.main}\n"
+          f"  builds:  {', '.join(PROJECT.config.modes)}\n  {stop}", flush=True)
+    if PROJECT.config.error:
+        print(f"  warning: {PROJECT.config.error}", flush=True)
+    if not is_scratch(PROJECT.root):
+        registry.safe_touch(PROJECT.root)       # list the project on the Home page
     life.publish(url, port)
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
@@ -1241,9 +1107,9 @@ def serve(a, project, life):
             AGENT.shutdown()
             GITSYNC.flush()             # what is left is committed and pushed
             if RESTART["again"]:
-                destination = RESTART["move_to"] or ROOT
+                destination = RESTART["move_to"] or PROJECT.root
                 argv = move_argv(destination, moving=RESTART["move_to"] is not None)
-                result = transition.handover(argv, str(ROOT.parent))
+                result = transition.handover(argv, str(PROJECT.root.parent))
                 httpbase.log("restart failed: " + result["error"] if "error" in result
                              else "restart handed to the successor")
             else:

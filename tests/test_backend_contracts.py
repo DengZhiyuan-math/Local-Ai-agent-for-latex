@@ -41,8 +41,7 @@ class ProjectPaths(unittest.TestCase):
             (root / "external.tex").symlink_to(base / "outside.tex")
             (root / "internal.tex").symlink_to(root / "main.tex")
             (root / "broken.tex").symlink_to(root / "missing.tex")
-            old_root = server.ROOT
-            self.addCleanup(server.set_root, old_root)
+            self.addCleanup(setattr, server, "PROJECT", server.PROJECT)     # whatever it was
             server.set_root(root)
             api = OpenAICompat("api", {"base_url": "http://unused"})
             # Check even a stale or independently supplied catalog.
@@ -51,9 +50,9 @@ class ProjectPaths(unittest.TestCase):
             self.assertIn("INSIDE", api.tool(job, "read_file", {"path": "internal.tex"}, []))
             with self.assertRaises(ToolError):
                 api.tool(job, "read_file", {"path": "external.tex"}, [])
-            self.assertNotIn("external.tex", server.list_files())
-            self.assertNotIn("broken.tex", server.list_files())
-            self.assertIn("internal.tex", server.list_files())
+            self.assertNotIn("external.tex", server.PROJECT.list_files())
+            self.assertNotIn("broken.tex", server.PROJECT.list_files())
+            self.assertIn("internal.tex", server.PROJECT.list_files())
 
 
 class ChangeCoverage(unittest.TestCase):
