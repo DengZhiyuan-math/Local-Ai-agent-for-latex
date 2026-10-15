@@ -28,6 +28,19 @@ def identity(cwd):
     git(cwd, "config", "commit.gpgsign", "false")
 
 
+class Clock:
+    """A clock the test moves: the sync's schedule (syncschedule.py) runs on it."""
+
+    def __init__(self):
+        self.now = time.time()
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class GitSyncTest(unittest.TestCase):
     def setUp(self):
@@ -42,7 +55,8 @@ class GitSyncTest(unittest.TestCase):
         git(self.root, "commit", "-q", "-m", "init")
         git(self.root, "remote", "add", "origin", str(self.remote))
         git(self.root, "push", "-q", "-u", "origin", "main")
-        self.g = gitsync.GitSync(lambda: self.root, lambda: "build")
+        self.clock = Clock()
+        self.g = gitsync.GitSync(lambda: self.root, lambda: "build", clock=self.clock)
         self.g.bind_target()
 
     def last(self):
@@ -76,12 +90,12 @@ class GitSyncTest(unittest.TestCase):
         (self.root / "build").mkdir()
         (self.root / "build" / "main.pdf").write_bytes(b"%PDF")
         self.g.touched()
-        self.g.dirty_since = self.g.last_edit = time.time() - gitsync.IDLE - 1
+        self.clock.advance(gitsync.IDLE + 1)
         self.g.tick()
         msg, files = self.last()
         self.assertTrue(msg.startswith("Autosave: "), msg)
         self.assertEqual(sorted(files), ["fig.png", "main.tex"])
-        self.assertIsNone(self.g.dirty_since)
+        self.assertFalse(self.g.schedule.pending)
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"), "pushed")
 
     def test_files_lock_is_held_across_processes(self):
@@ -189,12 +203,12 @@ class GitSyncTest(unittest.TestCase):
             __hash__ = int.__hash__
 
         g.touched()
-        g.saves = Comparing(g.saves)
+        g.schedule.saves = Comparing(g.schedule.saves)
         g.commit_all("Autosave")
         for t in other:
             t.join()
         self.assertTrue(other)
-        self.assertIsNotNone(g.dirty_since, "the save's autosave is still due")
+        self.assertTrue(g.schedule.pending, "the save's autosave is still due")
 
     def test_a_save_during_a_commit_keeps_its_autosave_due(self):
         """git may look at a file just before a save writes it: a save that came in while a
@@ -210,10 +224,10 @@ class GitSyncTest(unittest.TestCase):
 
         self.g._record = record
         self.g.commit_all("Autosave")
-        self.assertIsNotNone(self.g.dirty_since, "still due")
+        self.assertTrue(self.g.schedule.pending, "still due")
         self.g._record = real
         self.g.commit_all("Autosave")
-        self.assertIsNone(self.g.dirty_since)
+        self.assertFalse(self.g.schedule.pending)
 
     def test_an_upload_is_told_what_its_own_push_did(self):
         """The worker may push the upload's commit first, and `error` may still say what
@@ -445,7 +459,8 @@ class SharedRepositoryTest(unittest.TestCase):
         git(self.top, "remote", "add", "origin", str(self.remote))
         git(self.top, "push", "-q", "-u", "origin", "main")
         self.a = self.top / "sheets" / "ex 1"
-        self.g = gitsync.GitSync(lambda: self.a, lambda: "build")
+        self.clock = Clock()
+        self.g = gitsync.GitSync(lambda: self.a, lambda: "build", clock=self.clock)
         self.g.bind_target()
 
     def test_commits_only_its_own_project_and_pushes(self):
@@ -457,7 +472,7 @@ class SharedRepositoryTest(unittest.TestCase):
         (self.a / "build" / "main.pdf").write_bytes(b"%PDF")
         (self.top / "sheets" / "ex 2" / "main.tex").write_text("theirs\n", encoding="utf-8")
         self.g.touched()
-        self.g.dirty_since = self.g.last_edit = time.time() - gitsync.IDLE - 1
+        self.clock.advance(gitsync.IDLE + 1)
         self.g.tick()
         self.assertEqual(git(self.top, "log", "-1", "--format=%s"), "ex 1: Autosave: main.tex")
         self.assertEqual(git(self.top, "show", "--name-only", "--format=", "HEAD"), "sheets/ex 1/main.tex")

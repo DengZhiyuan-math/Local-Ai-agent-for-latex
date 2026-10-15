@@ -39,16 +39,12 @@ from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, s
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
 import synctarget
+from syncschedule import FETCH_EVERY, IDLE, MAX_WAIT, QUIET, RETRY, Schedule  # noqa: F401
 
-IDLE = 120               # seconds without an edit before an autosave commit
-MAX_WAIT = 600           # ... but at the latest this long after the first change
-FETCH_EVERY = 60         # seconds between fetches from the remote (co-authors' changes arrive soon)
-QUIET = 20               # automatic pulls wait this long after your last save (no clash with typing)
 PUSH_TRIES = 5           # pushes in a row while co-authors keep pushing in between
 MENU_WAIT = 2            # seconds the GitHub menu waits for a push or pull before answering
 BIND_WAIT = 10           # ... and confirming a sync target, before "try again"
 TICK = 5                 # the worker's period
-RETRY = 60               # seconds before a failed push is tried again
 
 
 GUARD_MARK = "prism-local: refuse force pushes"
@@ -141,7 +137,7 @@ def _names(paths: list[str]) -> str:
 
 class GitSync:
     def __init__(self, root_fn: Callable[[], Path], outdir_fn: Callable[[], str],
-                 busy: Callable[[], bool] = lambda: False, writes=None):
+                 busy: Callable[[], bool] = lambda: False, writes=None, clock: Callable[[], float] = time.time):
         self.root_fn, self.outdir_fn, self.busy_fn = root_fn, outdir_fn, busy
         self.lock = threading.RLock()         # one git command sequence at a time
         # Held while git reads or changes the files: a commit, with the look at what changed;
@@ -153,12 +149,9 @@ class GitSync:
         self.git_dir: Path | None = None
         self.top: Path | None = None          # that repository's top: the project, or above it
         self.prefix = ""                      # the project's path in it: "" or "ex2/"
-        self.last_edit = self.dirty_since = None
-        self.saves = 0                        # touched() so far
-        self._touch = threading.Lock()        # touched() against commit_all's "all recorded"
+        self.schedule = Schedule(clock)       # when to commit, push and pull (syncschedule.py)
         self.last_commit: dict | None = None  # {"at", "message", "hash"}
-        self.last_push = self.last_fetch = 0.0
-        self.push_failed_at = 0.0
+        self.last_push = 0.0
         self.ahead = self.behind = 0
         self.has_remote = False
         self.upstream: str | None = None
@@ -292,13 +285,9 @@ class GitSync:
         return bool(paths) and self._record(lambda: paths, lambda _: message)
 
     def commit_all(self, why: str) -> bool:
-        saves = self.saves
+        mark = self.schedule.mark()
         ok = self._record(self.changes, lambda paths: f"{why}: {_names(paths)}")
-        # Everything saved is recorded, unless a save came in meanwhile: its autosave stays
-        # due (at worst one that finds nothing). A save still writing calls touched() after.
-        with self._touch:
-            if self.saves == saves:
-                self.dirty_since = None
+        self.schedule.recorded(mark)        # unless a save came in meanwhile
         return ok
 
     def _record(self, pick: Callable[[], list[str]], message: Callable[[list[str]], str]) -> bool:
@@ -433,7 +422,7 @@ class GitSync:
                         return Outcome("local", "The agent is working: pushed once its turn ends.")
                     time.sleep(min(0.3 * (attempt + 1), 1.5))
                     continue
-                self.push_failed_at = time.time()
+                self.schedule.push_failed()
                 self.error = ("GitHub has changes this copy does not have yet; pull first."
                               if behind else "Push failed: " + msg[-300:])
                 return Outcome("failed", self.error)
@@ -466,7 +455,7 @@ class GitSync:
         the two sides changed the same lines, the merge is called off, both versions stay
         where they are (GitHub's there, yours committed here), and `error` says which files."""
         with self.lock, self._changing(files=False):
-            self.last_fetch = time.time()
+            self.schedule.fetched()
             if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
                 return
             self.state = "pulling"
@@ -688,12 +677,7 @@ class GitSync:
     # ------------------------------------------------------------ hooks
     def touched(self) -> None:
         """You saved a file."""
-        with self._touch:
-            now = time.time()
-            self.last_edit = now
-            self.saves += 1
-            if self.dirty_since is None:
-                self.dirty_since = now
+        self.schedule.edited()
 
     def active(self) -> bool:
         return self.check_repo() and self.enabled
@@ -728,15 +712,9 @@ class GitSync:
     def tick(self) -> None:
         if not self.active():
             return
-        now = time.time()
-        if self.dirty_since and not self.busy_fn() and (
-                now - (self.last_edit or now) >= IDLE or now - self.dirty_since >= MAX_WAIT):
-            self._safe(lambda: self.commit_all("Autosave"))
-        if now - self.push_failed_at >= RETRY:
-            self._safe(self.push)
-        if now - self.last_fetch >= FETCH_EVERY and not self.busy_fn() \
-                and now - (self.last_edit or 0) >= QUIET:
-            self._safe(self.pull)
+        steps = {"commit": lambda: self.commit_all("Autosave"), "push": self.push, "pull": self.pull}
+        for step in self.schedule.due(self.busy_fn()):
+            self._safe(steps[step])
 
     def run(self) -> None:
         self._guarded("start", self._start)
@@ -763,7 +741,7 @@ class GitSync:
             self._safe(self.pull)
         # Changes left from before the editor started are recorded like new ones.
         if self.enabled and self.changes():
-            self.last_edit = self.dirty_since = time.time()
+            self.schedule.leftover()
 
     def _finish_crashed_merge(self) -> None:
         """A merge prism-local left half-done is called off (integrate.finish_crashed)."""
@@ -815,9 +793,7 @@ class GitSync:
               "guarded": bool(getattr(self, "guarded", False)), "state": self.state, "error": self.error,
               "remote": self.has_remote, "upstream": self.upstream, "ahead": self.ahead,
               "behind": self.behind, "last_commit": self.last_commit, "last_push": self.last_push or None,
-              "pending": self.dirty_since is not None,
-              "next_autosave": (None if self.dirty_since is None else
-                                max(0, min((self.last_edit or 0) + IDLE, self.dirty_since + MAX_WAIT) - time.time()))}
+              "pending": self.schedule.pending, "next_autosave": self.schedule.next_autosave()}
         # Kept, not taken by the first who asks: each page shows each notice (by its number)
         # once, also when several ask (the tree's poll, a button's answer, another tab).
         number, at, text = self._notice

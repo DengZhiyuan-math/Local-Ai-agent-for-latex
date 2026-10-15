@@ -58,8 +58,22 @@ class SaveLock:
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
+class Clock:
+    """A clock the test moves: the sync's schedule (syncschedule.py) runs on it."""
+
+    def __init__(self):
+        self.now = time.time()
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
 class Collaboration(unittest.TestCase):
     def setUp(self):
+        self.clock = Clock()                # the editors' sync schedules run on it
         self.remote = tmpdir() / "paper.git"
         git(self.remote.parent, "init", "-q", "--bare", "-b", "main", str(self.remote))
         seed = tmpdir()
@@ -81,7 +95,8 @@ class Collaboration(unittest.TestCase):
         git(d.parent, "clone", "-q", str(self.remote), str(d))
         identity(d, name)
         self.busy[name] = False
-        g = gitsync.GitSync(lambda d=d: d, lambda: "build", busy=lambda name=name: self.busy[name])
+        g = gitsync.GitSync(lambda d=d: d, lambda: "build", busy=lambda name=name: self.busy[name],
+                            clock=self.clock)
         g.check_repo()
         g.bind_target()
         g._remote_state()
@@ -266,7 +281,7 @@ class Collaboration(unittest.TestCase):
         self.write("B", "main.tex", PAPER.replace("First", "B's first"))
         self.save("B")
         ga.now("pull")
-        ga.last_fetch = 0
+        self.clock.advance(gitsync.FETCH_EVERY)
         ga.tick()                              # the timer, too
         self.assertEqual(self.read("A", "main.tex"), PAPER, "nothing changes under the agent")
         # The agent rewrites the file from what it read (its whole-file Write).
@@ -361,9 +376,7 @@ class Collaboration(unittest.TestCase):
                 self.save(who)
             else:
                 self.pull(who)
-            g.last_fetch = 0
-            g.last_edit = (g.last_edit or 0) - gitsync.QUIET
-            g.dirty_since = g.dirty_since and g.dirty_since - gitsync.MAX_WAIT
+            self.clock.advance(gitsync.MAX_WAIT)            # every timer due
             g.tick()                                        # its timers, too
             self.watch()
         for who in sorted(self.people):
@@ -396,12 +409,11 @@ class Collaboration(unittest.TestCase):
         _, ga = self.people["A"]
         self.write("B", "main.tex", PAPER.replace("First", "B's first"))
         self.save("B")
-        ga.last_fetch = 0
+        self.clock.advance(gitsync.FETCH_EVERY)
         ga.touched()                          # A saved a moment ago: still typing
         ga.tick()
         self.assertNotIn("B's first", self.read("A", "main.tex"))
-        ga.last_edit -= gitsync.QUIET + 1
-        ga.dirty_since = None
+        self.clock.advance(gitsync.QUIET + 1)
         ga.tick()
         self.assertIn("B's first", self.read("A", "main.tex"))
 
