@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import backends
 import gitsync
+import synctarget
 import backend_deepcode
 import backend_openai
 from gitenv import git_env
@@ -47,10 +48,31 @@ class Targets(unittest.TestCase):
         git(self.root, "remote", "add", "origin", str(self.remote))
         self.g = gitsync.GitSync(lambda: self.root, lambda: "build")
 
+    def test_the_target_and_its_binding_without_a_sync_running(self):
+        """What publishing and the Home page need: no editor's sync worker, only the
+        repository's configuration and .git/prism-local.json (synctarget)."""
+        from repository import Repository
+        repo = Repository.find(self.root)
+        settings = synctarget.RepoSettings(repo)
+        target, blocked = settings.validate(fresh=True)
+        self.assertIsNone(blocked)
+        self.assertEqual((target["remote"], target["branch_ref"]), ("origin", "refs/heads/main"))
+        self.assertEqual(settings.read()["sync_target"]["branch_ref"], "refs/heads/main", "bound at once")
+        git(self.root, "remote", "set-url", "origin", str(self.tool))       # another repository
+        target, blocked = settings.validate(fresh=True)
+        self.assertIn("confirm the new target", blocked)
+        self.assertEqual(settings.read()["sync_target"]["repository_identity"],
+                         synctarget.repository_identity(str(self.remote), self.root), "kept until confirmed")
+        settings.bind(target)
+        self.assertEqual(settings.validate(fresh=True)[1], None)
+        git(self.root, "checkout", "-q", "--detach")
+        with self.assertRaisesRegex(ValueError, "Detached HEAD"):
+            synctarget.resolve(repo, fresh=True)
+
     def test_unbound_project_binds_itself_and_pushes(self):
         self.g.push()
         self.assertIsNone(self.g.status()["blocked_reason"])
-        self.assertEqual(self.g._settings()["sync_target"]["branch_ref"], "refs/heads/main")
+        self.assertEqual(self.g.settings.read()["sync_target"]["branch_ref"], "refs/heads/main")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
     def test_status_runs_no_git_for_the_target_until_the_config_changes(self):
@@ -71,8 +93,8 @@ class Targets(unittest.TestCase):
         (self.root / "main.tex").write_text("mine\n")
         self.g.commit(["main.tex"], "edit")
         # A change the cache does not see (a system-wide config, say): the push still does.
-        with mock.patch.object(gitsync, "_config_key", return_value=("same",)):
-            gitsync._CACHE.clear()
+        with mock.patch.object(synctarget, "_config_key", return_value=("same",)):
+            synctarget._CACHE.clear()
             self.g.status()
             git(self.root, "remote", "set-url", "origin", str(self.tool))
             self.assertIsNone(self.g.status()["blocked_reason"], "status may use what it knew")
@@ -109,7 +131,7 @@ class Targets(unittest.TestCase):
         git(self.root, "config", "branch.main.remote", "origin")
         git(self.root, "config", "branch.main.merge", "refs/heads/main")
         self.assertTrue(self.g.validate_target(), self.g.blocked_reason)
-        self.assertEqual(self.g._settings()["sync_target"]["configuration_fingerprint"],
+        self.assertEqual(self.g.settings.read()["sync_target"]["configuration_fingerprint"],
                          self.g.target["configuration_fingerprint"])
 
     def test_create_rejects_target_changed_before_binding(self):
@@ -134,7 +156,7 @@ class Targets(unittest.TestCase):
         self.assertEqual(gh.created, ["owner/paper"])
         push.assert_not_called()
         self.assertEqual(gh.protected, [], "no protection asked for")
-        self.assertNotIn("sync_target", self.g._settings())
+        self.assertNotIn("sync_target", self.g.settings.read())
         self.assertEqual((self.root / "main.tex").read_text(), "base\n")
 
     def test_publishing_commits_holding_the_files(self):

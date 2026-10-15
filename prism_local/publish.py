@@ -155,7 +155,7 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
     url = f"https://github.com/{who}/{name}"
     sync = project_sync(root)
     try:
-        candidate = sync._candidate()
+        candidate = sync.candidate()
         if candidate["repository_identity"] != f"github.com/{who}/{name}".lower():
             return {"error": "Created repository differs from the effective Git sync target; local files kept",
                     "url": url}

@@ -737,7 +737,7 @@ class Collaboration(unittest.TestCase):
         self.save("A")
         self.pull("B")
         db, gb = self.people["B"]
-        (gb.git_dir / "prism-local.json").write_text(json.dumps({**gb._settings(), "restore_rewritten": False}), encoding="utf-8")
+        (gb.git_dir / "prism-local.json").write_text(json.dumps({**gb.settings.read(), "restore_rewritten": False}), encoding="utf-8")
         self.rewrite_remote()
         self.pull("B")
         self.assertNotIn("A's secret", self.remote_file("main.tex"))

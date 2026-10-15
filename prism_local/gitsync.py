@@ -23,23 +23,21 @@ a folder inside any other repository (prism-local's examples, say).
 from __future__ import annotations
 
 import json
-import hashlib
-import os
-import re
 import subprocess
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
-from urllib.parse import urlsplit, urlunsplit
 
 import keepboth
 import registry
 import gitenv
 import sources
-from fsutil import write_bytes
 from repository import FilesLock, RepoBusy, Repository
+from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
+                        repository_identity, safe_git_message)
+import synctarget
 
 IDLE = 120               # seconds without an edit before an autosave commit
 MAX_WAIT = 600           # ... but at the latest this long after the first change
@@ -51,46 +49,6 @@ BIND_WAIT = 10           # ... and confirming a sync target, before "try again"
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
 SHARED_MARKER = "prism-repo.json"
-
-
-def redact_url(url: str) -> str:
-    if "://" in url:
-        try:
-            p = urlsplit(url)
-            host = p.hostname or ""
-            if p.port:
-                host += f":{p.port}"
-            return urlunsplit((p.scheme, host, p.path, "", ""))
-        except ValueError:
-            return "(invalid URL)"
-    return re.sub(r"^[^/@:]+@", "", url)
-
-
-def safe_git_message(message: str) -> str:
-    return re.sub(r"[A-Za-z][A-Za-z0-9+.-]*://[^\s'\"]+", lambda m: redact_url(m.group()), message)
-
-
-def repository_identity(url: str, top: Path) -> str:
-    clean = redact_url(url)
-    m = re.fullmatch(r"(?:https?://github\.com/|ssh://github\.com(?::22)?/|github\.com:)([\w.-]+/[\w.-]+?)(?:\.git)?/?", clean)
-    if m:
-        return "github.com/" + m.group(1).lower()
-    if "://" not in url and ":" not in url:
-        return registry.norm((top / url).resolve())
-    return clean
-
-
-def public_target(target: dict | None) -> dict | None:
-    if not isinstance(target, dict):
-        return None
-    return {k: redact_url(target[k]) if k.endswith("_url") else target.get(k)
-            for k in ("remote", "branch_ref", "fetch_url", "push_url", "repository_identity",
-                      "configuration_fingerprint") if k in target}
-
-
-def github_url(target: dict | None) -> str | None:
-    identity = (target or {}).get("repository_identity", "")
-    return "https://" + identity if identity.startswith("github.com/") else None
 
 
 GUARD_MARK = "prism-local: refuse force pushes"
@@ -119,56 +77,10 @@ exit 0
 """
 
 
-# What decides a repository's sync target (_candidate) and its hooks: its config (also a
-# worktree's), HEAD, and your own git config. Their contents are the key of the cache
-# below, so any change is seen at once; a system-wide config or an [include]d file is not
-# read, so an entry is also renewed after CACHE_TTL seconds at the latest.
-CACHE_TTL = 60
-_CACHE: dict[tuple, tuple] = {}
-_CACHE_LOCK = threading.Lock()
-
-
-def _config_key(git_dir: Path) -> tuple:
-    common = git_dir
-    try:                                  # a worktree keeps its config in the main repository
-        common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
-    except OSError:
-        pass
-    xdg = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "git" / "config"
-
-    def read(f: Path) -> bytes | None:
-        try:
-            return f.read_bytes()
-        except OSError:
-            return None
-    return tuple(read(f) for f in (common / "config", git_dir / "config.worktree", git_dir / "HEAD",
-                                   Path.home() / ".gitconfig", xdg))
-
-
-def _cached(kind: str, git_dir: Path, compute: Callable[[], object]):
-    """compute(), or its result from less than CACHE_TTL seconds ago while git_dir's
-    configuration (_config_key) is unchanged. A ValueError it raises is kept like a result."""
-    key, stamp = (kind, registry.norm(git_dir)), _config_key(git_dir)
-    with _CACHE_LOCK:
-        hit = _CACHE.get(key)
-    if hit and hit[0] == stamp and time.monotonic() - hit[1] < CACHE_TTL:
-        value = hit[2]
-    else:
-        try:
-            value = compute()
-        except ValueError as e:
-            value = e
-        with _CACHE_LOCK:
-            _CACHE[key] = (stamp, time.monotonic(), value)
-    if isinstance(value, ValueError):
-        raise ValueError(str(value))
-    return value
-
-
 def install_guard(git_dir: Path) -> bool:
     """Put GUARD in the repository's hooks, unless it has a pre-push hook of its own or
     uses a hooks folder of its own (core.hooksPath). True when the guard is in place."""
-    hook = _cached("hooks", git_dir, lambda: _hook_path(git_dir))
+    hook = cached("hooks", git_dir, lambda: _hook_path(git_dir))
     if hook is None:
         return False
     try:
@@ -371,34 +283,18 @@ class GitSync:
         return f":(top,literal){self.prefix.rstrip('/')}" if self.prefix else "."
 
     # ------------------------------------------------------------ the switch
-    def _settings_file(self) -> Path | None:
-        return self.git_dir / "prism-local.json" if self.check_repo() and self.git_dir else None
-
-    def _settings(self) -> dict:
-        f = self._settings_file()
-        try:
-            data = json.loads(f.read_text(encoding="utf-8")) if f else {}
-            return data if isinstance(data, dict) else {}
-        except (OSError, ValueError):
-            return {}
+    @property
+    def settings(self) -> RepoSettings | None:
+        """.git/prism-local.json (synctarget.RepoSettings); None without a repository."""
+        return RepoSettings(self.repo) if self.check_repo() and self.repo else None
 
     @property
     def enabled(self) -> bool:
-        if not self._settings_file():
-            return False
-        return bool(self._settings().get("sync", True))
+        return bool(self.settings and self.settings.enabled)
 
     def set_enabled(self, on: bool) -> None:
-        self._update_settings(sync=bool(on))
-
-    def _update_settings(self, **changes) -> None:
-        """Change keys of .git/prism-local.json, keeping the others. The editor and the Home
-        page both write it: under a file lock, so neither drops what the other wrote."""
-        f = self._settings_file()
-        if not f:
-            return
-        with registry.FileLock(f.with_name(f.name + ".lock"), timeout=10):
-            write_bytes(f, json.dumps({**self._settings(), **changes}).encode())
+        if self.settings:
+            self.settings.update(sync=bool(on))
 
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
@@ -447,98 +343,31 @@ class GitSync:
                 self.state = "idle"
 
     # ------------------------------------------------------------ remote
-    def _candidate(self, fresh: bool = False) -> dict:
-        """The sync target the repository's configuration names (see _target), looked up
-        again only when that configuration changed (_cached), unless `fresh`: everything
-        that pushes, fetches or binds asks fresh."""
+    def candidate(self, fresh: bool = False) -> dict:
+        """The sync target the repository's configuration names (synctarget.resolve)."""
         if not self.check_repo():
             raise ValueError("This project has no repository to sync")
-        if fresh:
-            return self._target()
-        return dict(_cached("target", self.git_dir, self._target))
-
-    def _target(self) -> dict:
-        actual = self.git("rev-parse", "--show-toplevel", "--absolute-git-dir").stdout.strip().splitlines()
-        if len(actual) != 2 or registry.norm(Path(actual[0]).resolve()) != registry.norm(self.top) \
-                or registry.norm(Path(actual[1]).resolve()) != registry.norm(self.git_dir.resolve()):
-            raise ValueError("Project repository changed. Reopen the editor before syncing")
-        branch = self.git("symbolic-ref", "--quiet", "HEAD").stdout.strip()
-        if not branch.startswith("refs/heads/"):
-            raise ValueError("Detached HEAD: select a local branch before syncing")
-        name = branch.removeprefix("refs/heads/")
-        def values(key):
-            return self.git("config", "--get-all", key).stdout.strip().splitlines()
-        remotes = self.git("remote").stdout.splitlines()
-        upstream = values(f"branch.{name}.remote")
-        merges = values(f"branch.{name}.merge")
-        if len(upstream) > 1 or len(merges) > 1:
-            raise ValueError("Ambiguous upstream configuration")
-        remote = upstream[0] if upstream else "origin"
-        if remote == "." or remote not in remotes:
-            raise ValueError("A unique remote upstream or origin is required")
-        branch_ref = merges[0] if merges else branch
-        if not branch_ref.startswith("refs/heads/") or self.git("check-ref-format", branch_ref).returncode:
-            raise ValueError("Sync requires one valid remote branch")
-        for key in (f"branch.{name}.pushRemote", "remote.pushDefault"):
-            if any(v != remote for v in values(key)):
-                raise ValueError(f"{key} differs from the sync remote {remote}")
-        if self.git("config", "--bool", "--get", f"remote.{remote}.mirror").stdout.strip() == "true":
-            raise ValueError("Mirror remotes cannot be used for editor sync")
-        fetch = self.git("remote", "get-url", "--all", remote).stdout.strip().splitlines()
-        push = self.git("remote", "get-url", "--push", "--all", remote).stdout.strip().splitlines()
-        if len(fetch) != 1 or len(push) != 1:
-            raise ValueError("Sync requires exactly one fetch URL and one push URL")
-        identity = repository_identity(fetch[0], self.top)
-        if identity != repository_identity(push[0], self.top) or (
-                "://" in fetch[0] and not identity.startswith("github.com/") and fetch[0] != push[0]):
-            raise ValueError("Fetch and push repositories differ: " + redact_url(push[0]))
-        config = self.git("config", "--null", "--get-regexp",
-                          r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$").stdout
-        # Only relevant selected-remote/branch configuration affects the binding. Other
-        # remotes may be added by the author without changing this target.
-        entries = [e for e in config.split("\0") if e and (
-            e.lower().startswith((f"branch.{name}.".lower(), f"remote.{remote}.".lower(),
-                                  "remote.pushdefault", "url.")))]
-        fingerprint = hashlib.sha256(json.dumps([branch, sorted(entries)]).encode()).hexdigest()
-        return {"remote": remote, "branch_ref": branch_ref, "local_branch": branch,
-                "fetch_url": redact_url(fetch[0]), "push_url": redact_url(push[0]), "repository_identity": identity,
-                "git_dir": registry.norm(self.git_dir.resolve()),
-                "configuration_fingerprint": fingerprint}
+        return synctarget.resolve(self.repo, fresh)
 
     def bind_target(self, expected: dict | None = None) -> None:
         """Called only after explicit menu confirmation, or after creating a known repo."""
         if not self.lock.acquire(timeout=BIND_WAIT):
             raise ValueError("A push or pull is running; try again in a moment")
         try:
-            candidate = self._candidate(fresh=True)
+            candidate = self.candidate(fresh=True)
             if expected is not None and public_target(candidate) != expected:
                 raise ValueError("Sync target changed since confirmation; open the menu again")
-            self._update_settings(sync_target=candidate)
+            self.settings.bind(candidate)
             self.target, self.blocked_reason = candidate, None
         finally:
             self.lock.release()
 
     def validate_target(self, fresh: bool = False) -> bool:
         with self.lock:
-            bound = self._settings().get("sync_target")
-            self.target = None
-            try:
-                candidate = self._candidate(fresh)
-                self.target = candidate
-                # git_dir is the current local location, not the bound remote identity.
-                same = isinstance(bound, dict) and all(candidate[k] == bound.get(k) for k in
-                                                       ("repository_identity", "branch_ref", "local_branch"))
-                if isinstance(bound, dict) and not same:
-                    raise ValueError("Sync target changed. Local edits are saved; confirm the new target in the Git menu")
-                # No binding yet (a project from before bindings, or a fresh clone): the
-                # candidate passed every check above, so it is bound now. The same repository
-                # and branch reached another way (ssh instead of https, an upstream set by
-                # `git push -u`) is rebound quietly.
-                if public_target(candidate) != public_target(bound):
-                    self._update_settings(sync_target=candidate)
-                self.blocked_reason = None
-            except (ValueError, OSError, subprocess.SubprocessError) as exc:
-                self.blocked_reason = str(exc)
+            if self.check_repo():
+                self.target, self.blocked_reason = self.settings.validate(fresh)
+            else:
+                self.target, self.blocked_reason = None, "This project has no repository to sync"
             signature = (self.blocked_reason, json.dumps(public_target(self.target), sort_keys=True))
             if getattr(self, "_target_log", None) != signature:
                 self._target_log = signature
@@ -751,7 +580,7 @@ class GitSync:
         tip = lost[0]                            # the newest position it had: it holds the rest
         dropped = self.git("rev-list", "--count", f"{now}..{tip}", timeout=20).stdout.strip()
         who = self.git("log", "-1", "--format=%an", now, timeout=20).stdout.strip() or "someone"
-        if self._settings().get("restore_rewritten") is False:
+        if self.settings.read().get("restore_rewritten") is False:
             # A rewrite on purpose (a file removed from history): no merge, no push, so as not
             # to bring it back; this copy keeps everything, and waits until it matches GitHub.
             self.notice = (f"{who} rewrote the history on GitHub ({dropped} commits dropped); left as "
@@ -1133,7 +962,7 @@ class GitSync:
                 self.lock.release()
         st = {"own": own, "enabled": own and self.enabled,
               "target": public_target(self.target),
-              "bound_target": public_target(self._settings().get("sync_target")) if own else None,
+              "bound_target": public_target(self.settings.read().get("sync_target")) if own else None,
               "blocked_reason": self.blocked_reason,
               "github": github_url(self.target) if own and not self.blocked_reason else None,
               "shared": self.top.name if own and self.prefix else None, "clash": self.clash,

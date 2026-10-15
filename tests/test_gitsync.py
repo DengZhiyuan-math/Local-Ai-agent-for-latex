@@ -559,13 +559,13 @@ class OtherProcesses(unittest.TestCase):
 
     def test_settings_written_at_once_keep_every_key(self):
         others = [gitsync.GitSync(lambda: self.root, lambda: "build") for _ in range(4)]
-        threads = [threading.Thread(target=lambda g=g, i=i: [g._update_settings(**{f"k{i}": n}) for n in range(20)])
+        threads = [threading.Thread(target=lambda g=g, i=i: [g.settings.update(**{f"k{i}": n}) for n in range(20)])
                    for i, g in enumerate(others)]
         for t in threads:
             t.start()
         for t in threads:
             t.join()
-        data = self.g._settings()
+        data = self.g.settings.read()
         self.assertEqual({k: data.get(k) for k in ("k0", "k1", "k2", "k3")}, {f"k{i}": 19 for i in range(4)})
         self.assertEqual(data["sync_target"]["branch_ref"], "refs/heads/main", "bound earlier, still there")
 

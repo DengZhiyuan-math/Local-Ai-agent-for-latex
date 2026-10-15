@@ -566,7 +566,7 @@ class FolderSync(TempState):
         self.assertEqual((gh.created, gh.protected), (["me/my-ex"], [("me/my-ex", "main")]))
         self.assertEqual(self.git(root, "log", "--format=%s").strip(), "Initial commit")
         self.assertNotIn("conversations/chat.json", self.git(root, "ls-files"))
-        bound = hub.project_sync(root)._settings()["sync_target"]
+        bound = hub.project_sync(root).settings.read()["sync_target"]
         self.assertEqual(bound["repository_identity"], "github.com/me/my-ex")
         self.assertEqual(hub.repo_kind(root)[0], "own")
         self.assertEqual(self.git(gh.repositories["me/my-ex"], "rev-parse", "main"),
