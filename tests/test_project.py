@@ -79,5 +79,41 @@ class Writes(unittest.TestCase):
         turn.server_wrote.assert_called_with(["new.tex"])
 
 
+class Building(unittest.TestCase):
+    def test_one_build_at_a_time_and_busy_while_it_runs(self):
+        import threading
+        from unittest import mock
+        started, release, stopped = threading.Event(), threading.Event(), []
+
+        class Fake:
+            def __init__(self, root, main, outdir, mode, **kw):
+                self.root, self.main, self.outdir = root, main, outdir
+
+            def run(self):
+                started.set()
+                release.wait(10)
+                (self.root / self.outdir).mkdir(exist_ok=True)
+                (self.root / self.outdir / "main.pdf").write_bytes(b"%PDF")
+                return {"exit": 0, "diagnostics": [], "output": ""}
+
+            def stop(self):
+                stopped.append(1)
+                release.set()
+
+        p = make({"main.tex": DOC})
+        p.builder, p.turn = Fake, mock.Mock(**{"busy.return_value": False})
+        self.assertFalse(p.busy())
+        result = {}
+        t = threading.Thread(target=lambda: result.update(p.build("draft")))
+        t.start()
+        started.wait(5)
+        self.assertTrue(p.busy())
+        self.assertEqual(p.build("draft"), {"busy": True})
+        self.assertTrue(p.stop_build())
+        t.join(5)
+        self.assertEqual((result["main"], stopped, p.busy()), ("main.tex", [1], False))
+        p.turn.server_wrote.assert_called_with(["build"])    # the output is no turn's change
+
+
 if __name__ == "__main__":
     unittest.main()

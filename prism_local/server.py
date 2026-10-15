@@ -29,7 +29,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
-from projectconfig import Config  # noqa: E402
 from project import UPLOAD_DIR, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
@@ -45,7 +44,6 @@ import registry  # noqa: E402
 import selfupdate  # noqa: E402
 import sources  # noqa: E402
 
-BUILD_LOCK = threading.Lock()
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
 SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
@@ -110,21 +108,6 @@ def project_diff(spec: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- build
-
-# The build in progress (for /api/build/stop), and the PDF it writes with that PDF's mtime
-# from before it began: the engine rewrites the PDF on every run of a build, so while it
-# works the PDF is reported as it was (pdf_state) and not served half-written.
-RUNNING: dict = {"build": None, "pdf": None}
-
-
-def pdf_state(cfg: Config) -> float | None:
-    """The mtime of cfg's PDF as pages should see it; None when there is none yet."""
-    writing = RUNNING["pdf"]
-    if writing and writing[0] == cfg.pdf:
-        return writing[1]
-    return mtime(cfg.pdf) if cfg.pdf.exists() else None
-
 # Every upload is committed in the project's own repository, alone (other changes stay as
 # they are), and pushed, through the same machinery as the other commits (gitsync.py).
 UPLOAD_SYNC: dict[str, dict] = {}     # rel -> {"state": syncing|synced|local|failed, "message"}
@@ -171,7 +154,7 @@ def rename_project(name: str) -> tuple[dict, int]:
     new = PROJECT.root.parent / folder
     if new.exists() and registry.norm(new) != registry.norm(PROJECT.root):
         return {"error": f"a folder named {folder} already exists next to this project"}, 409
-    if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
+    if PROJECT.busy() or RESTART["server"] is None:
         return {"error": "wait until the build or the agent's turn has finished"}, 409
     if LIFETIME is None:
         return {"error": "not ready to restart"}, 409
@@ -207,60 +190,6 @@ def move_argv(new: Path, moving: bool = True) -> list[str]:
             alias = new / alias.relative_to(PROJECT.root)
         argv += ["--ready-file", str(alias or instances.path(new))]
     return argv
-
-
-def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
-    """One build (see build.py). Only one runs at a time."""
-    shown = PROJECT.config
-    if mode not in shown.modes:
-        return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
-                "output": f"There is no '{mode}' build.", "main": shown.main, "pdf_mtime": None}
-    if not BUILD_LOCK.acquire(blocking=False):
-        return {"busy": True}
-    try:
-        if active is None:
-            # No open file says which (the agent's compile tool, auto-compile after its turn):
-            # the document edited since its PDF was built, else the document shown now.
-            main = PROJECT.stale_document() or (shown.main if (PROJECT.root / shown.main).is_file() else shown.project_main)
-        else:
-            if not isinstance(active, str):
-                raise ValueError("active must be a project file path")
-            source = PROJECT.resolve(active)
-            if not source.is_file():
-                raise FileNotFoundError(active)
-            main = PROJECT.document_of(source.relative_to(PROJECT.root).as_posix(), shown)
-        # Select outputs in memory. Opening a standalone document does not change prism.json.
-        # It is shown once its build has ended: until then the PDF pane keeps what it shows.
-        cfg = Config(PROJECT.root, main=main)
-        t0 = time.time()
-        before = mtime(cfg.pdf) if cfg.pdf.exists() else None
-        RUNNING["pdf"] = (cfg.pdf, before)
-        cmd = cfg.custom.get(mode)
-        b = build.Build(PROJECT.root, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
-                        command=cfg.expand(cmd) if cmd else None, clean=clean,
-                        shell_escape=cfg.shell_escape)
-        RUNNING["build"] = b
-        try:
-            r = b.run()
-        finally:
-            RUNNING["pdf"] = None
-            PROJECT.show(cfg.main)
-            AGENT.server_wrote([cfg.outdir])    # a build's output is no agent turn's change
-        if cfg.error:
-            r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
-        pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
-        return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
-                "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
-    finally:
-        RUNNING["build"] = RUNNING["pdf"] = None
-        BUILD_LOCK.release()
-
-
-def stop_build() -> bool:
-    b = RUNNING["build"]
-    if b is not None:
-        b.stop()
-    return b is not None
 
 
 # ---------------------------------------------------------------- synctex
@@ -315,12 +244,12 @@ class Handler(httpbase.Handler):
                                "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
         if path == "/api/pdfstat":
             cfg = PROJECT.config
-            return self._json({"main": cfg.main, "mtime": pdf_state(cfg)})
+            return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg)})
         if path == "/pdf":
             cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
                 return self._err(409, "the compiled document changed")
-            if RUNNING["pdf"] and RUNNING["pdf"][0] == cfg.pdf:
+            if PROJECT.writing(cfg.pdf):
                 return self._err(503, "the PDF is being built; it is served when the build ends")
             if not cfg.pdf.exists():
                 return self._err(404, "no PDF yet")
@@ -339,7 +268,7 @@ class Handler(httpbase.Handler):
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": PROJECT.document_order(editable),
-                               "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": pdf_state(cfg),
+                               "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
@@ -459,7 +388,7 @@ class Handler(httpbase.Handler):
             except desktop.Unsupported as e:
                 raise Refused(str(e)) from e
         if path == "/api/git/publish":
-            if BUILD_LOCK.locked() or AGENT.busy():
+            if PROJECT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
             with GITSYNC.lock:
                 r = publish.publish_project(PROJECT.root, str(body.get("name") or ""), str(body.get("owner") or ""),
@@ -488,7 +417,7 @@ class Handler(httpbase.Handler):
             elif action in ("on", "off"):
                 GITSYNC.set_enabled(action == "on")
             elif action in ("commit", "pull", "resolve"):
-                if action == "resolve" and (BUILD_LOCK.locked() or AGENT.busy()):
+                if action == "resolve" and PROJECT.busy():
                     return self._err(409, "wait until the build or the agent's turn has finished")
                 GITSYNC.now(action)
             else:
@@ -518,7 +447,7 @@ class Handler(httpbase.Handler):
         if path == "/api/build":
             if body.get("by") == "agent" and not AGENT.editing():
                 return self._err(403, "Agent compilation is available only during an Edit turn")
-            r = run_build(str(body.get("mode", "draft")), bool(body.get("clean")), body.get("active"))
+            r = PROJECT.build(str(body.get("mode", "draft")), bool(body.get("clean")), body.get("active"))
             if body.get("by") == "agent" and not r.get("busy"):
                 AGENT.built(r)          # the editor shows the agent's build like its own
             return self._json(r, 409 if r.get("busy") else 200)
@@ -542,7 +471,7 @@ class Handler(httpbase.Handler):
             threading.Thread(target=sync_upload, args=(rel,), daemon=True).start()
             return self._json({"path": rel, "size": len(data), "sync": UPLOAD_SYNC[rel]})
         if path == "/api/restart":
-            if BUILD_LOCK.locked() or AGENT.busy() or RESTART["server"] is None:
+            if PROJECT.busy() or RESTART["server"] is None:
                 return self._err(409, "wait until the build or the agent's turn has finished")
             if LIFETIME is None:
                 return self._err(409, "not ready to restart")
@@ -554,7 +483,7 @@ class Handler(httpbase.Handler):
             threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
             return self._json({"ok": True})
         if path == "/api/build/stop":
-            return self._json({"ok": stop_build()})
+            return self._json({"ok": PROJECT.stop_build()})
         return self._err(404, "not found")
 
 
@@ -647,7 +576,7 @@ def serve(a, project, life):
     if not a.no_browser:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if a.exit_when_idle:
-        busy = lambda: BUILD_LOCK.locked() or AGENT.busy()  # noqa: E731
+        busy = lambda: PROJECT.busy()  # noqa: E731
         threading.Thread(target=httpbase.idle_watchdog, daemon=True,
                          args=(srv, PRESENCE, busy, "build or agent turn")).start()
     httpbase.stop_on_signals(srv)
@@ -664,7 +593,7 @@ def serve(a, project, life):
         try:
             srv.server_close()
             life.unpublish()
-            stop_build()
+            PROJECT.stop_build()
             AGENT.shutdown()
             GITSYNC.flush()             # what is left is committed and pushed
             if RESTART["again"]:

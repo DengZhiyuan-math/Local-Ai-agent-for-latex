@@ -7,6 +7,7 @@
     project.list_files()            # the editable files the Files sidebar lists
 
     project.save("main.tex", text, base_mtime, force)     # and upload, rename, new, paste, trash
+    project.build("draft", active="ch1.tex")             # one at a time; project.busy()
 
 One per editor server (server.PROJECT). The settings are read again whenever prism.json
 changed, whoever asks (a request, the agent, the sync); the document shown is changed in
@@ -20,6 +21,7 @@ import os
 import re
 import shutil
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
@@ -43,10 +45,11 @@ MAX_UPLOAD = 25 * 1024 * 1024
 
 class Project:
     def __init__(self, root: Path, *, files_lock=None, turn=None,
-                 on_change: Callable[[], None] = lambda: None):
+                 on_change: Callable[[], None] = lambda: None, builder=build.Build):
         """files_lock: held while the files are written (repository.FilesLock; git holds it
         too). turn: the agent's turn (agent.AgentManager: editing, busy, server_wrote).
-        on_change: called after the editor changed the files (the sync's autosave)."""
+        on_change: called after the editor changed the files (the sync's autosave).
+        builder: what runs a build (build.Build; a fake one in a test)."""
         self._lock = threading.Lock()
         self._config = Config(root)
         self.root: Path = self._config.root
@@ -54,6 +57,10 @@ class Project:
         self.turn = turn or NoTurn()
         self.on_change = on_change
         self._scans: dict[tuple, tuple] = {}
+        self.builder = builder
+        self._build_lock = threading.Lock()
+        self._running = None                    # the build in progress (stop_build)
+        self._running_pdf: tuple | None = None  # its PDF, with that PDF's mtime before it
 
     # ------------------------------------------------------------ settings
     @property
@@ -330,6 +337,85 @@ class Project:
             best = max(best or (0.0, ""), (mtime(pdf), rel))
         if best:
             self.show(best[1])
+
+    # ------------------------------------------------------------ building
+    # One build at a time. While it runs, its PDF is reported as it was before (pdf_state):
+    # the engine rewrites the PDF on every run of a build, so it is not served half-written.
+
+    @property
+    def building(self) -> bool:
+        return self._build_lock.locked()
+
+    def busy(self) -> bool:
+        """A build or an agent's turn runs: what changes the files or the server (a restart,
+        a rename, resolving a clash with GitHub) waits for it."""
+        return self.building or self.turn.busy()
+
+    def writing(self, pdf: Path) -> bool:
+        """Whether the running build is writing `pdf` now."""
+        running = self._running_pdf
+        return running is not None and running[0] == pdf
+
+    def pdf_state(self, cfg: Config) -> float | None:
+        """The mtime of cfg's PDF as pages should see it; None when there is none yet."""
+        running = self._running_pdf
+        if running and running[0] == cfg.pdf:
+            return running[1]
+        return mtime(cfg.pdf) if cfg.pdf.exists() else None
+
+    def build(self, mode: str, clean: bool = False, active: str | None = None) -> dict:
+        """One build (see build.py) of the document `active` belongs to (None: the one just
+        edited, else the one shown); {"busy": True} while another runs."""
+        shown = self.config
+        if mode not in shown.modes:
+            return {"busy": False, "exit": 127, "mode": mode, "seconds": 0, "diagnostics": [],
+                    "output": f"There is no '{mode}' build.", "main": shown.main, "pdf_mtime": None}
+        if not self._build_lock.acquire(blocking=False):
+            return {"busy": True}
+        try:
+            if active is None:
+                # No open file says which (the agent's compile tool, auto-compile after its
+                # turn): the document edited since its PDF was built, else the one shown now.
+                main = self.stale_document() or (shown.main if (self.root / shown.main).is_file() else shown.project_main)
+            else:
+                if not isinstance(active, str):
+                    raise Refused("active must be a project file path")
+                source = self.resolve(active)
+                if not source.is_file():
+                    raise FileNotFoundError(active)
+                main = self.document_of(self.rel(source), shown)
+            # Select outputs in memory. Opening a standalone document does not change
+            # prism.json. It is shown once its build has ended: until then the PDF pane keeps
+            # what it shows.
+            cfg = Config(self.root, main=main)
+            t0 = time.time()
+            before = mtime(cfg.pdf) if cfg.pdf.exists() else None
+            self._running_pdf = (cfg.pdf, before)
+            cmd = cfg.custom.get(mode)
+            b = self.builder(self.root, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
+                             command=cfg.expand(cmd) if cmd else None, clean=clean,
+                             shell_escape=cfg.shell_escape)
+            self._running = b
+            try:
+                r = b.run()
+            finally:
+                self._running_pdf = None
+                self.show(cfg.main)
+                self.turn.server_wrote([cfg.outdir])    # a build's output is no agent turn's change
+            if cfg.error:
+                r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
+            pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
+            return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
+                    "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+        finally:
+            self._running = self._running_pdf = None
+            self._build_lock.release()
+
+    def stop_build(self) -> bool:
+        b = self._running
+        if b is not None:
+            b.stop()
+        return b is not None
 
     # ------------------------------------------------------------ writing the files
     # Saves, uploads and the Files sidebar's menu: each holds the files (files_lock: git

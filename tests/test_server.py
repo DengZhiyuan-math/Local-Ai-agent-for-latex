@@ -102,18 +102,18 @@ class ShownDocument(unittest.TestCase):
                              "loose.tex": "in no document", "prism.json": '{"main": "main.tex"}'})
 
     def build(self, active, during=lambda cfg: None):
-        """run_build with a stand-in for the TeX run; during(cfg) runs while it builds."""
+        """A build with a stand-in for the TeX run; during(cfg) runs while it builds."""
         class Fake:
             def __init__(self, root, main, outdir, mode, **kw):
                 self.cfg_main = main
 
             def run(fake):
-                during(server.Config(self.root, main=fake.cfg_main))
+                during(projectmod.Config(self.root, main=fake.cfg_main))
                 (self.root / "build").mkdir(exist_ok=True)
                 (self.root / "build" / (Path(fake.cfg_main).stem + ".pdf")).write_bytes(b"%PDF new")
                 return {"exit": 0, "diagnostics": [], "output": ""}
-        with mock.patch.object(server.build, "Build", Fake):
-            return server.run_build("draft", active=active)
+        with mock.patch.object(server.PROJECT, "builder", Fake):
+            return server.PROJECT.build("draft", active=active)
 
     def test_a_chapter_builds_the_document_that_includes_it(self):
         self.assertEqual(self.build("sec.tex")["main"], "main.tex")
@@ -130,7 +130,7 @@ class ShownDocument(unittest.TestCase):
         def during(cfg):
             seen["shown"] = server.PROJECT.config.main
             cfg.pdf.write_bytes(b"%PDF half")                 # the engine's first run
-            seen["pdf"] = server.pdf_state(cfg)
+            seen["pdf"] = server.PROJECT.pdf_state(cfg)
         r = self.build("notes.tex", during)
         self.assertEqual(seen["shown"], "main.tex", "while notes.tex builds, main.tex's PDF stays")
         self.assertEqual(server.PROJECT.config.main, "notes.tex")
@@ -138,7 +138,7 @@ class ShownDocument(unittest.TestCase):
         seen.clear()
         self.build("sec.tex", during)                     # rebuilding main.pdf, which was shown before
         self.assertEqual(seen["pdf"], 1000.0, "reported as it was until the build ends")
-        self.assertNotEqual(server.pdf_state(server.PROJECT.config), 1000.0)
+        self.assertNotEqual(server.PROJECT.pdf_state(server.PROJECT.config), 1000.0)
 
     def test_a_changed_prism_json_keeps_a_standalone_document_shown(self):
         self.build("notes.tex")
