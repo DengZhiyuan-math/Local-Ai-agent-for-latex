@@ -520,11 +520,11 @@ class OtherProcesses(unittest.TestCase):
         merge_head.write_text(git(self.root, "rev-parse", "HEAD") + "\n")
         (self.g.git_dir / "MERGE_MSG").write_text("Merge changes from GitHub\n")
         release = self.hold()
-        with mock.patch.object(self.g, "git", wraps=self.g.git) as run:
+        with mock.patch.object(self.g.repo, "git", wraps=self.g.repo.git) as run:
             self.g._finish_crashed_merge()
         self.assertNotIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
         release()
-        with mock.patch.object(self.g, "git", wraps=self.g.git) as run:
+        with mock.patch.object(self.g.repo, "git", wraps=self.g.repo.git) as run:
             self.g._finish_crashed_merge()                # its process is gone: a crash
         self.assertIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
 

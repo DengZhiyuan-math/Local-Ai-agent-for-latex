@@ -591,7 +591,8 @@ class Collaboration(unittest.TestCase):
         waits for it and lands after it."""
         d, g = self.people["B"]
         g.writes = SaveLock()
-        real, unguarded, saves = g.git, [], []
+        g.check_repo()
+        real, unguarded, saves = g.repo.git, [], []      # every git command, merges too
 
         def save(line):                     # what the editor does (Project.save)
             with g.writes:
@@ -606,7 +607,7 @@ class Collaboration(unittest.TestCase):
                 saves[-1].start()
             return real(*args, **kw)
 
-        g.git = watched
+        g.repo.git = watched
         self.write("A", "main.tex", PAPER.replace("First", "A's first"))
         self.save("A")
         self.write("B", "main.tex", PAPER.replace("Third", "B's third"))     # not saved yet
@@ -823,7 +824,8 @@ class SharedFolderCollaboration(unittest.TestCase):
         (da / "练习/ex 1/main.tex").write_text(PAPER.replace("First", "A's exercise"), encoding="utf-8")
         ga.now("commit")
         (db / "答案/ex 1 sol/main.tex").write_text(PAPER.replace("First", "B's solution"), encoding="utf-8")
-        real, could_save = gb.git, []
+        gb.check_repo()
+        real, could_save = gb.repo.git, []
 
         def try_save():
             if other.writes.acquire(timeout=0.3):
@@ -839,7 +841,7 @@ class SharedFolderCollaboration(unittest.TestCase):
                 t.join()
             return real(*args, **kw)
 
-        gb.git = watched
+        gb.repo.git = watched
         gb.now("commit")                      # meets A's commit: merges
         self.assertIsNone(gb.error, gb.error)
         self.assertTrue(could_save, "B merged")

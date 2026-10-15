@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+import integrate
 import keepboth
 import registry
 import gitenv
@@ -131,10 +132,6 @@ class Outcome:
     (the shared `error` may be someone else's)."""
     state: str                    # "synced": GitHub has it; "local": kept here (message: why); "failed"
     message: str | None = None
-
-
-def _slug(name: str) -> str:
-    return "".join(c if c.isalnum() else "-" for c in name).strip("-")[:30] or "github"
 
 
 def _names(paths: list[str]) -> str:
@@ -581,14 +578,12 @@ class GitSync:
                     # Your edits recorded first, as for any merge: one that gives up over them
                     # would put back the files as they were when it started.
                     self.commit_all("Autosave before pulling")
-                    m = self.git("merge", "--no-edit", "-m", "Put back commits dropped from GitHub", tip, timeout=120)
-                    if m.returncode != 0 and self.git_dir and (self.git_dir / "MERGE_HEAD").exists():
-                        self.git("merge", "--abort", timeout=60)
+                    failed = integrate.put_back(self.repo, tip)
                 finally:
                     self._finish_crashed_merge()    # a merge its timeout cut off
-            if m.returncode != 0:
+            if failed:
                 self.error = ("The history on GitHub was rewritten (a force push) and its old commits "
-                              "could not be brought back by themselves: " + (m.stderr or m.stdout).strip()[-200:])
+                              "could not be brought back by themselves: " + failed)
                 return False
         self._remote_state()
         self._heal_note = (f"{who} rewrote the history on GitHub (a force push) and dropped {dropped} "
@@ -596,124 +591,21 @@ class GitSync:
         self.notice = self._heal_note
         return True
 
-    def _merge(self, n: int, again: bool = True) -> None:
-        """Merge GitHub's branch into this one. Where both sides changed the same lines, both
-        versions are kept (keepboth.py), so syncing never stops for it. If anything goes
-        wrong, the merge is called off and everything is exactly as before."""
-        m = self.git("merge", "--no-edit", "-m", "Merge changes from GitHub", self.tracking_ref, timeout=120)
-        if m.returncode == 0:
-            self.notice = (f"Combined your changes with {n} commit{'s' if n != 1 else ''} from GitHub "
-                           "(a co-author's work)")
-            self.error, self.clash = None, []
-            return
-        merging = bool(self.git_dir and (self.git_dir / "MERGE_HEAD").exists())
-        if merging:
-            try:
-                kept = self._keep_both()
-                c = self.git("commit", "-q", "-m",
-                             "Merge changes from GitHub (both versions kept where both changed the same lines)",
-                             timeout=60)
-                if c.returncode != 0:
-                    raise RuntimeError((c.stderr or c.stdout).strip()[-300:])
-            except (OSError, subprocess.SubprocessError, RuntimeError, keepboth.MergeError) as e:
-                if self.git_dir and (self.git_dir / "MERGE_HEAD").exists():
-                    self.git("merge", "--abort", timeout=60)
-                self._report_clash(f" ({e})")
-                return
+    def _merge(self, n: int) -> None:
+        """Merge GitHub's branch into this one, losing nothing (integrate.merge)."""
+        self._apply(integrate.merge(self.repo, self.tracking_ref, n, self.prefix))
+
+    def _apply(self, r: integrate.Result) -> None:
+        """What a merge did, for the pages."""
+        if r.kept:
             with self._state:
-                self.kept = [k for k in self.kept if k["path"] not in {x["path"] for x in kept}] + kept
-            where = ", ".join(sorted({k["path"] for k in kept}))
-            self.notice = (f"Combined your changes with {n} commit{'s' if n != 1 else ''} from GitHub. "
-                           f"You both changed the same lines in {where}: both versions are kept there "
-                           "(see the GitHub menu)")
-            self.error, self.clash = None, []
-            return
-        out = m.stderr or m.stdout
-        if "would be overwritten" in out and again:
-            # Changes not recorded yet (another project of this shared repository, or edits
-            # made outside the editor) in files GitHub changed: git touched nothing. Record
-            # them, then merge again: they are kept and combined like any other.
-            files = [ln.strip() for ln in out.splitlines() if ln.startswith(("\t", "    ")) and ln.strip()]
-            if files:
-                self._ok("add", "-A", "--", *files)
-                self._ok("commit", "-q", "-m", "Autosave before combining with GitHub "
-                         "(changed outside this editor)", "--", *files)
-                self._merge(n, again=False)
-                return
-        self.error = "Could not combine your changes with GitHub's: " + out.strip()[-300:]
-
-    def _unmerged(self) -> dict[str, set[int]]:
-        """The files a merge stopped at: path (from the top) -> the stages present
-        (1 the common version, 2 yours, 3 GitHub's)."""
-        out = self.git("ls-files", "-u", "-z", timeout=30).stdout
-        files: dict[str, set[int]] = {}
-        for entry in out.split("\0"):
-            if "\t" not in entry:
-                continue
-            meta, path = entry.split("\t", 1)
-            files.setdefault(path, set()).add(int(meta.split()[2]))
-        return files
-
-    def _blob(self, spec: str) -> bytes:
-        r = gitenv.git(self.top or self.root_fn(), "show", spec, binary=True)
-        if r.returncode != 0:
-            raise RuntimeError(f"git show {spec}: " + r.stderr.decode("utf-8", "replace").strip())
-        return r.stdout
-
-    def _keep_both(self) -> list[dict]:
-        """Settle every file the merge stopped at, losing nothing: text gets both versions;
-        a binary file (a figure) keeps yours, with GitHub's saved next to it; a file one side
-        deleted and the other changed keeps the changed version."""
-        top = self.top or self.root_fn()
-        mine = self.git("config", "user.name", timeout=20).stdout.strip() or "you"
-        them = self.git("log", "-1", "--format=%an", self.tracking_ref, timeout=20).stdout.strip() or "a co-author"
-        if them == mine:
-            them = f"{them} (another copy)"
-        kept = []
-        for path, stages in self._unmerged().items():
-            full = top / path
-            rel = path[len(self.prefix):] if self.prefix and path.startswith(self.prefix) else path
-            if 2 in stages and 3 in stages:
-                ours, theirs = self._blob(f":2:{path}"), self._blob(f":3:{path}")
-                base = self._blob(f":1:{path}") if 1 in stages else b""
-                try:
-                    texts = [b.decode("utf-8") for b in (ours, base, theirs)]
-                    if any("\0" in t for t in texts):
-                        raise UnicodeDecodeError("utf-8", b"", 0, 1, "binary")
-                except UnicodeDecodeError:
-                    self._ok("checkout", "--ours", "--", path)
-                    side = full.with_name(f"{full.stem}.from-{_slug(them)}{full.suffix}")
-                    side.write_bytes(theirs)
-                    self._ok("add", "--", path, str(side.relative_to(top).as_posix()))
-                    kept.append({"path": rel, "line": None, "who": them, "side": side.name,
-                                 "mtime": full.stat().st_mtime})
-                    continue
-                if keepboth.too_big(texts[0], texts[1], texts[2]):
-                    # Most of the file clashes (rewritten, reformatted): both inside would double
-                    # the paper. Yours stays; GitHub's whole version is saved next to it.
-                    self._ok("checkout", "--ours", "--", path)
-                    side = full.with_name(f"{full.stem}.from-{_slug(them)}{full.suffix}")
-                    side.write_bytes(theirs)
-                    self._ok("add", "--", path, str(side.relative_to(top).as_posix()))
-                    kept.append({"path": rel, "line": None, "who": them, "side": side.name,
-                                 "mtime": full.stat().st_mtime})
-                    continue
-                text, places = keepboth.keep_both(texts[0], texts[1], texts[2], mine, them, keepboth.is_tex(path))
-                crlf = b"\r\n" in ours or (full.exists() and b"\r\n" in full.read_bytes()[:65536])
-                full.write_bytes((text.replace("\n", "\r\n") if crlf else text).encode("utf-8"))
-                self._ok("add", "--", path)
-                for line in places:
-                    kept.append({"path": rel, "line": line, "who": them, "mtime": full.stat().st_mtime})
-            elif 2 in stages:                    # GitHub deleted it, you changed it: yours stays
-                self._ok("add", "--", path)
-            elif 3 in stages:                    # you deleted it, GitHub changed it: theirs stays
-                self._ok("checkout", "--theirs", "--", path)
-                self._ok("add", "--", path)
-            else:
-                raise RuntimeError(f"unexpected merge state for {path}")
-        if self._unmerged():
-            raise RuntimeError("files left unmerged")
-        return kept
+                paths = {k["path"] for k in r.kept}
+                self.kept = [k for k in self.kept if k["path"] not in paths] + r.kept
+        if r.notice:
+            self.notice = r.notice
+        self.error = r.error
+        if r.clash is not None:
+            self.clash = r.clash
 
     def kept_both(self) -> list[dict]:
         """The places where both versions were kept and are still there."""
@@ -752,18 +644,6 @@ class GitSync:
             self.kept = [k for k in self.kept if k in still or k not in looked_at]
         return out
 
-    def _report_clash(self, why: str = "") -> None:
-        """The automatic merge could not be done: say so; both versions stay where they are."""
-        clash = [x for x in self.git("diff", "--name-only", "HEAD", self.tracking_ref, timeout=30).stdout.splitlines() if x]
-        names = [x[len(self.prefix):] if x.startswith(self.prefix) else x for x in clash]
-        self.clash = names
-        who = self.git("log", "-1", "--format=%an, %ar", self.tracking_ref, timeout=20).stdout.strip()
-        self.error = (f"Your changes and GitHub's could not be combined by themselves{why}"
-                      f"{f' (last there: {who})' if who else ''}. Nothing was lost: GitHub keeps "
-                      "its version, this copy keeps yours (committed). In the GitHub menu: compare "
-                      "with GitHub's version, edit the file so it has what both of you want, then "
-                      "choose \"I've combined them\".")
-
     def theirs(self, path: str) -> dict:
         """GitHub's version of a project file, and how it differs from yours."""
         full = self.rel(path)
@@ -795,13 +675,9 @@ class GitSync:
             with self._changing():
                 try:
                     self.commit_all("Combined with GitHub's version")     # saved during the fetch
-                    m = self.git("merge", "--no-edit", "-X", "ours", "-m",
-                                 "Merge changes from GitHub (clashing lines: kept the combined version)",
-                                 self.tracking_ref, timeout=120)
-                    if m.returncode != 0:
-                        if self.git_dir and (self.git_dir / "MERGE_HEAD").exists():
-                            self.git("merge", "--abort", timeout=60)
-                        self.error = "Could not combine: " + (m.stderr or m.stdout).strip()[-300:]
+                    failed = integrate.combine_mine(self.repo, self.tracking_ref)
+                    if failed:
+                        self.error = failed
                         return
                 finally:
                     self._finish_crashed_merge()        # a merge its timeout cut off
@@ -890,26 +766,9 @@ class GitSync:
             self.last_edit = self.dirty_since = time.time()
 
     def _finish_crashed_merge(self) -> None:
-        """A merge prism-local started and never finished (the editor was killed half-way, or
-        git by its timeout): call it off, so this copy is as it was before it; the next sync
-        merges again. A merge someone started in a terminal is theirs to finish, and is left
-        alone."""
-        head = self.git_dir / "MERGE_HEAD" if self.git_dir else None
-        if not (head and head.exists()):
-            return
-        try:
-            msg = (self.git_dir / "MERGE_MSG").read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return
-        if msg.startswith(("Merge changes from GitHub", "Put back commits dropped from GitHub")):
-            # Unless a prism-local process is merging right now (it holds the repository): another
-            # project's editor in the same repository, or this project's last editor still
-            # closing. A crashed one holds nothing.
-            try:
-                with self._changing(wait=0):
-                    self.git("merge", "--abort", timeout=60)
-            except RepoBusy:
-                pass
+        """A merge prism-local left half-done is called off (integrate.finish_crashed)."""
+        if self.check_repo():
+            integrate.finish_crashed(self.repo)
 
     def start(self) -> None:
         threading.Thread(target=self.run, daemon=True).start()
