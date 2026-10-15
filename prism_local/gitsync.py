@@ -8,11 +8,18 @@ While the editor runs, a worker thread keeps the project's own git repository up
   turn changed are committed alone, with your request as the message (an Undo of the
   turn is committed the same way);
 - push after every commit, and fetch every FETCH_EVERY seconds: a remote that is ahead
-  (another computer, GitHub's web editor) is fast-forwarded, so the editor reloads the
-  files; histories that have diverged are reported, never merged automatically.
+  (another computer, GitHub's web editor, a co-author) is brought in: a fast-forward, or a
+  merge that keeps both versions where both changed the same lines (integrate.py), so
+  the editor reloads the files. Nothing is ever forced or thrown away.
 
 Build output (the build folder, .aux, .log, ...) is never committed. Sync can be switched
 off per clone (.git/prism-local.json, never committed).
+
+GitSync is what the editor and the Home page call; what it decides with lives apart:
+- synctarget.py: where the repository syncs to, and the target its author confirmed;
+- repository.py: where a project's folder is in git (locate), and its locks;
+- integrate.py: every merge, losing nothing;
+- syncschedule.py: when to commit, push and pull, on a clock it is given.
 
 A project is synced when it is the top of its own repository, or when it sits in a
 repository shared by several projects: one whose top has a SHARED_MARKER file (the Home

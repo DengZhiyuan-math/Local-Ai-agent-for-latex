@@ -213,9 +213,9 @@ class GitSyncTest(unittest.TestCase):
             self.g.stop.set()
 
         with mock.patch.object(gitsync, "TICK", 0.01), \
-                mock.patch.object(self.g, "_finish_crashed_merge",
+                mock.patch.object(gitsync.integrate, "finish_crashed",
                                   side_effect=subprocess.TimeoutExpired(["git", "merge"], 60)), \
-                mock.patch.object(self.g, "_remote_state", side_effect=KeyError("a bug")), \
+                mock.patch.object(self.g, "validate_target", side_effect=KeyError("a bug")), \
                 mock.patch.object(self.g, "tick", tick):
             t = threading.Thread(target=self.g.run)
             t.start()
@@ -260,17 +260,18 @@ class GitSyncTest(unittest.TestCase):
         commit ran keeps the next autosave due, or its edit would wait for another one."""
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
         self.g.touched()
-        real = self.g._record
+        real = self.g.repo.git
 
-        def record(pick, message):
-            ok = real(pick, message)
-            self.g.touched()                # a save, its bytes not seen by git
-            return ok
+        def git(*args, **kw):
+            r = real(*args, **kw)
+            if args[0] == "commit":
+                self.g.touched()            # a save, its bytes not seen by git
+            return r
 
-        self.g._record = record
+        self.g.repo.git = git
         self.g.commit_all("Autosave")
         self.assertTrue(self.g.schedule.pending, "still due")
-        self.g._record = real
+        self.g.repo.git = real
         self.g.commit_all("Autosave")
         self.assertFalse(self.g.schedule.pending)
 
@@ -581,11 +582,11 @@ class OtherProcesses(unittest.TestCase):
         (self.g.git_dir / "MERGE_MSG").write_text("Merge changes from GitHub\n")
         release = self.hold()
         with mock.patch.object(self.g.repo, "git", wraps=self.g.repo.git) as run:
-            self.g._finish_crashed_merge()
+            gitsync.integrate.finish_crashed(self.g.repo)
         self.assertNotIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
         release()
         with mock.patch.object(self.g.repo, "git", wraps=self.g.repo.git) as run:
-            self.g._finish_crashed_merge()                # its process is gone: a crash
+            gitsync.integrate.finish_crashed(self.g.repo)   # its process is gone: a crash
         self.assertIn(("merge", "--abort"), [c.args[:2] for c in run.call_args_list])
 
     def test_sync_waits_its_turn_without_an_error(self):
@@ -594,7 +595,7 @@ class OtherProcesses(unittest.TestCase):
         with mock.patch.object(repository, "REPO_WAIT", 0.3):
             with self.assertRaises(repository.RepoBusy):
                 self.g.commit(["main.tex"], "edit")
-            self.g._safe(self.g.push)
+            self.g.now("commit")                         # its commit meets the busy repository
         self.assertIsNone(self.g.error, "busy is not an error: the next tick tries again")
         release()
         self.assertTrue(self.g.commit(["main.tex"], "edit"))

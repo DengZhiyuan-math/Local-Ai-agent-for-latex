@@ -99,7 +99,7 @@ class Collaboration(unittest.TestCase):
                             clock=self.clock)
         g.check_repo()
         g.bind_target()
-        g._remote_state()
+        g.recheck()
         return d, g
 
     # ------------------------------------------------------------ helpers
@@ -822,7 +822,7 @@ class SharedFolderCollaboration(unittest.TestCase):
         g = gitsync.GitSync(lambda: d / project, lambda: "build")
         g.check_repo()
         g.bind_target()
-        g._remote_state()
+        g.recheck()
         return d, g
 
     def test_a_merge_holds_the_other_editors_saves(self):

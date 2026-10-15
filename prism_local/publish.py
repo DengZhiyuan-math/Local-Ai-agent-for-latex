@@ -51,7 +51,9 @@ def repo_kind(p: Path) -> tuple[str, Path | None]:
 
 
 def project_sync(root: Path) -> gitsync.GitSync:
-    return gitsync.GitSync(lambda: root, lambda: "build")
+    """The sync of a project whose editor may not be open (Home, publishing). Its build
+    output, never committed, is in the folder its prism.json names, not always build/."""
+    return gitsync.GitSync(lambda: root, lambda: Config(root).outdir)
 
 
 def github_of(top: Path | None) -> str | None:

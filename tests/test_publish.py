@@ -154,5 +154,19 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.gh.created, [])
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class ProjectSync(unittest.TestCase):
+    def test_the_build_output_is_where_prism_json_says(self):
+        """Home and publishing sync a project whose editor may not be open: its build
+        output, never committed, is in the folder its prism.json names."""
+        root = tmpdir()
+        (root / "main.tex").write_text("\\documentclass{article}", encoding="utf-8")
+        (root / "prism.json").write_text('{"outdir": "out"}', encoding="utf-8")
+        (root / "out").mkdir()
+        (root / "out" / "main.pdf").write_bytes(b"%PDF")
+        gitenv.git(root, "init", "-q", check=True)
+        self.assertEqual(publish.project_sync(root).changes(), ["main.tex", "prism.json"])
+
+
 if __name__ == "__main__":
     unittest.main()
