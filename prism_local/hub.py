@@ -220,10 +220,9 @@ def fetch_one(top: Path) -> str | None:
         sync = project_sync(top)
         if not sync.check_repo():
             return None
-        # Not while an editor of it is at the repository (one that opened since the list
-        # was made): it fetches by itself, and two fetches at once fail on the refs.
-        with sync.lock, sync.repo.changing(files=False, wait=0):
-            r = sync.fetch()
+        # Not while another prism-local window talks to GitHub (an editor that opened since
+        # the list was made): it fetches by itself, and two fetches at once fail on the refs.
+        r = sync.fetch(wait=0)
         if r is None:
             return sync.blocked_reason
     except RepoBusy:

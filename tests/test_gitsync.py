@@ -63,6 +63,51 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_your_edits_are_committed_while_a_push_is_on_the_network(self):
+        """A push on a slow network takes minutes: the commit of your edits before an agent's
+        turn (in the request that starts the turn) does not wait for it."""
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Saved")                       # something to push
+        on_the_network, release = threading.Event(), threading.Event()
+        real = self.g.repo.git
+
+        def slow(*args, **kw):
+            if args[0] == "push":
+                on_the_network.set()
+                release.wait(30)
+            return real(*args, **kw)
+        self.g.repo.git = slow
+        self.addCleanup(release.set)
+        pushing = threading.Thread(target=self.g.push)
+        pushing.start()
+        self.assertTrue(on_the_network.wait(10))
+        (self.root / "sec.tex").write_text("b\n", encoding="utf-8")
+        t0 = time.time()
+        self.g.before_turn()
+        self.assertLess(time.time() - t0, 3, "did not wait for the push")
+        self.assertEqual(self.last()[0], "Your edits before an agent turn: sec.tex")
+        release.set()
+        pushing.join(30)
+        self.assertIsNone(self.g.error, self.g.error)
+
+    def test_one_window_at_a_time_talks_to_github(self):
+        """Two fetches at once fail on the refs (the Home page's and an editor's): one that
+        will not wait is refused while another window transfers."""
+        held, release = threading.Event(), threading.Event()
+
+        def transfer():
+            with repository.network_lock(self.g.git_dir):
+                held.set()
+                release.wait(30)
+        threading.Thread(target=transfer, daemon=True).start()
+        self.addCleanup(release.set)
+        held.wait(5)
+        with self.assertRaises(repository.RepoBusy):
+            self.g.fetch(wait=0)
+        release.set()
+        time.sleep(0.2)
+        self.assertEqual(self.g.fetch(wait=5).returncode, 0)
+
     def test_the_github_menu_answers_while_a_push_runs(self):
         """A push or pull holds the sync for minutes on a slow network: opening the GitHub
         menu answers with what is known, and confirming a target says to try again."""

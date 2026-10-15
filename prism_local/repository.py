@@ -35,6 +35,7 @@ import gitenv
 import registry
 
 REPO_WAIT = 30           # seconds a commit, pull or push waits while another process changes the repository
+NET_WAIT = 10            # seconds a fetch or push waits while another one talks to the remote
 FILES_WAIT = 60          # seconds git waits for a save or an Undo to finish writing (they take milliseconds)
 LOCK_WAIT = 10           # seconds to wait for another program's git (its index.lock)
 STALE_LOCK = 600         # an index.lock this old was left by a git that crashed
@@ -104,6 +105,22 @@ def repo_lock(git_dir: Path | None, timeout: float | None = None):
     entry = _take(Path(git_dir) / "prism-local.lock", REPO_WAIT if timeout is None else timeout)
     if entry is None:
         raise RepoBusy("git is busy in another prism-local window; will try again")
+    try:
+        yield
+    finally:
+        _give_back(entry)
+
+
+@contextmanager
+def network_lock(git_dir: Path, timeout: float | None = None):
+    """Held while prism-local fetches or pushes a repository: one transfer at a time, also
+    across processes (two fetches at once fail on the refs: the Home page's and an
+    editor's). Apart from repo_lock, and never taken while holding it: a transfer takes
+    minutes on a slow network, and commits, merges and saves go on meanwhile. An OS file
+    lock (.git/prism-local-net.lock). Raises RepoBusy after `timeout` (NET_WAIT) seconds."""
+    entry = _take(Path(git_dir) / "prism-local-net.lock", NET_WAIT if timeout is None else timeout)
+    if entry is None:
+        raise RepoBusy("another prism-local window is syncing with GitHub; will try again")
     try:
         yield
     finally:
@@ -243,6 +260,11 @@ class Repository:
                 yield self
             finally:
                 self._held().pop()
+
+    def transferring(self, wait: float | None = None):
+        """A fetch or push of this repository: one at a time (network_lock). Commits and
+        merges do not wait for it, and it holds none of their locks."""
+        return network_lock(self.git_dir, wait)
 
     def git(self, *args: str, timeout: float = 60, interactive: bool = False) -> subprocess.CompletedProcess:
         """git at the repository's top. A command that takes the index runs only inside

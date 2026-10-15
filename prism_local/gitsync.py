@@ -353,14 +353,18 @@ class GitSync:
     def tracking_ref(self) -> str:
         return "refs/remotes/" + self.upstream if self.upstream else "refs/remotes/prism-local/missing"
 
-    def fetch(self, manual: bool = False) -> subprocess.CompletedProcess | None:
+    def fetch(self, manual: bool = False, wait: float | None = None) -> subprocess.CompletedProcess | None:
+        """Fetch GitHub's branch into the tracking ref; None when there is nothing to fetch
+        from. The transfer holds only the repository's network lock (Repository.transferring:
+        RepoBusy after `wait` seconds): commits, merges and saves go on meanwhile."""
         if not self.validate_target(fresh=True) or (not manual and not self.enabled):
             return None
         t = self.target
         self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
-        return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
-                        t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
-                        interactive=manual)
+        with self.repo.transferring(wait):
+            return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
+                            t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
+                            interactive=manual)
 
     def _remote_state(self) -> None:
         self.validate_target()
@@ -383,10 +387,13 @@ class GitSync:
         """Push. If GitHub has commits this copy lacks (a co-author pushed), bring them in
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
         (co-authors pushing one after another), up to `tries` times. Never forced. Returns
-        what this push did (`error` also says so, for the pages)."""
+        what this push did (`error` also says so, for the pages). The transfer holds only
+        the network lock: a commit (your edits before an agent's turn) does not wait for it."""
+        if not self.check_repo():
+            raise RuntimeError("This project has no repository to sync")
         attempts = tries if retry else 1
-        with self.lock, self._changing(files=False):
-            for attempt in range(attempts):
+        for attempt in range(attempts):
+            with self.lock:
                 self._remote_state()
                 if not self.has_remote:
                     return Outcome("local", "The repository has no remote, so nothing was pushed.")
@@ -396,36 +403,39 @@ class GitSync:
                     return Outcome("local", "Automatic sync is off.")
                 if not self.ahead:
                     return Outcome("synced")
-                self.state = "pushing"
-                try:
-                    if not self.validate_target(fresh=True):
-                        return Outcome("local", "Sync paused: " + str(self.blocked_reason))
-                    args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
-                            self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
+                if not self.validate_target(fresh=True):
+                    return Outcome("local", "Sync paused: " + str(self.blocked_reason))
+                args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
+                        self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
+            self.state = "pushing"
+            try:
+                with self.repo.transferring():
                     r = self.git(*args, timeout=180, interactive=manual)
-                    if r.returncode == 0:
-                        self.last_push, self.error = time.time(), None
-                        self._remote_state()
-                        return Outcome("synced")
-                    msg = safe_git_message((r.stderr or r.stdout).strip())
-                    # GitHub has commits this copy lacks: GitHub said so, or the guard did
-                    # (it stops such a push before GitHub sees it).
-                    behind = any(s in msg for s in ("rejected", "fetch first", "non-fast-forward",
-                                                    "refusing a push that would drop commits"))
-                finally:
-                    self.state = "idle"
-                if behind and attempt < attempts - 1:
-                    self.pull(manual=manual)
-                    if self.error:
-                        return Outcome("failed", self.error)        # pull said what is wrong
-                    if self.behind and self.busy_fn():
-                        return Outcome("local", "The agent is working: pushed once its turn ends.")
-                    time.sleep(min(0.3 * (attempt + 1), 1.5))
-                    continue
+            finally:
+                self.state = "idle"
+            if r.returncode == 0:
+                with self.lock:
+                    self.last_push, self.error = time.time(), None
+                    self._remote_state()
+                return Outcome("synced")
+            msg = safe_git_message((r.stderr or r.stdout).strip())
+            # GitHub has commits this copy lacks: GitHub said so, or the guard did (it stops
+            # such a push before GitHub sees it).
+            behind = any(s in msg for s in ("rejected", "fetch first", "non-fast-forward",
+                                            "refusing a push that would drop commits"))
+            if behind and attempt < attempts - 1:
+                self.pull(manual=manual)
+                if self.error:
+                    return Outcome("failed", self.error)        # pull said what is wrong
+                if self.behind and self.busy_fn():
+                    return Outcome("local", "The agent is working: pushed once its turn ends.")
+                time.sleep(min(0.3 * (attempt + 1), 1.5))
+                continue
+            with self.lock:
                 self.schedule.push_failed()
                 self.error = ("GitHub has changes this copy does not have yet; pull first."
                               if behind else "Push failed: " + msg[-300:])
-                return Outcome("failed", self.error)
+            return Outcome("failed", self.error)
         return Outcome("failed", self.error)
 
     def record_file(self, path: str, message: str) -> Outcome:
@@ -453,63 +463,70 @@ class GitSync:
         GitHub moved on, a fast-forward; when both did (co-authors writing at the same time),
         a merge commit that keeps both sides. Nothing is ever rewritten or thrown away: when
         the two sides changed the same lines, the merge is called off, both versions stay
-        where they are (GitHub's there, yours committed here), and `error` says which files."""
-        with self.lock, self._changing(files=False):
-            self.schedule.fetched()
-            if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
+        where they are (GitHub's there, yours committed here), and `error` says which files.
+        The fetch holds only the network lock; the merge holds the repository and the files."""
+        if not self.check_repo():
+            raise RuntimeError("This project has no repository to sync")
+        self.schedule.fetched()
+        if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
+            return
+        self.state = "pulling"
+        try:
+            r = self.fetch(manual=manual)
+            if r is None:
                 return
-            self.state = "pulling"
-            try:
-                r = self.fetch(manual=manual)
-                if r is None:
-                    return
-                if r.returncode != 0:
-                    self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
-                    return
-                self._remote_state()
-                if self.blocked_reason:
-                    return
-                if self.busy_fn():
-                    # An agent turn is running: it reads and writes the files now, and a merge
-                    # changing them under it could have its writes drop a co-author's text.
-                    # Fetched; merged once the turn ends.
-                    return
-                healed = self._heal_rewrite()
-                if healed is None:               # a rewrite to keep: this copy waits
-                    return
-                if not self.behind:
-                    if self.clash:               # resolved elsewhere (a terminal, a co-author)
-                        self.error, self.clash = None, []
-                    if healed and self.ahead:
-                        self.push(retry=False, manual=manual)   # put the dropped commits back on GitHub now
-                    return
-                with self._changing():
-                    try:
-                        if self.busy_fn():       # an agent turn is writing: after it
-                            return
-                        if self.commit_all("Autosave before pulling"):
-                            self._remote_state()
-                            if self.blocked_reason:
-                                return
-                        n = self.behind
-                        if not self.ahead:
-                            m = self.git("merge", "-q", "--ff-only", self.tracking_ref, timeout=60)
-                            if m.returncode == 0:
-                                self.notice = f"Pulled {n} commit{'s' if n != 1 else ''} from GitHub"
-                                self.error, self.clash = None, []
-                            else:
-                                self.error = "Could not update from GitHub: " + (m.stderr or m.stdout).strip()[-200:]
+            if r.returncode != 0:
+                self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
+                return
+            push_after = self._take_in()
+        finally:
+            self.state = "idle"
+        if push_after:
+            self.push(retry=False, manual=manual)       # put the dropped commits back on GitHub now
+
+    def _take_in(self) -> bool:
+        """After a fetch: merge what it brought (see pull). True when this copy has commits
+        a rewrite dropped from GitHub, to push back now (after the locks are let go)."""
+        with self.lock, self._changing(files=False):
+            self._remote_state()
+            if self.blocked_reason:
+                return False
+            if self.busy_fn():
+                # An agent turn is running: it reads and writes the files now, and a merge
+                # changing them under it could have its writes drop a co-author's text.
+                # Fetched; merged once the turn ends.
+                return False
+            healed = self._heal_rewrite()
+            if healed is None:               # a rewrite to keep: this copy waits
+                return False
+            if not self.behind:
+                if self.clash:               # resolved elsewhere (a terminal, a co-author)
+                    self.error, self.clash = None, []
+                return bool(healed and self.ahead)
+            with self._changing():
+                try:
+                    if self.busy_fn():       # an agent turn is writing: after it
+                        return False
+                    if self.commit_all("Autosave before pulling"):
+                        self._remote_state()
+                        if self.blocked_reason:
+                            return False
+                    n = self.behind
+                    if not self.ahead:
+                        m = self.git("merge", "-q", "--ff-only", self.tracking_ref, timeout=60)
+                        if m.returncode == 0:
+                            self.notice = f"Pulled {n} commit{'s' if n != 1 else ''} from GitHub"
+                            self.error, self.clash = None, []
                         else:
-                            self._merge(n)
-                    finally:
-                        self._finish_crashed_merge()    # a merge its timeout cut off
-                self._remote_state()
-                if healed:
-                    self.notice = self._heal_note        # says more than "combined"
-                if healed and self.ahead and not self.error:
-                    self.push(retry=False, manual=manual)       # put the dropped commits back on GitHub now
-            finally:
-                self.state = "idle"
+                            self.error = "Could not update from GitHub: " + (m.stderr or m.stdout).strip()[-200:]
+                    else:
+                        self._merge(n)
+                finally:
+                    self._finish_crashed_merge()    # a merge its timeout cut off
+            self._remote_state()
+            if healed:
+                self.notice = self._heal_note        # says more than "combined"
+            return bool(healed and self.ahead and not self.error)
 
     def _heal_rewrite(self) -> bool | None:
         """Someone rewrote the branch on GitHub (a force push from a terminal, `--no-verify`
@@ -643,36 +660,34 @@ class GitSync:
 
     def resolve_mine(self) -> None:
         """After a clash, once you have edited the files to hold what both of you want: merge
-        GitHub's branch, taking your version of the lines both changed (git merge -X ours:
-        everything else of theirs comes in as usual), and push. Their version stays in
-        their commits; nothing leaves the history."""
+        GitHub's branch, taking your version of the lines both changed (integrate.combine_mine),
+        and push. Their version stays in their commits; nothing leaves the history."""
+        self.commit_all("Combined with GitHub's version")     # recorded even when offline
+        r = self.fetch(manual=True)
+        if r is None:
+            return
+        if r.returncode != 0:
+            self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
+            return
         with self.lock, self._changing(files=False):
-            self.commit_all("Combined with GitHub's version")     # recorded even when offline
-            r = self.fetch(manual=True)
-            if r is None:
-                return
-            if r.returncode != 0:
-                self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
-                return
             self._remote_state()
             if self.blocked_reason:
                 return
             if not self.behind:
                 self.clash = []
-                self.push(manual=True)
-                return
-            with self._changing():
-                try:
-                    self.commit_all("Combined with GitHub's version")     # saved during the fetch
-                    failed = integrate.combine_mine(self.repo, self.tracking_ref)
-                    if failed:
-                        self.error = failed
-                        return
-                finally:
-                    self._finish_crashed_merge()        # a merge its timeout cut off
-            self.error, self.clash = None, []
-            self.notice = "Combined with GitHub's version"
-            self.push(manual=True)
+            else:
+                with self._changing():
+                    try:
+                        self.commit_all("Combined with GitHub's version")     # saved during the fetch
+                        failed = integrate.combine_mine(self.repo, self.tracking_ref)
+                        if failed:
+                            self.error = failed
+                            return
+                    finally:
+                        self._finish_crashed_merge()        # a merge its timeout cut off
+                self.error, self.clash = None, []
+                self.notice = "Combined with GitHub's version"
+        self.push(manual=True)
 
     # ------------------------------------------------------------ hooks
     def touched(self) -> None:
