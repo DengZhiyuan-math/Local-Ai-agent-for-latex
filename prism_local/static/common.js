@@ -168,17 +168,35 @@ const pdfChannel = "BroadcastChannel" in window ? new BroadcastChannel("prism-pd
     showGone(fails >= 3);
   }
 
-  // The open stream is what keeps the server alive: when this page, its tab or the
-  // whole browser closes, the connection drops and the server notices at once, even
-  // if the goodbye below never gets out. EventSource reconnects by itself.
-  let stream = null;
-  function hold() {
-    if (!("EventSource" in window) || stream) return;
-    stream = new EventSource("/api/presence/stream?client=" + encodeURIComponent(id));
+  // The open stream is what keeps the server alive: when the pages, their tabs or the
+  // whole browser close, the connection drops and the server notices at once, even if
+  // the goodbye below never gets out. EventSource reconnects by itself.
+  // One stream for all of this server's pages: a browser keeps at most six connections
+  // to one server, and a stream per page would take them all with six pages open (the
+  // next page could not even load). A lock picks the page that holds it; when that page
+  // closes, the next one takes it over. The others are present by their heartbeats.
+  let stream = null, unlock = null, waiting = null;
+  function openStream() {
+    if (!stream) stream = new EventSource("/api/presence/stream?client=" + encodeURIComponent(id));
   }
+  function hold() {
+    if (!("EventSource" in window) || stream || waiting) return;
+    if (!(navigator.locks && navigator.locks.request)) return openStream();
+    const ask = waiting = new AbortController();
+    navigator.locks.request("prism-presence-stream", { signal: ask.signal }, () => new Promise((release) => {
+      waiting = null; unlock = release;
+      openStream();
+    })).catch(() => { if (waiting === ask) { waiting = null; openStream(); } });   // no lock: a stream of its own
+  }
+  function drop() {
+    if (waiting) { const ask = waiting; waiting = null; ask.abort(); }
+    if (stream) { stream.close(); stream = null; }
+    if (unlock) { unlock(); unlock = null; }        // the next page takes the stream over
+  }
+  window.PRESENCE = { holdsStream: () => !!stream };   // for the browser checks
 
   window.addEventListener("pagehide", () => {
-    if (stream) { stream.close(); stream = null; }
+    drop();
     navigator.sendBeacon("/api/bye", id);
   });
   window.addEventListener("pageshow", (e) => { if (e.persisted) { hold(); beat(); } });   // back/forward cache

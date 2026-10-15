@@ -568,6 +568,19 @@ class Routes(unittest.TestCase):
         self.assertEqual(upload("chat.txt", b"attached", destination="attachment")[1]["path"],
                          "prism-uploads/chat.txt")
 
+    def test_a_hidden_page_asks_for_a_turns_events_without_the_server_waiting(self):
+        """wait=0 (a hidden page): the server answers at once, so the request holds none of
+        the few connections a browser keeps to it; without it, up to 20 s (at most 20)."""
+        root = project({"main.tex": "x\n"})
+        key = server.registry.project_key(root)
+        waits = []
+        with mock.patch.object(server.AGENT, "events", lambda job, after, wait: waits.append(wait) or ([], False)):
+            for q in ("&wait=0", "", "&wait=600", "&wait=-1"):
+                code, r = self.ask(f"/api/agent/events?job=1&after=0&project_key={key}{q}")
+                self.assertEqual((code, r), (200, {"events": [], "done": False}))
+            self.assertEqual(self.ask(f"/api/agent/events?job=1&wait=soon&project_key={key}")[0], 400)
+        self.assertEqual(waits, [0.0, 20.0, 20.0, 0.0])
+
     def test_synctex_says_what_to_do_until_there_is_data(self):
         import gzip
         root = project({"main.tex": "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n"})

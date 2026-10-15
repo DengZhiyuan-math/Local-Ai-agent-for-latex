@@ -288,7 +288,10 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/events":
             if q.get("project_key") != registry.project_key(PROJECT.root):
                 return self._err(409, "This page belongs to another project. Reopen the project's editor.")
-            got = AGENT.events(int(q["job"]), int(q.get("after", 0)), 20.0)
+            # A page waits up to 20 s for new events; a hidden one asks without waiting (it
+            # would hold one of the few connections a browser keeps to this server).
+            wait = min(20.0, max(0.0, float(q.get("wait", 20))))
+            got = AGENT.events(int(q["job"]), int(q.get("after", 0)), wait)
             if got is None:
                 return self._err(404, "unknown job")
             return self._json({"events": got[0], "done": got[1]})

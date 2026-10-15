@@ -64,14 +64,18 @@ try:
             time.sleep(0.5)
 
     def node(script, *args):
-        r = subprocess.run(["node", str(script), *args], capture_output=True, text=True, encoding="utf-8",
-                           timeout=180, cwd=here)
+        try:
+            r = subprocess.run(["node", str(script), *args], capture_output=True, text=True, encoding="utf-8",
+                               timeout=180, cwd=here)
+        except subprocess.TimeoutExpired as e:   # a page that never answers: the rest still run
+            return f"FAIL no end after {e.timeout} s"
         return (r.stdout + r.stderr).strip()
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
     results["saving"] = node(scripts / "saving.mjs", editor, str(work / "proj"))
     results["home menu"] = node(scripts / "home_menu.mjs", home, str(work / "proj"), str(work / "proj2"))
     results["pages load"] = node(scripts / "pages.mjs", editor, home)
+    results["many pages"] = node(scripts / "many_pages.mjs", editor, str(work / "proj"))
 finally:
     for p in procs:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)

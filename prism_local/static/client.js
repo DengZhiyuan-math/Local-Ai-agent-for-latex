@@ -57,7 +57,8 @@ const Client = (() => {
       show: (rev, path) => get("/api/git/show", { rev, path }),
       // the agent
       agent: (body) => post("/api/agent", body),
-      events: (job, after) => get("/api/agent/events", { job, after }),
+      // wait: seconds the server may wait for new ones (20 if not given)
+      events: (job, after, wait) => get("/api/agent/events", { job, after, wait }),
       stop: (job) => post("/api/agent/stop", { job }),
       undo: (turn) => post("/api/agent/undo", { turn }),
       info: () => get("/api/agent/info"),

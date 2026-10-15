@@ -1831,7 +1831,10 @@ async function followTurn(job, provider, mode) {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
     let retry = 1000;
     while (!done) {
-      const d = await Q.events(job, after);
+      // A hidden page asks every 5 s without the server waiting: a waiting request holds
+      // one of the few connections the browser keeps to this server (see common.js).
+      if (document.visibilityState === "hidden") await nap(5000, 5000);
+      const d = await Q.events(job, after, document.visibilityState === "hidden" ? 0 : undefined);
       if (d._status === 0) {
         status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
         await new Promise((res) => setTimeout(res, retry));

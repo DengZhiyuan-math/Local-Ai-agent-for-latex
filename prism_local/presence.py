@@ -1,11 +1,13 @@
 """Which browser pages are open, for `--exit-when-idle`.
 
-Every page (editor, PDF, Home) keeps an event stream open to the server
-(`hold` / `serve_stream`). When the page, its tab or the whole browser is
-closed, the connection drops and the page counts as gone at once. Pages also
-send a heartbeat with a random page id and say goodbye (navigator.sendBeacon)
-when they are closed; that is the fallback when no stream is open. The server
-is idle when no page is left:
+The pages of one server (editor, PDF, Home) keep one event stream open to it
+(`hold` / `serve_stream`): one page holds it, and when that page closes the
+next takes it over (common.js; a browser keeps at most six connections to one
+server, so not one per page). When the last page, its tab or the whole browser
+is closed, the connection drops and the server knows at once. Every page also
+sends a heartbeat with a random page id and says goodbye
+(navigator.sendBeacon) when it is closed; that is how the pages without the
+stream are counted. The server is idle when no page is left:
 
 - before the first page has connected, after `first_wait` seconds
   (a cold browser start can be slow);
