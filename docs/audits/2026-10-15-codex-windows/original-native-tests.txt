@@ -1,0 +1,8 @@
+test_missing_windows_setting_reproduces_policy_rejection (test_codex_runtime.CodexRuntime.test_missing_windows_setting_reproduces_policy_rejection) ... ok
+test_native_apply_patch_edits_scoped_file_and_denies_other_files (test_codex_runtime.CodexRuntime.test_native_apply_patch_edits_scoped_file_and_denies_other_files) ... ok
+test_reads_work_and_native_writes_follow_each_turn_scope (test_codex_runtime.CodexRuntime.test_reads_work_and_native_writes_follow_each_turn_scope) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 28.038s
+
+OK

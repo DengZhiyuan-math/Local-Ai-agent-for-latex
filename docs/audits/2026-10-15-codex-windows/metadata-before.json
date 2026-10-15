@@ -1,0 +1,22 @@
+[
+  {
+    "path": ".aws/protected",
+    "after": "original",
+    "output": "patch rejected: writing outside of the project; rejected by user approval settings"
+  },
+  {
+    "path": "nested/.git/protected",
+    "after": "changed",
+    "output": "Exit code: 0\nWall time: 0.4 seconds\nOutput:\nSuccess. Updated the following files:\nM nested/.git/protected\n"
+  },
+  {
+    "path": ".codex/protected",
+    "after": "original",
+    "output": "patch rejected: writing outside of the project; rejected by user approval settings"
+  },
+  {
+    "path": "nested/.agents/protected",
+    "after": "changed",
+    "output": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nM nested/.agents/protected\n"
+  }
+]

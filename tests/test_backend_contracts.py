@@ -165,7 +165,10 @@ class CodexPermissions(unittest.TestCase):
         if not codex.bin():
             self.skipTest("Codex CLI is not installed")
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp).resolve()
+            base = Path(tmp).resolve()
+            root, home = base / "project", base / "codex-home"
+            root.mkdir()
+            home.mkdir()
             for rel in ("main.tex", "other.tex", "figure.png"):
                 (root / rel).write_text("original")
             job = job_for(root=root, mode="edit", scope=["main.tex"])
@@ -175,7 +178,20 @@ class CodexPermissions(unittest.TestCase):
             self.assertIn('default_permissions="prism-editor"', config)
             if not os.environ.get("PRISM_NATIVE_CODEX"):
                 return  # Native sandbox startup requires host permission; opt in explicitly.
-            program = """import json
+            if os.name == "nt":
+                # The Windows sandbox user may not run a per-user Python install
+                # (Access is denied); the system PowerShell is always runnable.
+                program = ["powershell", "-NoProfile", "-Command", """$result = @{}
+foreach ($name in @('main.tex', 'other.tex', 'figure.png')) {
+    try {
+        Set-Content -LiteralPath $name -Value 'changed' -ErrorAction Stop
+        $result[$name] = 'allowed'
+    } catch { $result[$name] = 'denied' }
+}
+$result | ConvertTo-Json -Compress
+"""]
+            else:
+                program = [sys.executable, "-B", "-c", """import json
 from pathlib import Path
 result = {}
 for name in ('main.tex', 'other.tex', 'figure.png'):
@@ -185,13 +201,14 @@ for name in ('main.tex', 'other.tex', 'figure.png'):
     except PermissionError:
         result[name] = 'denied'
 print(json.dumps(result))
-"""
+"""]
             sandbox = [codex.bin(), "sandbox", "-P", "prism-editor", "-C", str(root)]
             for value in config:
-                if value.startswith("permissions."):
+                if value.startswith(("permissions.", "windows.")):
                     sandbox += ["-c", value]
-            p = subprocess.run(sandbox + ["--", sys.executable, "-B", "-c", program],
-                               capture_output=True, text=True, timeout=30)
+            p = subprocess.run(sandbox + ["--", *program],
+                               capture_output=True, text=True, timeout=30,
+                               env={**os.environ, "CODEX_HOME": str(home)})
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(json.loads(p.stdout), {"main.tex": "allowed", "other.tex": "denied",
                                                    "figure.png": "denied"})

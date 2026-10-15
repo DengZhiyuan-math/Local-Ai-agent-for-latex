@@ -1,0 +1,85 @@
+test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) ... 
+  test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config', resumed='--ignore-user-config --ignore-rules') ... FAIL
+  test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config --ignore-rules', resumed='--ignore-user-config') ... FAIL
+  test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config --ignore-rules', resumed='--ignore-rules') ... FAIL
+test_gui_finds_bundled_native_cli_and_follows_updates (test_codex_discovery.CodexDiscovery.test_gui_finds_bundled_native_cli_and_follows_updates) ... ok
+test_missing_desktop_installation_is_unavailable (test_codex_discovery.CodexDiscovery.test_missing_desktop_installation_is_unavailable) ... ok
+test_one_disappearing_bundle_does_not_hide_another_installation (test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation) ... FAIL
+test_override_and_path_take_precedence (test_codex_discovery.CodexDiscovery.test_override_and_path_take_precedence) ... ok
+test_other_platforms_do_not_select_a_windows_sandbox (test_codex_discovery.CodexIsolation.test_other_platforms_do_not_select_a_windows_sandbox) ... ok
+test_turn_disables_global_hooks_without_changing_user_settings (test_codex_discovery.CodexIsolation.test_turn_disables_global_hooks_without_changing_user_settings) ... ok
+test_windows_turn_enables_native_sandbox_even_with_user_config_ignored (test_codex_discovery.CodexIsolation.test_windows_turn_enables_native_sandbox_even_with_user_config_ignored) ... ok
+test_existing_nested_metadata_is_read_only (test_codex_discovery.CodexProtectedPaths.test_existing_nested_metadata_is_read_only) ... FAIL
+test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) ... 
+  test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.codex') ... FAIL
+  test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.agents') ... FAIL
+  test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.aws') ... FAIL
+
+======================================================================
+FAIL: test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config', resumed='--ignore-user-config --ignore-rules')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 90, in test_requires_both_isolation_flags_for_new_and_resumed_turns
+    self.assertIn("Update Codex CLI", self.check(fresh, resumed) or "")
+AssertionError: 'Update Codex CLI' not found in ''
+
+======================================================================
+FAIL: test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config --ignore-rules', resumed='--ignore-user-config')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 90, in test_requires_both_isolation_flags_for_new_and_resumed_turns
+    self.assertIn("Update Codex CLI", self.check(fresh, resumed) or "")
+AssertionError: 'Update Codex CLI' not found in ''
+
+======================================================================
+FAIL: test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) (fresh='--ignore-user-config --ignore-rules', resumed='--ignore-rules')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 90, in test_requires_both_isolation_flags_for_new_and_resumed_turns
+    self.assertIn("Update Codex CLI", self.check(fresh, resumed) or "")
+AssertionError: 'Update Codex CLI' not found in ''
+
+======================================================================
+FAIL: test_one_disappearing_bundle_does_not_hide_another_installation (test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 67, in test_one_disappearing_bundle_does_not_hide_another_installation
+    self.assertEqual(codex_bin(), str(good))
+AssertionError: None != 'C:\\Users\\dengz\\AppData\\Local\\Temp\\[44 chars].exe'
+
+======================================================================
+FAIL: test_existing_nested_metadata_is_read_only (test_codex_discovery.CodexProtectedPaths.test_existing_nested_metadata_is_read_only)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 119, in test_existing_nested_metadata_is_read_only
+    self.assertEqual(policy.get(str(root / "nested" / name)), "read")
+AssertionError: None != 'read'
+
+======================================================================
+FAIL: test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.codex')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 106, in test_scoped_files_cannot_reopen_protected_metadata
+    self.assertNotIn(str(root / job.scope[0]),
+AssertionError: 'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.codex\\protected' unexpectedly found in {'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.codex\\protected'}
+
+======================================================================
+FAIL: test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.agents')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 106, in test_scoped_files_cannot_reopen_protected_metadata
+    self.assertNotIn(str(root / job.scope[0]),
+AssertionError: 'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.agents\\protected' unexpectedly found in {'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.agents\\protected'}
+
+======================================================================
+FAIL: test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) (name='.aws')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_discovery.py", line 106, in test_scoped_files_cannot_reopen_protected_metadata
+    self.assertNotIn(str(root / job.scope[0]),
+AssertionError: 'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.aws\\protected' unexpectedly found in {'C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp1ar9arti\\nested\\.aws\\protected'}
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.016s
+
+FAILED (failures=8)

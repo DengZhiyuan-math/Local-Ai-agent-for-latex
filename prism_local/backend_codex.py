@@ -29,6 +29,7 @@ import mcp_compile
 import sessionmeta
 
 PROFILE = "prism-editor"
+PROTECTED = {".git", ".codex", ".agents", ".aws"}
 
 
 @lru_cache(maxsize=8)
@@ -39,10 +40,12 @@ def runtime_support(bin_path: str, stamp: int) -> str | None:
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
         if version.returncode or not match or tuple(map(int, match.groups())) < (0, 138, 0):
             return "This Codex CLI version lacks the required named permission profiles. Update Codex CLI."
-        p = subprocess.run([bin_path, "exec", "--help"], capture_output=True, text=True,
-                           timeout=10, **NO_WINDOW)
-        if p.returncode or "--ignore-user-config" not in p.stdout:
-            return "This Codex CLI version lacks isolated per-turn configuration. Update Codex CLI."
+        for subcommand in (["exec"], ["exec", "resume"]):
+            p = subprocess.run([bin_path, *subcommand, "--help"], capture_output=True, text=True,
+                               timeout=10, **NO_WINDOW)
+            if p.returncode or any(flag not in p.stdout for flag in
+                                   ("--ignore-user-config", "--ignore-rules")):
+                return "This Codex CLI version lacks isolated per-turn configuration. Update Codex CLI."
     except (OSError, subprocess.TimeoutExpired) as e:
         return f"Could not check Codex CLI compatibility: {e}"
     return None
@@ -57,9 +60,53 @@ CODEX_FILE_TOOL_RULE = """\
 
 def codex_bin() -> str | None:
     home = Path.home()
-    return find_bin("CODEX_BIN", "codex", (str(home / ".local/bin/codex"),
+    # A GUI launcher often has an older PATH than the terminal. The Windows
+    # desktop app bundles a native CLI in a versioned directory outside PATH.
+    # Resolve it each time so app updates do not leave a pinned, missing binary.
+    binary = find_bin("CODEX_BIN", "codex", (str(home / ".local/bin/codex"),
+                                           str(home / ".local/bin/codex.exe"),
                                            str(home / ".npm-global/bin/codex"),
                                            "/usr/local/bin/codex", "/opt/homebrew/bin/codex"))
+    if binary or os.name != "nt":
+        return binary
+    local = Path(os.environ.get("LOCALAPPDATA") or home / "AppData/Local")
+    candidates = []
+    try:
+        for path in (local / "OpenAI/Codex/bin").glob("*/codex.exe"):
+            try:
+                if path.is_file():
+                    candidates.append((path.stat().st_mtime_ns, str(path)))
+            except OSError:
+                continue  # An update may remove one version while we inspect it.
+    except OSError:
+        pass
+    return max(candidates)[1] if candidates else None
+
+
+def protected_path(path: Path) -> bool:
+    parts = path.parts if os.name != "nt" else (p.casefold() for p in path.parts)
+    return any(part in PROTECTED for part in parts)
+
+
+def protected_paths(root: Path):
+    """Protect existing nested metadata too, without following directory links.
+
+    Exact subtree rules are portable; recursive read globs are not on all CLI builds.
+    Re-scan each turn so metadata added between turns is also protected.
+    """
+    yield from (root / name for name in sorted(PROTECTED))
+
+    def unreadable(error):
+        raise error  # Do not silently grant writes to a subtree we could not inspect.
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
+        parent = Path(directory)
+        for name in sorted(dirs + files):
+            if protected_path(Path(name)):
+                yield parent / name
+        # resolve also detects Windows junctions on Python versions before is_junction.
+        dirs[:] = [name for name in dirs if not protected_path(Path(name))
+                   and (parent / name).resolve() == parent / name]
 
 
 def _rel(p: str, root: Path) -> str:
@@ -128,12 +175,18 @@ class Codex(CliBackend):
         rules = {":root" if os.name == "nt" else "/": "read"}
         if job.mode == "edit":
             if job.scope:
-                rules.update({str(project_path(root, rel)): "write" for rel in job.scope})
+                for rel in job.scope:
+                    path = project_path(root, rel)
+                    # A specific file write would override a broader metadata read rule.
+                    # Check both the supplied name and resolved target (internal links).
+                    if not protected_path(Path(rel.replace("\\", "/"))) and \
+                            not protected_path(path.relative_to(root)):
+                        rules[str(path)] = "write"
             else:
                 rules[str(root)] = "write"
             # Never grant writes through an external link or to runtime instructions.
-            for name in (".git", ".codex", ".agents"):
-                rules[str(root / name)] = "read"
+            for path in protected_paths(root):
+                rules[str(path)] = "read"
         table = "{" + ",".join(f"{json.dumps(p)}={json.dumps(v)}" for p, v in rules.items()) + "}"
         return [f'default_permissions="{PROFILE}"',
                 f"permissions.{PROFILE}.filesystem={table}",
@@ -142,8 +195,13 @@ class Codex(CliBackend):
     def command(self, job: Job) -> tuple[list[str], str]:
         cmd = [self.bin(), "exec", "--json", "--skip-git-repo-check",
                "--ignore-user-config", "--ignore-rules"]
-        for setting in self.permission_config(job) + ['approval_policy="never"',
-                'web_search="disabled"', "features.apps=false", "mcp_servers={}"]:
+        # Ignoring user config also drops windows.sandbox. Without an enabled
+        # Windows sandbox, exec's never-approve policy rejects even file reads.
+        # Select the native sandbox explicitly; keep the per-turn filesystem
+        # profile and user hooks/MCP isolation intact.
+        platform_config = ['windows.sandbox="elevated"'] if os.name == "nt" else []
+        for setting in self.permission_config(job) + platform_config + ['approval_policy="never"',
+                'web_search="disabled"', "features.apps=false", "features.hooks=false", "mcp_servers={}"]:
             cmd += ["-c", setting]
         if job.may_compile:
             cfg = mcp_compile.config(job.server_url)

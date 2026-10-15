@@ -1,0 +1,18 @@
+[
+  {
+    "path": "nested/.git/protected",
+    "scope": null,
+    "glob": true,
+    "after": "original",
+    "output": "1 != 0 : Error: filesystem path `\"C:\\\\Users\\\\dengz\\\\AppData\\\\Local\\\\Temp\\\\prism-codex-audit-_ax0bmjg\\\\**\\\\` must be absolute, use `~/...`, or start with `:`\n"
+  },
+  {
+    "path": ".codex/protected",
+    "scope": [
+      ".codex/protected"
+    ],
+    "glob": false,
+    "after": "changed",
+    "output": "Exit code: 0\nWall time: 0.3 seconds\nOutput:\nSuccess. Updated the following files:\nM .codex/protected\n"
+  }
+]

@@ -1,0 +1,46 @@
+{
+  "completed_at_utc": "2026-10-15T07:24:08.003666+00:00",
+  "d_commit": "c5d3dd5bc05b20d6ff3c7831b0184153438e996c",
+  "d_commit_file_count": 24,
+  "d_sources_unchanged": true,
+  "d_source_count": 13,
+  "codex_committed": false,
+  "pushed": false,
+  "index_empty": true,
+  "diff_check": "passed",
+  "python_39_grammar": "passed (runtime tested on Python 3.12.14)",
+  "tested_cli": "codex-cli 0.162.0-alpha.17.2",
+  "native": {
+    "total": 19,
+    "passed": 19,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0,
+    "seconds": 39.922
+  },
+  "full": {
+    "total": 444,
+    "passed": 415,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 29,
+    "seconds": 521.593
+  },
+  "fixture_resource_warnings": 2,
+  "fixture_warning_record": "fixture-warnings.txt",
+  "source_sha256": {
+    "README.md": "A5DE246EA9C8865900601A7EDA58B87B23E19F842FEA92B2E235694C37B49ED6",
+    "prism_local/backend_codex.py": "5A95AE51AF88A7847868C006958ECD6A481466CB68320FDB999BCEFA34942DE3",
+    "tests/test_backend_contracts.py": "F9C728CC07355666E195FEAE90E5C9633979B5891755F3270A3AA6FD252F7AE7",
+    "tests/test_codex_discovery.py": "7C7C619664E5E3E5EE1DB18DBAB75405BCB82312285BB8AEBD8FCD794C1E7E38",
+    "tests/test_codex_runtime.py": "7F19899F13BE85C4E1210AE8B2567C4444AC5C13D230069DB5100A9B174D6453"
+  },
+  "source_unchanged_after_native_validation": true,
+  "live_codex_home_sandbox_lock_repaired": false,
+  "native_probe_environment": "Temporary CODEX_HOME and local scripted Responses HTTP server; no real model calls",
+  "limitations": [
+    "Existing nested metadata protected at turn startup; newly created nested metadata in the same turn is not pre-protected by enumeration.",
+    "Native coverage is Windows elevated sandbox on the recorded CLI only.",
+    "Active CODEX_HOME helper directory lock initialization remains a separate environment problem; no global ACL/cache/process modifications were made."
+  ]
+}

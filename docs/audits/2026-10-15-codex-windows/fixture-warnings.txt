@@ -1,0 +1,7 @@
+Observed on the unified exec process's stderr during the full regression run.
+The Python unittest stream log does not redirect child processes' OS stderr.
+These are the same fixture warning types reproduced on the D baseline; see
+../2026-10-14-refactor-d/baseline-fixture-warnings.txt and report.md.
+
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-643gwr4h\\.git\\prism-local-files.lock' mode='a+' encoding='cp1252'>
+sys:1: ResourceWarning: unclosed file <_io.TextIOWrapper name='C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-5ttwipxm\\main.tex' mode='r' encoding='cp1252'>

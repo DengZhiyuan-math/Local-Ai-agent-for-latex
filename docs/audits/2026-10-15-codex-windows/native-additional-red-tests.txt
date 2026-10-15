@@ -1,0 +1,32 @@
+test_full_project_edit_cannot_patch_a_sibling_outside_the_project (test_codex_runtime.CodexRuntime.test_full_project_edit_cannot_patch_a_sibling_outside_the_project) ... ok
+test_edit_compile_mcp_works_with_native_command_network_disabled (test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled) ... FAIL
+test_command_policy_enforces_scope_with_the_native_sandbox (test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox) ... FAIL
+
+======================================================================
+FAIL: test_edit_compile_mcp_works_with_native_command_network_disabled (test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_codex_runtime.py", line 244, in test_edit_compile_mcp_works_with_native_command_network_disabled
+    self.assertEqual(builds, [("/api/build", {"mode": "draft", "clean": False, "by": "agent"})])
+AssertionError: Lists differ: [] != [('/api/build', {'mode': 'draft', 'clean': False, 'by': 'agent'})]
+
+Second list contains 1 additional elements.
+First extra element 0:
+('/api/build', {'mode': 'draft', 'clean': False, 'by': 'agent'})
+
+- []
++ [('/api/build', {'by': 'agent', 'clean': False, 'mode': 'draft'})]
+
+======================================================================
+FAIL: test_command_policy_enforces_scope_with_the_native_sandbox (test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "D:\DynNum\prism-local\tests\test_backend_contracts.py", line 195, in test_command_policy_enforces_scope_with_the_native_sandbox
+    self.assertEqual(p.returncode, 0, p.stderr)
+AssertionError: 1 != 0 : windows sandbox failed: sandbox provisioning failed: helper_sandbox_lock_failed: lock sandbox bin dir \\?\C:\Users\dengz\.codex\.sandbox-bin failed: open directory \\?\C:\Users\dengz\.codex\.sandbox-bin
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 9.640s
+
+FAILED (failures=2)
