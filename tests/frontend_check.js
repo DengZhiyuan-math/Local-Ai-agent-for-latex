@@ -166,19 +166,19 @@ class FakeDoc {
 function fakeServer(...answers) {
   const calls = [];
   let gate = null;
-  const api = async (path, body) => {
+  const saveFile = async (body) => {
     calls.push(body);
     if (gate) { const g = gate; gate = null; await g.promise; }
     const a = answers.length > 1 ? answers.shift() : answers[0];
     return typeof a === "function" ? a(body) : a;
   };
   const hold = () => { let release; gate = { promise: new Promise((r) => { release = r; }) }; return () => release(); };
-  return { api, calls, hold };
+  return { saveFile, calls, hold };
 }
 const saved = (mtime) => ({ _status: 200, ok: true, mtime });
 function store(server, extra = {}) {
   const changes = [], notes = [];
-  const s = Tabs.createTabStore({ api: server.api, sleep: () => Promise.resolve(), notify: (m) => notes.push(m),
+  const s = Tabs.createTabStore({ saveFile: server.saveFile, sleep: () => Promise.resolve(), notify: (m) => notes.push(m),
                                   onChange: (t, what) => changes.push(what), ...extra });
   return { s, changes, notes };
 }

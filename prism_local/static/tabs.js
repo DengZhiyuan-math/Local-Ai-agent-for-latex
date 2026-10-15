@@ -1,7 +1,8 @@
 /* The editor's open files and how each is saved (app.js draws them). Plain: the page gives
    what it needs, so the Node checks drive it with a fake document, server and clock.
 
-     const TABS = Tabs.createTabStore({api, isHeld, sleep, onChange, notify});
+     const TABS = Tabs.createTabStore({saveFile, isHeld, sleep, onChange, notify});
+                                             // saveFile: client.js's (POST /api/file)
      const t = TABS.add(path, doc, mtime);   // doc: a CodeMirror Doc (getValue, setValue,
                                              // changeGeneration, isClean)
      await TABS.save(t)                       // {ok} or {ok: false, reason, message}
@@ -22,7 +23,7 @@ const Tabs = (() => {
   // Why saving did not happen, most needing you first (saveAll reports that one).
   const REASONS = ["conflict", "failed", "held"];
 
-  function createTabStore({ api, isHeld = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
+  function createTabStore({ saveFile, isHeld = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
                             onChange = () => {}, notify = () => {}, busyWait = 1000 }) {
     const tabs = [];
     let heldNoted = false;
@@ -59,7 +60,7 @@ const Tabs = (() => {
         gen = t.doc.changeGeneration();
         // In flight: the file on disk is this save's until its answer brings the new mtime.
         t.inFlight = true;
-        try { r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
+        try { r = await saveFile({ path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
         finally { t.inFlight = false; }
         if (!(r._status === 503 && r.busy)) break;
         if (!waited) notify(`${t.path}: ${r.error || "busy"}.`);

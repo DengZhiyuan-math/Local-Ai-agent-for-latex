@@ -51,7 +51,7 @@ function loadPdf(mtime, main) {
 }
 // Every 2 s, one request at a time; not while this tab is hidden (at once when shown).
 const checkPdf = poller(async () => {
-  const r = await api("/api/pdfstat");
+  const r = await Q.pdfstat();
   if (r._status === 200) await loadPdf(r.mtime, r.main);
 }, 2000);
 

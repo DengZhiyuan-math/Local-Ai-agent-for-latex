@@ -9,7 +9,7 @@ const S = {
 };
 // The open files and how each is saved (tabs.js); S.tabs is its list.
 const TABS = Tabs.createTabStore({
-  api, isHeld: () => C.editTurn, notify: (m) => toast(m),
+  saveFile: Q.saveFile, isHeld: () => C.editTurn, notify: (m) => toast(m),
   onChange: (t, what) => { renderTabs(); showBanner(t); if (what === "saved") scheduleSymbols(); },
 });
 S.tabs = TABS.tabs;
@@ -22,7 +22,7 @@ $("#btn-home").onclick = async () => {
   let fresh = true;
   try { fresh = !!w && w.location.href === "about:blank"; } catch { fresh = false; }
   if (w && fresh) w.document.body.innerHTML = '<p style="font:15px system-ui;color:#6f6a60;margin:40vh auto;text-align:center">Opening your projects…</p>';
-  const r = await api("/api/home", {}).catch(() => ({ error: "server not reachable" }));
+  const r = await Q.home().catch(() => ({ error: "server not reachable" }));
   if (r.url) {
     // An existing Home tab only needs to load again if its server had to be restarted.
     if (!w) location.href = r.url;
@@ -81,7 +81,7 @@ const SNIP = Snippets.attach(cm, {
 const SNIP_FILE = { path: "", content: null, error: null, count: 0 };
 
 async function loadSnippets() {
-  const r = await api("/api/snippets").catch(() => ({}));
+  const r = await Q.snippets().catch(() => ({}));
   SNIP_FILE.path = r.path || ""; SNIP_FILE.content = r.content ?? null;
   try {
     const u = Snippets.load(r.content);
@@ -148,7 +148,7 @@ $("#snip-dialog").addEventListener("keydown", (e) => { if (e.key === "Escape") {
 $("#snip-save").onclick = async () => {
   const text = snipCm.getValue();
   try { Snippets.load(text); } catch (e) { $("#snip-error").textContent = "Not saved: " + (e.message || e); return; }
-  const r = await api("/api/snippets", { content: text });
+  const r = await Q.saveSnippets(text);
   if (r._status !== 200) { $("#snip-error").textContent = "Not saved: " + (r.error || r._status); return; }
   await loadSnippets();
   snipClose();
@@ -167,7 +167,7 @@ const isDirty = (t) => TABS.dirty(t);
 // get one tab), and the files of the last session download together (see init).
 const opening = new Map();       // path -> the /api/file request
 function fileRequest(path) {
-  if (!opening.has(path)) opening.set(path, api("/api/file?path=" + encodeURIComponent(path)));
+  if (!opening.has(path)) opening.set(path, Q.file(path));
   return opening.get(path);
 }
 // The tab of `path`, its file fetched if it is not open yet; null if it cannot be had.
@@ -289,7 +289,7 @@ const saveAll = () => TABS.saveAll();
 
 // `discard`: the author chose the disk version over unsaved edits (the conflict banner).
 async function reloadFromDisk(t, discard = false) {
-  const r = await api("/api/file?path=" + encodeURIComponent(t.path));
+  const r = await Q.file(t.path);
   if (r._status !== 200) return;
   const what = TABS.loaded(t, r.content, discard);   // typed into while it was fetched: "kept"
   if (what === "kept") return;
@@ -379,7 +379,7 @@ $("#tree").closest("section").addEventListener("contextmenu", (e) => {
 });
 
 async function fileAction(action, body) {
-  const r = await api("/api/files/" + action, body);
+  const r = await Q.fileAction(action, body);
   if (r._status !== 200) { toast(r.error || `Could not ${action}`); return null; }
   return r;
 }
@@ -469,7 +469,7 @@ async function uploadFile(file, destination = "attachment") {
     reader.onerror = () => reject(reader.error);
     reader.readAsDataURL(file);
   });
-  const r = await api("/api/upload", { name: file.name || "pasted.png", data, destination });
+  const r = await Q.upload({ name: file.name || "pasted.png", data, destination });
   if (r.error || !r.path) throw new Error(r.error || "Upload failed.");
   return r;
 }
@@ -539,7 +539,7 @@ $("#btn-refresh-outline").onclick = () => loadSymbols();
 let symbolsSeq = 0;
 async function loadSymbols() {
   const seq = ++symbolsSeq;
-  const r = await api("/api/symbols");
+  const r = await Q.symbols();
   if (seq === symbolsSeq && r._status === 200) { S.symbols = r; renderOutline(); }
 }
 // Labels, outline and macros follow your own edits too, a moment after they are saved
@@ -576,14 +576,14 @@ function renameProject() {
     if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
     const saved = await saveAll();
     if (!saved.ok) { showProjectName(old, S.projectFolder); return toast(Tabs.unsavedWhy(saved)); }
-    let r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
+    let r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
     if (r._status === 404) {
       // This project's server started before renaming existed: restart it with the new
       // code, rename, and load the page again.
       toast("Updating this project's server to rename it…");
       const ok = await restartServer();
       if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
-      r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
+      r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
       if (r._status === 200) {
         if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(); }
         return reloadPage();
@@ -617,7 +617,7 @@ const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
   const config = BUILD.loaded ? null : loadConfig();
-  const r = await api("/api/tree");
+  const r = await Q.tree();
   await config;
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
@@ -692,12 +692,12 @@ $("#btn-sync").onclick = async (e) => {
   e.stopPropagation(); syncMenu($("#sync-menu").hidden);
   if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) {
     // Created in a terminal since the editor started? Look once, now that you ask.
-    const st = await api("/api/git/recheck", {}).catch(() => null);
+    const st = await Q.recheck().catch(() => null);
     if (st && st._status === 200) { delete st._status; renderSync(st); }
     if (!$("#sync-publish").hidden) loadPublish();
   }
   if (!$("#sync-menu").hidden && !S.githubUrl) {
-    const r = await api("/api/git/github").catch(() => ({}));
+    const r = await Q.github().catch(() => ({}));
     S.githubUrl = r.github || "";
     if (S.githubUrl) { $("#sync-github").href = S.githubUrl; $("#sync-github").hidden = false; }
   }
@@ -716,7 +716,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   // changes brings in (no "changed on disk" clash with text not saved yet).
   if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll()).ok) return;
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
-  const r = await api("/api/git/sync", { action: b.dataset.sync, target: b.dataset.sync === "bind" ? S.sync.target : undefined }).catch(() => null);
+  const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined).catch(() => null);
   if (r && r._status === 200) renderSync(r);
   else if (r && r.error) toast(r.error);
   await poll();
@@ -726,7 +726,7 @@ async function loadPublish() {
   const f = $("#sync-publish"), go = $("#pub-go"), note = $("#pub-note");
   if (f.dataset.loaded) return;
   note.textContent = "Checking…"; go.disabled = true;
-  const r = await api("/api/git/publish").catch(() => null);
+  const r = await Q.publishInfo().catch(() => null);
   if (!r || r._status !== 200) { note.textContent = "Could not check: " + ((r && r.error) || "server not reachable"); return; }
   f.dataset.loaded = "1";
   if (!f.elements.name.value) f.elements.name.value = r.name;
@@ -750,7 +750,7 @@ $("#sync-publish").addEventListener("submit", async (e) => {
   const saved = await saveAll();
   if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   go.disabled = true; go.textContent = "Creating…";
-  const r = await api("/api/git/publish", {
+  const r = await Q.publish({
     name: f.elements.name.value.trim(),
     leave_out: [...f.querySelectorAll('input[name="leave_out"]:checked')].map((i) => i.value),
   }).catch(() => ({ error: "server not reachable" }));
@@ -773,7 +773,7 @@ $("#sync-clash").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-theirs]"); if (!b) return;
   e.stopPropagation(); syncMenu(false);
   const seq = ++diffSeq;
-  const r = await api("/api/git/theirs?path=" + encodeURIComponent(b.dataset.theirs));
+  const r = await Q.theirs(b.dataset.theirs);
   if (seq !== diffSeq) return;                        // the diff view was asked for again
   if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
   const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
@@ -781,7 +781,7 @@ $("#sync-clash").addEventListener("click", async (e) => {
   openPanel("diff");
 });
 $("#sync-auto").onchange = async (e) => {
-  const r = await api("/api/git/sync", { action: e.target.checked ? "on" : "off" });
+  const r = await Q.sync(e.target.checked ? "on" : "off");
   if (r._status === 200) renderSync(r);
   else { e.target.checked = !e.target.checked; toast("Could not change sync: " + (r.error || "HTTP " + r._status)); }
 };
@@ -799,7 +799,7 @@ async function showHistory(path = S.active) {
   view.innerHTML = "";
   if (!path) { list.innerHTML = `<li class="none">Open a file to see its history.</li>`; return; }
   list.innerHTML = `<li class="none">Loading the history of ${esc(path)}…</li>`;
-  const r = await api("/api/git/log?path=" + encodeURIComponent(path));
+  const r = await Q.log(path);
   if (seq !== histSeq) return;
   const commits = r.commits || [];
   if (!commits.length) { list.innerHTML = `<li class="none">${esc(r.error || `No commits of ${path} yet.`)}</li>`; return; }
@@ -811,7 +811,7 @@ $("#hist-list").addEventListener("click", async (e) => {
   const li = e.target.closest("li[data-rev]"); if (!li) return;
   document.querySelectorAll("#hist-list li.sel").forEach((x) => x.classList.remove("sel")); li.classList.add("sel");
   const seq = ++histShowSeq;
-  const r = await api(`/api/git/show?rev=${encodeURIComponent(li.dataset.rev)}&path=${encodeURIComponent(li.dataset.path)}`);
+  const r = await Q.show(li.dataset.rev, li.dataset.path);
   if (seq !== histShowSeq) return;
   if (r._status !== 200) { $("#hist-view").innerHTML = `<div class="hist-bar">${esc("Could not show this version: " + (r.error || "HTTP " + r._status))}</div>`; return; }
   const diff = (r.diff || "").split("\n").filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join("\n");
@@ -834,7 +834,7 @@ async function restartServer() {
   if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
   const saved = await saveAll();
   if (!saved.ok) return Tabs.unsavedWhy(saved);
-  const r = await api("/api/restart", {}).catch(() => ({ error: "server not reachable" }));
+  const r = await Q.restart().catch(() => ({ error: "server not reachable" }));
   if (r.error) return r.error;
   return waitForNewServer();
 }
@@ -876,7 +876,7 @@ function showCompletions(ed, explicit) {
 }
 
 async function loadConfig() {
-  const r = await api("/api/config");
+  const r = await Q.config();
   if (r._status !== 200) return;
   BUILD.loaded = true;
   BUILD.modes = r.modes || [];
@@ -938,7 +938,7 @@ async function compile(clean = false, active = S.active) {
     const st = $("#build-status");
     st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
     setCompileButton(true);
-    const r = await api("/api/build", { mode, clean, active });
+    const r = await Q.build({ mode, clean, active });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
     await showBuild(r);
@@ -949,7 +949,7 @@ async function compile(clean = false, active = S.active) {
     S.building = false; setCompileButton(false);
   }
 }
-$("#btn-compile").onclick = () => S.building ? api("/api/build/stop", {}) : compile();
+$("#btn-compile").onclick = () => S.building ? Q.buildStop() : compile();
 $("#btn-clean-build").onclick = () => { compileMenu(false); compile(true); };
 
 /* Compile menu: build mode and auto-compile, on the ▾ half of the Compile button. */
@@ -1029,7 +1029,7 @@ $("#panel-toggle").onclick = () => {
 let diffSeq = 0;
 async function showDiff(path) {
   const seq = ++diffSeq;
-  const r = await api("/api/diff" + (path ? "?path=" + encodeURIComponent(path) : ""));
+  const r = await Q.diff(path || undefined);
   if (seq !== diffSeq) return;
   const what = path ? path : "this project";
   let text;
@@ -1145,7 +1145,7 @@ async function forwardSync() {
   const t = activeTab(); if (!t || !t.path.endsWith(".tex")) return;
   if (!S.pdfMtime) return toast("No PDF yet — compile first.");
   const line = cm.getCursor().line + 1;
-  const r = await api(`/api/synctex/forward?file=${encodeURIComponent(t.path)}&line=${line}`);
+  const r = await Q.forward(t.path, line);
   if (r._status !== 200) return toast("No PDF location for this line (compile, or the line produces no output).");
   if (POP.alive && pdfChannel) pdfChannel.postMessage({ type: "forward", r });
   else PV.highlight(r);
@@ -1154,7 +1154,7 @@ $("#btn-forward").onclick = () => forwardSync();
 
 // Returns what happened, for the pop-out viewer to show: {ok, file, line} or {msg}.
 async function inverseJump(page, x, y) {
-  const r = await api(`/api/synctex/inverse?page=${page}&x=${x.toFixed(2)}&y=${y.toFixed(2)}`);
+  const r = await Q.inverse(page, x, y);
   const fail = (msg) => { toast(msg); return { msg }; };
   if (r._status !== 200 || !r.file) return fail("No source location found here.");
   if (!S.files.some((f) => f.path === r.file)) return fail(`Source is ${r.file}:${r.line} (not editable here).`);
@@ -1226,7 +1226,7 @@ const provSet = (k, v) => { const key = conversationKey(k); if (key) store.set(k
 // it is the one allowed in Home → Settings. A mismatch stops every turn on the server.
 async function loadAccount() {
   const el = $("#agent-account");
-  const r = await api("/api/agent/account?provider=" + encodeURIComponent(C.provider || "")).catch(() => null);
+  const r = await Q.account(C.provider).catch(() => null);
   const a = r && r._status === 200 && r.account;
   if (!a) { el.hidden = true; return; }
   el.hidden = false;
@@ -1436,7 +1436,7 @@ async function referenceBlock(mentions) {
     if (!m.from) { b += `File: ${m.file}\n`; continue; }
     let txt = C.snips[m.token];
     if (txt === undefined) {
-      const r = await api("/api/file?path=" + encodeURIComponent(m.file));
+      const r = await Q.file(m.file);
       txt = (r.content || "").split("\n").slice(m.from - 1, m.to).join("\n");
     }
     b += `File: ${m.file}, lines ${m.from}–${m.to} (change only these lines unless the request needs more):\n\`\`\`latex\n${txt}\n\`\`\`\n`;
@@ -1563,7 +1563,7 @@ const AV = {
     v.setValue(""); v.refresh();
     if (name === "Write") { this.base = ""; return; }
     // An edit changes the file as it is on disk.
-    const r = await api("/api/file?path=" + encodeURIComponent(path)).catch(() => ({}));
+    const r = await Q.file(path).catch(() => ({}));
     if (this.id !== id) return;
     v.setValue(r.content || ""); this.base = v.getValue();
     this.render();
@@ -1668,7 +1668,7 @@ const ATT = {
         await nap(1500, 15000);
         const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
         if (!open.length) return;
-        const r = await api("/api/upload/sync?paths=" + encodeURIComponent(open.join("\n")));
+        const r = await Q.uploadSync(open);
         if (r._status !== 200) continue;
         for (const p of open) {
           if (!r[p]) continue;
@@ -1757,7 +1757,7 @@ async function sendMessage() {
   const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
   const provider = C.provider;
   if (!P.projectKey) return toast("Wait for the project identity to load.");
-  const r = await api("/api/agent", { prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
+  const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
     project_key: P.projectKey, attachments: sentFiles.map((f) => f.path) });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
   $("#chat-input").value = ""; updateScope();
@@ -1831,7 +1831,7 @@ async function followTurn(job, provider, mode) {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
     let retry = 1000;
     while (!done) {
-      const d = await api(`/api/agent/events?job=${job}&after=${after}`);
+      const d = await Q.events(job, after);
       if (d._status === 0) {
         status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
         await new Promise((res) => setTimeout(res, retry));
@@ -1986,7 +1986,7 @@ function renderQuota(rate) {
 async function checkUsage(auto = false) {
   const b = $("#quota-refresh");
   if (b) { b.disabled = true; b.textContent = "…"; }
-  const r = await api("/api/agent/usage", { provider: C.provider }).catch(() => ({}));
+  const r = await Q.usage(C.provider).catch(() => ({}));
   renderQuota(r.rate || store.get("chat.rate", null));
   if (r.error && !auto) toast(r.error);
 }
@@ -2065,7 +2065,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
   const u = ev.target.closest("[data-undo]");
   if (u) {
     if (S.tabs.some(isDirty) && !(await saveAll()).ok) return;
-    const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
+    const r = await Q.undo(+u.dataset.undo);
     if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
     u.textContent = `undone (${(r.restored || []).length})` + ((r.skipped || []).length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
@@ -2093,8 +2093,7 @@ let catalog = null;          // {skills, commands, terminal_only} from /api/agen
 
 async function loadCatalog(refresh = false) {
   if (catalog && !refresh) return catalog;
-  const q = `?provider=${encodeURIComponent(C.provider || "")}` + (refresh ? "&refresh=1" : "");
-  const r = await api("/api/agent/commands" + q).catch(() => ({}));
+  const r = await Q.commands(C.provider, refresh).catch(() => ({}));
   if (r._status === 200) catalog = r;
   return catalog;
 }
@@ -2274,7 +2273,7 @@ $("#chat-log").addEventListener("click", (e) => {
   else { $("#chat-input").value = v; $("#chat-input").focus(); updateScope(); }
 });
 
-$("#chat-send").onclick = () => { if (C.job) api("/api/agent/stop", { job: C.job }); else chatSend(); };
+$("#chat-send").onclick = () => { if (C.job) Q.stop(C.job); else chatSend(); };
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
 });
@@ -2297,7 +2296,7 @@ cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelec
 // again, less and less often, until the server answers.
 async function loadAgentInfo() {
   for (let wait = 1000; ; wait = Math.min(wait * 2, 30000)) {
-    const r = await api("/api/agent/info");
+    const r = await Q.info();
     if (r._status !== 0) {
       if (wait > 1000) { $("#chat-status").className = "status"; $("#chat-status").textContent = ""; }
       return r;

@@ -51,6 +51,14 @@ check("completion of a label", await ed.ev(`
   cm.setValue("see \\\\cref{thm"); cm.setCursor({ line: 0, ch: 13 });
   const h = computeHints(cm, false);
   return !!h && h.list.length === 1 && h.list[0].text === "thm:main" && h.from.ch === 10;`));
+// client.js on the page: each question it asks the real server is one the server knows.
+const asked = await ed.ev(`
+  const rs = { tree: await Q.tree(), config: await Q.config(), symbols: await Q.symbols(), snippets: await Q.snippets(),
+               file: await Q.file("main.tex"), log: await Q.log("main.tex"), diff: await Q.diff(), github: await Q.github(),
+               publishInfo: await Q.publishInfo(), info: await Q.info(), commands: await Q.commands(C.provider),
+               account: await Q.account(C.provider), uploadSync: await Q.uploadSync(["main.tex"]), pdfstat: await Q.pdfstat() };
+  return Object.entries(rs).filter(([, r]) => r._status === 0 || r.error === "not found").map(([k, r]) => k + ": " + (r.error || r._status));`);
+check("client.js asks routes the server answers", asked.length === 0, asked.join(" | "));
 await ed.close();
 const hm = await open(home);
 check("home search lists the project", await hm.ev(`
