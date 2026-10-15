@@ -101,13 +101,13 @@ class Project:
         return any(fnmatch.fnmatch(rel, g) for g in cfg.exclude)
 
     def resolve(self, rel: str, *, editable_only: bool = True, cfg: Config | None = None) -> Path:
-        """Map a project-relative path to a visible file, or raise ValueError."""
+        """Map a project-relative path to a visible file, or raise Refused (a ValueError)."""
         if not rel or rel.startswith("/") or "\\" in rel:
-            raise ValueError("bad path")
+            raise Refused("bad path")
         p = project_path(self.root, rel)
         r = p.relative_to(self.root).as_posix()
         if (editable_only and p.suffix not in EDITABLE_SUFFIXES) or self.excluded(r, cfg):
-            raise ValueError("not an editable file" if editable_only else "not a project file")
+            raise Refused("not an editable file" if editable_only else "not a project file")
         return p
 
     def list_files(self, *, editable_only: bool = True) -> list[str]:

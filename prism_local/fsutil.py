@@ -8,6 +8,8 @@ import threading
 import time
 from pathlib import Path
 
+from errors import Refused
+
 EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".txt", ".tikz"}
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 TEMP_SUFFIX = ".prism-tmp"      # a save half-way (replace_file): never a project's file
@@ -60,14 +62,14 @@ def project_path(root: Path, rel: str) -> Path:
     """Resolve an in-project path. Internal links are allowed; .git is off limits."""
     rel = str(rel).replace("\\", "/")
     if not rel or rel.startswith("/") or re.match(r"[A-Za-z]:", rel):
-        raise ValueError("give a path relative to the project root")
+        raise Refused("give a path relative to the project root")
     root = root.resolve()
     p = (root / rel).resolve()
     if root not in p.parents:
-        raise ValueError("the path is outside the project")
+        raise Refused("the path is outside the project")
     # Case-insensitive: on macOS (as on Windows) .GIT names the same directory.
     if any(part.casefold() == ".git" for part in (*Path(rel).parts, *p.relative_to(root).parts)):
-        raise ValueError("the .git directory is off limits")
+        raise Refused("the .git directory is off limits")
     return p
 
 
