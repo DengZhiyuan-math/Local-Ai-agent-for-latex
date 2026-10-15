@@ -40,7 +40,7 @@ import sources  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from publish import (create_github_repo, ensure_ignore, git_init, github_of, project_sync, publish_info,  # noqa: E402
                      publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
-from repository import RepoBusy, Repository  # noqa: E402
+from repository import RepoBusy, Repository, locate  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
 from errors import Conflict, NotFound  # noqa: E402
@@ -156,20 +156,14 @@ def git_info(root: Path) -> dict | None:
     repository (such as prism-local's) has none to sync with: report which one."""
     def git(*args):
         return gitenv.git(root, *args, timeout=8)
-    # Git finds a repository only through a .git in the folder or one above it (git_env
-    # drops GIT_DIR and the like): without one, there is no repository, and no git to run.
-    if not any((p / ".git").exists() for p in (root, *root.parents)):
+    place = locate(root, timeout=8)
+    if place.kind == "none":
         return None
+    toplevel = place.repo.top
+    if place.kind == "nested":
+        return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
+    shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)} if place.kind == "shared" else None
     try:
-        top = git("rev-parse", "--show-toplevel")
-        if top.returncode != 0:
-            return None
-        toplevel = Path(top.stdout.strip())
-        shared = None
-        if registry.norm(toplevel.resolve()) != registry.norm(root.resolve()):
-            if not gitsync.shared_marker(toplevel):
-                return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
-            shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)}
         r = git("status", "--porcelain", "-b", "--", ".")
     except (OSError, subprocess.SubprocessError):
         return None

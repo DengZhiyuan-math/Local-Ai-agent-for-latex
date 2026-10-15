@@ -95,5 +95,22 @@ class RepositoryTest(unittest.TestCase):
             return False
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class Locate(unittest.TestCase):
+    def test_where_a_project_folder_is_in_git(self):
+        base = tmpdir()
+        self.assertEqual(repository.locate(base).kind, "none")
+        git(base, "init", "-q", "top")
+        top = base / "top"
+        (top / "ex 2").mkdir()
+        own, inside = repository.locate(top), repository.locate(top / "ex 2")
+        self.assertEqual((own.kind, own.prefix, own.syncs), ("own", "", True))
+        self.assertEqual(own.repo.top, top.resolve())
+        self.assertEqual((inside.kind, inside.prefix, inside.syncs), ("nested", "ex 2/", False))
+        (top / repository.SHARED_MARKER).write_text('{"shared": true}', encoding="utf-8")
+        shared = repository.locate(top / "ex 2")
+        self.assertEqual((shared.kind, shared.prefix, shared.syncs), ("shared", "ex 2/", True))
+
+
 if __name__ == "__main__":
     unittest.main()

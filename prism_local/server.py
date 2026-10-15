@@ -30,13 +30,12 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from project import UPLOAD_DIR, Project, mtime  # noqa: E402
-from repository import FilesLock, RepoBusy  # noqa: E402
+from repository import FilesLock, RepoBusy, locate  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
-import build  # noqa: E402
 import httpbase  # noqa: E402
 import instances  # noqa: E402
 import publish  # noqa: E402
@@ -70,10 +69,7 @@ _GIT_PREFIX: dict = {}
 def git_prefix() -> str:
     """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
     if PROJECT.root not in _GIT_PREFIX:
-        try:
-            _GIT_PREFIX[PROJECT.root] = git("rev-parse", "--show-prefix").stdout.strip()
-        except (OSError, subprocess.SubprocessError):
-            return ""
+        _GIT_PREFIX[PROJECT.root] = locate(PROJECT.root).prefix
     return _GIT_PREFIX[PROJECT.root]
 
 

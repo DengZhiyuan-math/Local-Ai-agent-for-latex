@@ -22,10 +22,12 @@ A command that takes the index outside changing() is a bug, and raises at once.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 import threading
 import time
 from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -153,6 +155,54 @@ class FilesLock:
 
 
 # ---------------------------------------------------------------- the repository
+
+SHARED_MARKER = "prism-repo.json"
+
+
+def shared_marker(top: Path) -> bool:
+    """Whether `top` is the top of a repository shared by several projects."""
+    try:
+        return bool(json.loads((top / SHARED_MARKER).read_text(encoding="utf-8")).get("shared"))
+    except (OSError, ValueError, AttributeError):
+        return False
+
+
+@dataclass(frozen=True)
+class Place:
+    """Where a project's folder is in git. kind: "own" (the top of its repository),
+    "shared" (in a repository several projects share: its top has SHARED_MARKER),
+    "nested" (inside some other repository, such as prism-local's: none to sync with), or
+    "none". prefix: the project's path in its repository, "" or "ex2/"."""
+    kind: str
+    repo: Repository | None = None
+    prefix: str = ""
+
+    @property
+    def syncs(self) -> bool:
+        return self.kind in ("own", "shared")
+
+
+def locate(folder: Path, files: Callable[[], object] | None = None, timeout: float = 20) -> Place:
+    """The one place that tells where a project's folder is in git (see Place)."""
+    folder = Path(folder)
+    # Git finds a repository only through a .git in the folder or one above it (git_env
+    # drops GIT_DIR and the like): without one, there is none, and no git to run.
+    if not folder.is_dir() or not any((p / ".git").exists() for p in (folder, *folder.resolve().parents)):
+        return Place("none")
+    try:
+        r = gitenv.git(folder, "rev-parse", "--show-toplevel", "--absolute-git-dir", "--show-prefix",
+                       timeout=timeout)
+    except (OSError, subprocess.SubprocessError):
+        return Place("none")
+    lines = r.stdout.split("\n")
+    if r.returncode != 0 or len(lines) < 3:
+        return Place("none")
+    repo = Repository(Path(lines[0]).resolve(), Path(lines[1]), files)
+    prefix = lines[2].strip()
+    if not prefix:
+        return Place("own", repo)
+    return Place("shared" if shared_marker(repo.top) else "nested", repo, prefix)
+
 
 class Repository:
     """One git repository: its top (where paths start) and its git dir. See the module's

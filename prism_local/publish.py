@@ -17,12 +17,11 @@ import github
 import gitenv
 import gitsync
 import instances
-import registry
 import settings
 import sources
 from fsutil import write_bytes
 from projectconfig import Config
-from repository import RepoBusy, Repository
+from repository import RepoBusy, Repository, locate
 
 REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")     # a GitHub repository name
 # Text files are stored with \n line ends whatever each co-author's git does with them
@@ -44,22 +43,11 @@ def run_git(root: Path, *args: str, timeout: float = 60) -> subprocess.Completed
     return gitenv.git(root, *args, timeout=timeout, check=True)
 
 
-def repo_top(p: Path) -> Path | None:
-    try:
-        r = gitenv.git(p, "rev-parse", "--show-toplevel", timeout=20)
-    except (OSError, subprocess.SubprocessError):
-        return None
-    return Path(r.stdout.strip()).resolve() if r.returncode == 0 and r.stdout.strip() else None
-
-
 def repo_kind(p: Path) -> tuple[str, Path | None]:
-    """own | shared | nested (inside some other repository) | none, and the repository's top."""
-    top = repo_top(p) if p.is_dir() else None
-    if top is None:
-        return "none", None
-    if registry.norm(top) == registry.norm(p.resolve()):
-        return "own", top
-    return ("shared" if gitsync.shared_marker(top) else "nested"), top
+    """own | shared | nested (inside some other repository) | none, and the repository's top
+    (repository.locate)."""
+    place = locate(p)
+    return place.kind, (place.repo.top if place.repo else None)
 
 
 def project_sync(root: Path) -> gitsync.GitSync:

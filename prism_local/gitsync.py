@@ -34,7 +34,7 @@ import keepboth
 import registry
 import gitenv
 import sources
-from repository import FilesLock, RepoBusy, Repository
+from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
 import synctarget
@@ -48,7 +48,6 @@ MENU_WAIT = 2            # seconds the GitHub menu waits for a push or pull befo
 BIND_WAIT = 10           # ... and confirming a sync target, before "try again"
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
-SHARED_MARKER = "prism-repo.json"
 
 
 GUARD_MARK = "prism-local: refuse force pushes"
@@ -107,14 +106,6 @@ def _hook_path(git_dir: Path) -> Path | None:
         return None
 
 
-def shared_marker(top: Path) -> bool:
-    """Whether `top` is the top of a repository shared by several projects."""
-    try:
-        return bool(json.loads((top / SHARED_MARKER).read_text(encoding="utf-8")).get("shared"))
-    except (OSError, ValueError, AttributeError):
-        return False
-
-
 def record_move(old: Path, new: Path) -> str | None:
     """A project's folder was renamed inside a repository shared by several projects:
     commit the move there (its own repository needs nothing: its paths do not change).
@@ -122,9 +113,10 @@ def record_move(old: Path, new: Path) -> str | None:
     (RepoBusy too) when the move could not be committed: say so, since nobody else would
     commit it (each editor of the repository commits its own project only), and the other
     copies would get the new folder next to the old one."""
-    repo = Repository.find(new)
-    if repo is None or repo.top == Path(new).resolve() or not shared_marker(repo.top):
+    place = locate(new)
+    if place.kind != "shared":
         return None
+    repo = place.repo
     specs = [f":(top,literal){Path(p).resolve().relative_to(repo.top).as_posix()}" for p in (old, new)]
     message = f"Rename {Path(old).name} to {Path(new).name}"
     with repo.changing():                    # as an editor's commit
@@ -232,16 +224,10 @@ class GitSync:
         if self.own is None:
             try:
                 # Its changes hold the editor's save lock (self.writes): saves wait for them.
-                repo = Repository.find(root, files=lambda: self.writes)
-                top = repo.top if repo else None
-                if top is not None and registry.norm(top) == registry.norm(root):
-                    self.own = True
-                elif top is not None and shared_marker(top):
-                    self.own, self.prefix = True, root.relative_to(top).as_posix() + "/"
-                else:
-                    self.own = False
+                place = locate(root, files=lambda: self.writes)
+                self.own = place.syncs
                 if self.own:
-                    self.repo, self.git_dir, self.top = repo, repo.git_dir, repo.top
+                    self.repo, self.git_dir, self.top, self.prefix = place.repo, place.repo.git_dir, place.repo.top, place.prefix
                     self.guarded = install_guard(self.git_dir)
             except (OSError, subprocess.SubprocessError, ValueError):
                 self.own = False
