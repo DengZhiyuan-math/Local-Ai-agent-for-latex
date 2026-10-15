@@ -21,6 +21,16 @@ from unittest import mock
 
 
 class ProjectPaths(unittest.TestCase):
+    def test_git_directory_is_off_limits_in_any_case(self):
+        from fsutil import project_path
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            # Not created: path resolution cannot restore the on-disk case (as on macOS).
+            for rel in (".GIT/config", "nested/.Git/HEAD"):
+                with self.subTest(rel=rel), self.assertRaisesRegex(ValueError, "off limits"):
+                    project_path(root, rel)
+            self.assertEqual(project_path(root, "git/main.tex"), root / "git/main.tex")
+
     def test_search_and_catalog_cannot_read_external_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()

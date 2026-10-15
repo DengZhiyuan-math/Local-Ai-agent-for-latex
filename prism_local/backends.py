@@ -153,6 +153,7 @@ class Job:
         self.rebased_folders: set[str] = set()
         self.sealed = False
         self.snapshot_issues: set[str] = set()
+        self.metadata_before: set[str] = set()   # .git, .codex… present when it started
         self.attachments: list[str] = []
 
     def emit(self, ev: dict) -> None:
@@ -231,6 +232,10 @@ class Backend:
 
     def preflight(self, root: Path) -> str | None:
         """Checked right before each turn; a message here stops the turn (nothing is sent)."""
+        return None
+
+    def check_scope(self, root: Path, scope: list[str]) -> str | None:
+        """An Edit turn's @-mentioned files; a message here stops the turn."""
         return None
 
     def check_session(self, root: Path, session_id: str) -> str | None:

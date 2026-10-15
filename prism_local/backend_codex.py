@@ -24,12 +24,11 @@ import subprocess
 from functools import lru_cache
 
 from backends import FILE_TOOL_RULE, SYSTEM_APPEND, NO_WINDOW, CliBackend, Job, executable, find_bin
-from fsutil import project_path
+from fsutil import METADATA, is_metadata, metadata_paths, project_path
 import mcp_compile
 import sessionmeta
 
 PROFILE = "prism-editor"
-PROTECTED = {".git", ".codex", ".agents", ".aws"}
 
 
 @lru_cache(maxsize=8)
@@ -83,30 +82,27 @@ def codex_bin() -> str | None:
     return max(candidates)[1] if candidates else None
 
 
-def protected_path(path: Path) -> bool:
-    parts = path.parts if os.name != "nt" else (p.casefold() for p in path.parts)
-    return any(part in PROTECTED for part in parts)
+def protected_scope(root: Path, rel: str) -> bool:
+    """Whether an @-mentioned file is metadata, by the given name or its resolved target
+    (an internal link). A specific file write would override a broader metadata read rule."""
+    return is_metadata(Path(rel.replace("\\", "/"))) or \
+        is_metadata(project_path(root, rel).relative_to(root))
 
 
 def protected_paths(root: Path):
-    """Protect existing nested metadata too, without following directory links.
+    """Protect existing nested metadata too.
 
     Exact subtree rules are portable; recursive read globs are not on all CLI builds.
     Re-scan each turn so metadata added between turns is also protected.
     """
-    yield from (root / name for name in sorted(PROTECTED))
+    yield from (root / name for name in sorted(METADATA))
 
     def unreadable(error):
-        raise error  # Do not silently grant writes to a subtree we could not inspect.
+        # Do not silently grant writes to a subtree we could not inspect.
+        raise OSError(f"Could not check {error.filename} for repository metadata, so this "
+                      f"Edit turn did not start: {error.strerror or error}") from error
 
-    for directory, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
-        parent = Path(directory)
-        for name in sorted(dirs + files):
-            if protected_path(Path(name)):
-                yield parent / name
-        # resolve also detects Windows junctions on Python versions before is_junction.
-        dirs[:] = [name for name in dirs if not protected_path(Path(name))
-                   and (parent / name).resolve() == parent / name]
+    yield from metadata_paths(root, unreadable)
 
 
 def _rel(p: str, root: Path) -> str:
@@ -117,6 +113,13 @@ def _rel(p: str, root: Path) -> str:
 
 
 class Codex(CliBackend):
+    def check_scope(self, root: Path, scope: list[str]) -> str | None:
+        blocked = [rel for rel in scope if protected_scope(root, rel)]
+        if blocked:
+            return (f"Codex cannot edit {', '.join(blocked)}: .git, .codex, .agents and .aws "
+                    "stay read-only for the agent. Remove the mention and try again.")
+        return None
+
     def check_session(self, root: Path, session_id: str) -> str | None:
         if sessionmeta.valid_id(session_id):
             home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
@@ -176,12 +179,9 @@ class Codex(CliBackend):
         if job.mode == "edit":
             if job.scope:
                 for rel in job.scope:
-                    path = project_path(root, rel)
-                    # A specific file write would override a broader metadata read rule.
-                    # Check both the supplied name and resolved target (internal links).
-                    if not protected_path(Path(rel.replace("\\", "/"))) and \
-                            not protected_path(path.relative_to(root)):
-                        rules[str(path)] = "write"
+                    # check_scope refuses these before the turn; never grant them here either.
+                    if not protected_scope(root, rel):
+                        rules[str(project_path(root, rel))] = "write"
             else:
                 rules[str(root)] = "write"
             # Never grant writes through an external link or to runtime instructions.

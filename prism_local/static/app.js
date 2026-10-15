@@ -2014,6 +2014,8 @@ function renderTurnCard(e) {
   }
   if (e.out_of_scope && e.out_of_scope.length)
     h += `<div class="warn">Changes exceeded this turn's permissions and could not be restored: ${esc(e.out_of_scope.join(", "))}.</div>`;
+  if (e.new_metadata && e.new_metadata.length)
+    h += `<div class="warn">New repository or agent metadata appeared during this turn: ${esc(e.new_metadata.join(", "))}. Nothing was removed; delete it if you did not create it.</div>`;
   if (e.exit !== 0 || e.is_error)
     h += `<div class="err">${esc((P.byId[e.provider] || {}).label || "The agent")}: ${esc(e.subtype || "exit " + e.exit)}.${e.stderr ? "\n" + esc(e.stderr) : ""}</div>`;
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));

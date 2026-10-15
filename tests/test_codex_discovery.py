@@ -10,8 +10,10 @@ import re
 import subprocess
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
-from backend_codex import Codex, codex_bin, runtime_support
+from backend_codex import Codex, codex_bin, protected_paths, runtime_support
+from fsutil import METADATA, is_metadata
 from backends import Job
+from test_agent import manager
 
 
 @unittest.skipUnless(os.name == "nt", "Windows desktop installation")
@@ -108,6 +110,43 @@ class CodexProtectedPaths(unittest.TestCase):
                     policy = self.policy(job)
                     self.assertNotIn(str(root / job.scope[0]),
                                      {p for p, access in policy.items() if access == "write"})
+
+    def test_metadata_names_match_regardless_of_case_on_every_platform(self):
+        for name in (".GIT", ".CoDeX", ".Agents", ".AWS"):
+            with self.subTest(name=name):
+                self.assertTrue(is_metadata(Path("nested") / name / "config"))
+        self.assertFalse(is_metadata(Path("nested/git/config")))
+
+    def test_mentioned_metadata_is_refused_before_the_turn_starts(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            backend = Codex("codex", {"bin": "codex"})
+            self.assertIsNone(backend.check_scope(root, ["main.tex"]))
+            self.assertIn(".codex/x", backend.check_scope(root, ["main.tex", ".codex/x"]))
+            with mock.patch.object(backend, "unavailable", return_value=None), \
+                    mock.patch.object(backend, "preflight", return_value=None):
+                m = manager(root, codex=backend)
+                result = m.start("hi", None, "edit", scope=["nested/.Agents/x"])
+                self.assertIn("read-only", result.get("error", ""))
+                self.assertIsNone(m.active)  # nothing ran
+                # Ask grants no writes, so a mention there is only context.
+                with mock.patch.object(backend, "run", return_value={}):
+                    self.assertNotIn("error", m.start("hi", None, "ask", scope=[".codex/x"]))
+
+    def test_an_unreadable_folder_stops_the_turn_with_a_clear_reason(self):
+        def walk(root, followlinks, onerror):
+            onerror(PermissionError(13, "Access is denied", str(Path(root) / "locked")))
+            yield from ()
+        with mock.patch("fsutil.os.walk", walk), \
+                self.assertRaisesRegex(OSError, r"locked for repository metadata.*did not start"):
+            list(protected_paths(Path("project")))
+
+    def test_a_folder_removed_during_the_check_is_skipped(self):
+        def walk(root, followlinks, onerror):
+            onerror(FileNotFoundError(2, "gone", str(Path(root) / "build-tmp")))
+            yield from ()
+        with mock.patch("fsutil.os.walk", walk):
+            self.assertEqual(len(list(protected_paths(Path("project")))), len(METADATA))
 
     def test_existing_nested_metadata_is_read_only(self):
         with tempfile.TemporaryDirectory() as tmp:

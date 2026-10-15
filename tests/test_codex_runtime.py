@@ -24,7 +24,7 @@ from backends import Job
 class CodexRuntime(unittest.TestCase):
     def probe(self, root, mode, scope, *, omit_windows=False, patch_path=None,
               script=None, session_id=None, home=None, persist=False, server_url=None,
-              tool_call=None):
+              tool_call=None, omit=(), extra=()):
         outputs, requests = [], []
         call_id = "probe_" + uuid.uuid4().hex
         script = script or """$result = @{ read = (Get-Content -Raw main.tex).Trim() }
@@ -85,9 +85,9 @@ $result | ConvertTo-Json -Compress
         job.root, job.mode, job.scope = root, mode, scope
         job.session_id, job.server_url = session_id, server_url
         command, _ = backend.command(job)
-        if omit_windows:
-            index = command.index('windows.sandbox="elevated"')
-            del command[index - 1:index + 1]
+        for setting in [*omit, *(['windows.sandbox="elevated"'] if omit_windows else [])]:
+            index = command.index(setting)
+            del command[index - 1:index + 1]  # with its -c
         # Keep native helper caches and sessions away from the user's active CLI/app.
         with tempfile.TemporaryDirectory(prefix="prism-codex-home-") as probe_home, \
                 ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
@@ -97,7 +97,7 @@ $result | ConvertTo-Json -Compress
             # The model response still comes entirely from the local fixture.
             # Resume has a positional id/prompt: put all overrides before its subcommand.
             index = command.index("resume") if session_id else len(command) - 1
-            command[index:index] = ([] if persist else ["--ephemeral"]) + ["-m", "gpt-6.1-sol", "-c",
+            command[index:index] = ([] if persist else ["--ephemeral"]) + [*extra, "-m", "gpt-6.1-sol", "-c",
                 'model_provider="probe"', "-c", 'features.code_mode=false', "-c",
                 'model_providers.probe={name="Probe",'
                 f'base_url="http://127.0.0.1:{server.server_port}/v1",'
@@ -268,6 +268,31 @@ $result | ConvertTo-Json -Compress
             self.assertNotIn("unwanted", output)
             self.assertFalse(marker.exists())
             self.assertEqual(path.read_text(encoding="utf-8"), config)
+
+
+    def test_global_hooks_do_not_run_in_editor_turns(self):
+        with tempfile.TemporaryDirectory(prefix="prism-codex-probe-") as tmp:
+            base = Path(tmp)
+            root, home, marker = base / "project", base / "codex-home", base / "hooks-ran.txt"
+            root.mkdir()
+            home.mkdir()
+            self.fixture(root)
+            script = base / "hook.py"
+            script.write_text("import sys\nfrom pathlib import Path\n"
+                              f"Path({str(marker)!r}).open('a').write(sys.argv[1] + ' ')\n")
+            if " " in sys.executable + str(script):
+                self.skipTest("hook command needs paths without spaces (cmd and PowerShell differ)")
+            events = ("SessionStart", "UserPromptSubmit", "PreToolUse")
+            (home / "hooks.json").write_text(json.dumps({"hooks": {event: [{"hooks": [{
+                "type": "command", "command": f"{sys.executable} {script} {event}"}]}]
+                for event in events}}), encoding="utf-8")
+            # Trust is bypassed in both runs, so only features.hooks decides.
+            trust = ["--dangerously-bypass-hook-trust"]
+            self.probe(root, "ask", None, home=home, omit=["features.hooks=false"], extra=trust)
+            self.assertTrue(marker.exists(), "control: the user's hook should run when enabled")
+            marker.unlink()
+            self.probe(root, "ask", None, home=home, extra=trust)
+            self.assertFalse(marker.exists(), marker.exists() and marker.read_text())
 
 
 if __name__ == "__main__":

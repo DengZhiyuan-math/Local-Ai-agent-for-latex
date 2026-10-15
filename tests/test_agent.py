@@ -480,6 +480,32 @@ class RevertOutsideScope(unittest.TestCase):
             self.assertEqual((root / "b.tex").read_text(encoding="utf-8"), "b\n")
             self.assertEqual((root / "a.tex").read_text(encoding="utf-8"), "A\n")
 
+    def test_metadata_new_this_turn_is_named_and_left_in_place(self):
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d).resolve()
+            (root / "a.tex").write_text("a\n", encoding="utf-8")
+            (root / "old/.git").mkdir(parents=True)
+
+            class Plant(backends.Backend):
+                def run(self, job):
+                    for rel in ("ch1/.git/config", "ch1/.Agents/skill.md", "old/.git/HEAD", "a.tex"):
+                        (job.root / rel).parent.mkdir(parents=True, exist_ok=True)
+                        (job.root / rel).write_text("x\n", encoding="utf-8")
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], plant=Plant("plant"))
+            done = wait_done(m.jobs[m.start("go", None, "edit")["job"]])
+            # Only what was not there before; nothing inside existing metadata.
+            self.assertEqual(done["new_metadata"], ["ch1/.Agents", "ch1/.git"])
+            self.assertTrue((root / "ch1/.git/config").exists())   # reported, not removed
+
+            class Quiet(backends.Backend):
+                def run(self, job):
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], quiet=Quiet("quiet"))
+            self.assertEqual(wait_done(m.jobs[m.start("go", None, "ask")["job"]])["new_metadata"], [])
+
 
 class Snapshots(unittest.TestCase):
     def test_undo_puts_back_the_exact_bytes(self):

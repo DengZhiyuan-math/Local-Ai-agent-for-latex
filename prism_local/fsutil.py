@@ -11,6 +11,30 @@ from pathlib import Path
 EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".txt", ".tikz"}
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 TEMP_SUFFIX = ".prism-tmp"      # a save half-way (replace_file): never a project's file
+METADATA = {".git", ".codex", ".agents", ".aws"}   # repository and agent metadata
+
+
+def is_metadata(path: Path) -> bool:
+    # Case-insensitive everywhere: Windows and macOS file systems usually are.
+    return any(part.casefold() in METADATA for part in path.parts)
+
+
+def metadata_paths(root: Path, onerror=None):
+    """The metadata folders and files at any depth below the resolved `root`, not entered,
+    without following folder links or Windows junctions. A folder removed meanwhile is
+    skipped; `onerror(error)` gets any other folder that could not be looked at."""
+    def unreadable(error):
+        if onerror and not isinstance(error, FileNotFoundError):
+            onerror(error)
+
+    for directory, dirs, files in os.walk(root, followlinks=False, onerror=unreadable):
+        parent = Path(directory)
+        for name in sorted(dirs + files):
+            if is_metadata(Path(name)):
+                yield parent / name
+        # resolve also detects Windows junctions on Python versions before is_junction.
+        dirs[:] = [name for name in dirs if not is_metadata(Path(name))
+                   and (parent / name).resolve() == parent / name]
 
 
 def project_path(root: Path, rel: str) -> Path:
@@ -22,7 +46,8 @@ def project_path(root: Path, rel: str) -> Path:
     p = (root / rel).resolve()
     if root not in p.parents:
         raise ValueError("the path is outside the project")
-    if ".git" in Path(rel).parts or ".git" in p.relative_to(root).parts:
+    # Case-insensitive: on macOS (as on Windows) .GIT names the same directory.
+    if any(part.casefold() == ".git" for part in (*Path(rel).parts, *p.relative_to(root).parts)):
         raise ValueError("the .git directory is off limits")
     return p
 

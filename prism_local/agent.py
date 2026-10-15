@@ -18,7 +18,7 @@ from typing import Callable
 
 from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
-from fsutil import project_path
+from fsutil import metadata_paths, project_path
 import registry
 import snapshot
 
@@ -67,6 +67,11 @@ class AgentManager:
         job.snapshot_issues |= issues
         return files
 
+    def _metadata(self, job: Job) -> set[str]:
+        """The project's .git, .codex, .agents and .aws now, at any depth."""
+        return {p.relative_to(job.root).as_posix() for p in
+                metadata_paths(job.root, lambda e: job.snapshot_issues.add(str(e)))}
+
     def _writable(self, job: Job, rel: str) -> bool:
         if job.mode != "edit":
             return False
@@ -106,6 +111,9 @@ class AgentManager:
                 scope = sorted({project_path(root, rel).relative_to(root).as_posix() for rel in scope})
             except (ValueError, OSError, RuntimeError) as e:
                 return {"error": f"Invalid scope: {e}"}
+            bad = backend.check_scope(root, scope) if mode == "edit" else None
+            if bad:
+                return {"error": bad}
         with self.lock:
             if self.active and not self.active.done:
                 return {"error": "The agent is still working on the previous message."}
@@ -144,6 +152,7 @@ class AgentManager:
             pass
         try:
             job.before = self._snapshot(job)
+            job.metadata_before = self._metadata(job)
             threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
         except Exception as e:  # noqa: BLE001 — a turn that cannot start must not stay "running"
             with job.cond:
@@ -196,6 +205,9 @@ class AgentManager:
             if held:
                 self.writes.release()
         changed = snapshot.changes(job.before, job.after)
+        # Codex keeps only metadata present at the start read-only, and no snapshot looks
+        # inside .git: name what appeared, and leave deleting it to the author.
+        new_metadata = sorted(self._metadata(job) - job.metadata_before)
         # Undo needs only the files this turn changed: keep just those in memory.
         keep = [c["path"] for c in changed]
         job.before = {r: job.before.get(r) for r in keep}
@@ -211,6 +223,7 @@ class AgentManager:
               "snapshot_issues": sorted(job.snapshot_issues),
               "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],
               "out_of_scope": [r for r in out_of_scope if r not in reverted],
+              "new_metadata": new_metadata,
               "reverted": reverted,
               "session_id": res.get("session_id") or job.session_id,
               "duration": res.get("duration") or int((time.time() - t0) * 1000)}

@@ -51,5 +51,7 @@
 - 工作区 5 个文件与 source-snapshot.json 哈希一致；Codex 专项及原生测试复跑通过。
 - 原生测试结果依赖解释器。上文 Python 3.12.14 为 Codex 自带运行时，`CodexSandboxUsers` 对其有执行权限；本机用户安装的 Python 3.14/3.11（`%LOCALAPPDATA%/Programs/Python`）只授权给当前账户、Administrators 和 SYSTEM。以用户 Python 启用 `PRISM_NATIVE_CODEX=1` 时，独立沙盒契约测试报 `CreateProcessAsUserW failed: 5 (Access is denied)`。该测试在 Windows 上已改用系统 PowerShell，两种解释器下均通过。生产含义：编辑器 Codex 轮次中，沙盒 shell 不能启动仅为用户账户安装的程序；compile 经 MCP 在编辑器中运行，不受影响。README 已注明。
 - 补充原生探针（完整项目 Edit，apply_patch 新建文件）：根目录尚不存在的 `.codex/config.toml`、`.agents/skills/x.md` 被拒绝；`nested/.git/config` 可新建，与上文边界一致。
-- `features.hooks=false` 仅有命令参数单元检查，尚无配置真实 hook 的原生验证；README 措辞已相应收窄。
+- `features.hooks=false` 已补原生验证：临时 CODEX_HOME 的 `hooks.json` 配置 SessionStart、UserPromptSubmit、PreToolUse 命令 hook，两次运行均加 `--dangerously-bypass-hook-trust` 排除信任因素。去掉该设置的对照运行中 hook 会执行，说明仅靠 `--ignore-user-config` 不能屏蔽 `hooks.json`；生产命令下 hook 未执行。
+- 复核后修复三处：@ 提及元数据文件时，Edit 轮次在开始前给出明确错误（`check_scope`），不再静默不授权；元数据扫描遇到无法读取的目录时给出说明路径的错误，扫描中被删除的目录跳过；元数据名称在所有平台不区分大小写，`fsutil.project_path` 的 `.git` 检查同样处理（macOS 上未存在的 `.GIT` 路径不会被路径解析还原大小写）。
+- 轮次中新建的元数据：补充探针确认完整项目 Edit 可在子目录新建 `.git`，且快照从不进入 `.git`，改动列表看不到。现在每轮（所有后端）在开始和结束时各扫描一次任意层级的 `.git`、`.codex`、`.agents`、`.aws`（与 Codex 只读规则共用 `fsutil.metadata_paths`），轮次结果中列出新出现的路径。只提示，不删除，由作者决定。这是事后提示，不是预先拦截；编辑器在轮次结束前退出时不会提示。
 - 所有原生检查均使用临时 CODEX_HOME。活动 `~/.codex` 的 `.sandbox-bin` 锁故障未处理，复核时 Codex 桌面进程仍在运行；完全退出并重启 Codex 后，仍需在编辑器中以真实环境运行一次 Edit 轮次确认。

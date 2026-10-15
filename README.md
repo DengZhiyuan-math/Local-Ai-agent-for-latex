@@ -544,13 +544,15 @@ conversation. Codex reads your `AGENTS.md`. `/effort` sets `model_reasoning_effo
 (`minimal` … `xhigh`). Edit grants native write permission only to the @-mentioned files,
 or the project tree when there are no mentions. `.git`, `.codex`, `.agents` and `.aws`
 metadata remain read-only, including nested metadata already present when the turn starts.
-Mentioning a file inside these directories does not grant it write permission.
+Mentioning a file inside these directories stops the turn with an explanation.
+Metadata a turn creates is not covered; for every agent, the turn's result names any such
+directory that appeared anywhere in the project. Nothing is deleted: remove it if unexpected.
 Ask grants no project writes and no compile tool. The adapter requires a CLI supporting
 named profiles, `--ignore-user-config` and `--ignore-rules` on both new and resumed turns;
 it checks compatibility and login before a turn.
 It supplies only the editor's compile MCP, without loading user MCP configuration,
-and passes `features.hooks=false` for editor turns (not yet verified against a configured
-hook). Your terminal hook settings are unchanged.
+and turns Codex hooks off for editor turns (`features.hooks=false`): `--ignore-user-config`
+alone still runs hooks from `~/.codex/hooks.json`. Your terminal hook settings are unchanged.
 On Windows the adapter explicitly selects the native `elevated` sandbox, since ignoring
 user configuration would otherwise also discard `windows.sandbox` and block shell reads.
 Set up that sandbox once in the Codex CLI or desktop app before using the editor agent.
