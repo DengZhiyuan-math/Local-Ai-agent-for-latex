@@ -55,5 +55,29 @@ class Files(unittest.TestCase):
                 p.resolve(bad)
 
 
+class Writes(unittest.TestCase):
+    def test_a_project_on_its_own_saves_and_tells_whoever_listens(self):
+        p = make({"main.tex": "one\r\n"})
+        changed = []
+        p.on_change = lambda: changed.append(1)
+        r, code = p.save("main.tex", "two\n", None, False)
+        self.assertEqual((code, (p.root / "main.tex").read_bytes()), (200, b"two\r\n"))
+        self.assertEqual(p.rename("main.tex", "paper.tex"), {"path": "paper.tex"})
+        self.assertEqual(len(changed), 2)
+
+    def test_nothing_changes_during_an_agent_turn_and_the_turn_is_told_otherwise(self):
+        from unittest import mock
+        import project
+        turn = mock.Mock(**{"editing.return_value": True, "busy.return_value": True})
+        p = make({"main.tex": "one\n"})
+        p.turn = turn
+        self.assertEqual(p.save("main.tex", "two\n", None, False)[1], 503)
+        with self.assertRaises(project.FilesBusy):
+            p.new("", "new.tex", "file")
+        turn.editing.return_value = turn.busy.return_value = False
+        p.new("", "new.tex", "file")
+        turn.server_wrote.assert_called_with(["new.tex"])
+
+
 if __name__ == "__main__":
     unittest.main()

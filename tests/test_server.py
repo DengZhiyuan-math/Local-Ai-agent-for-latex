@@ -12,6 +12,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 import server  # noqa: E402
+import project as projectmod  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
 from tmpdirs import tmpdir  # noqa: E402
 
@@ -191,10 +192,10 @@ class Files(unittest.TestCase):
         the agent's. The page tries again; once the turn is over the save goes through."""
         root = project({"main.tex": "one\n"})
         with mock.patch.object(server.AGENT, "editing", return_value=True):
-            r, code = server.save_file("main.tex", "yours\n", None, True)
+            r, code = server.PROJECT.save("main.tex", "yours\n", None, True)
         self.assertEqual((code, r.get("busy")), (503, True), r)
         self.assertEqual((root / "main.tex").read_text(encoding="utf-8"), "one\n")
-        r, code = server.save_file("main.tex", "yours\n", None, False)
+        r, code = server.PROJECT.save("main.tex", "yours\n", None, False)
         self.assertEqual(code, 200, r)
 
     def test_save_keeps_the_files_line_ends(self):
@@ -202,29 +203,29 @@ class Files(unittest.TestCase):
         (root / "crlf.tex").write_bytes(b"a\r\nb\r\n")
         (root / "lf.tex").write_bytes(b"a\nb\n")
         for name in ("crlf.tex", "lf.tex"):
-            r, code = server.save_file(name, "a\nb\nc\n", server.mtime(root / name), False)
+            r, code = server.PROJECT.save(name, "a\nb\nc\n", projectmod.mtime(root / name), False)
             self.assertEqual(code, 200, r)
         self.assertEqual((root / "crlf.tex").read_bytes(), b"a\r\nb\r\nc\r\n")
         self.assertEqual((root / "lf.tex").read_bytes(), b"a\nb\nc\n")
-        server.save_file("new.tex", "x\ny\n", None, False)
+        server.PROJECT.save("new.tex", "x\ny\n", None, False)
         self.assertEqual((root / "new.tex").read_bytes(), b"x\ny\n")
 
     @unittest.skipIf(os.name == "nt", "file modes: Linux and macOS")
     def test_save_keeps_the_files_permissions(self):
         root = project({"main.tex": "old\n"})
         (root / "main.tex").chmod(0o640)
-        server.save_file("main.tex", "new\n", server.mtime(root / "main.tex"), False)
+        server.PROJECT.save("main.tex", "new\n", projectmod.mtime(root / "main.tex"), False)
         self.assertEqual((root / "main.tex").stat().st_mode & 0o777, 0o640)
 
     def test_save_refuses_to_overwrite_a_newer_file(self):
         root = project({"main.tex": "old\n"})
-        loaded = server.mtime(root / "main.tex")
+        loaded = projectmod.mtime(root / "main.tex")
         time.sleep(0.02)
         (root / "main.tex").write_text("changed on disk\n", encoding="utf-8")
-        r, code = server.save_file("main.tex", "mine\n", loaded, False)
+        r, code = server.PROJECT.save("main.tex", "mine\n", loaded, False)
         self.assertEqual((code, r["conflict"]), (409, True))
         self.assertEqual((root / "main.tex").read_text(encoding="utf-8"), "changed on disk\n")
-        r, code = server.save_file("main.tex", "mine\n", loaded, True)
+        r, code = server.PROJECT.save("main.tex", "mine\n", loaded, True)
         self.assertEqual((root / "main.tex").read_text(encoding="utf-8"), "mine\n")
 
     @unittest.skipUnless(os.name == "nt", "Windows file sharing")
@@ -236,7 +237,7 @@ class Files(unittest.TestCase):
         self.addCleanup(reader.stdout.close)
         self.addCleanup(reader.wait)
         reader.stdout.readline()               # the file is open now, as during a TeX run
-        r, code = server.save_file("main.tex", "new\n", server.mtime(root / "main.tex"), False)
+        r, code = server.PROJECT.save("main.tex", "new\n", projectmod.mtime(root / "main.tex"), False)
         self.assertEqual(code, 200)
         self.assertEqual((root / "main.tex").read_text(encoding="utf-8"), "new\n")
 
@@ -325,7 +326,7 @@ class FileMenu(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.files("rename", path="link/x.tex", name="y.tex")
         with mock.patch.object(server.AGENT, "busy", return_value=True), \
-                self.assertRaisesRegex(server.FilesBusy, "agent"):
+                self.assertRaisesRegex(projectmod.FilesBusy, "agent"):
             self.files("new", folder="", name="new.tex")
         self.assertFalse((root / "new.tex").exists())
 
@@ -499,26 +500,26 @@ class Uploads(unittest.TestCase):
                  "a<b>:c?.tex": "a_b__c_.tex", "CON.txt": "CON_.txt", "  .hidden": "hidden",
                  "C:\\Users\\x\\scan 1.png": "scan 1.png", "": "file"}
         for given, want in cases.items():
-            self.assertEqual(server.upload_name(given), want, given)
-        self.assertLessEqual(len(server.upload_name("x" * 300 + ".pdf")), 104)
+            self.assertEqual(projectmod.upload_name(given), want, given)
+        self.assertLessEqual(len(projectmod.upload_name("x" * 300 + ".pdf")), 104)
 
     def test_same_file_once_other_file_numbered(self):
         root = project({"main.tex": "x"})
-        self.assertEqual(server.save_upload("n.pdf", b"one"), "prism-uploads/n.pdf")
-        self.assertEqual(server.save_upload("n.pdf", b"one"), "prism-uploads/n.pdf")
-        self.assertEqual(server.save_upload("n.pdf", b"two"), "prism-uploads/n-2.pdf")
+        self.assertEqual(server.PROJECT.upload("n.pdf", b"one"), "prism-uploads/n.pdf")
+        self.assertEqual(server.PROJECT.upload("n.pdf", b"one"), "prism-uploads/n.pdf")
+        self.assertEqual(server.PROJECT.upload("n.pdf", b"two"), "prism-uploads/n-2.pdf")
         self.assertEqual((root / "prism-uploads" / "n-2.pdf").read_bytes(), b"two")
         with self.assertRaises(ValueError):
-            server.save_upload("big.bin", b"0" * (server.MAX_UPLOAD + 1))
+            server.PROJECT.upload("big.bin", b"0" * (projectmod.MAX_UPLOAD + 1))
 
     def test_project_import_preserves_existing_files_and_bytes(self):
         root = project({"main.tex": "original", "folder.txt/keep.txt": "keep"})
-        self.assertEqual(server.save_upload("main.tex", b"original", folder=""), "main.tex")
-        self.assertEqual(server.save_upload("main.tex", b"new\r\n", folder=""), "main-2.tex")
+        self.assertEqual(server.PROJECT.upload("main.tex", b"original", folder=""), "main.tex")
+        self.assertEqual(server.PROJECT.upload("main.tex", b"new\r\n", folder=""), "main-2.tex")
         self.assertEqual((root / "main.tex").read_bytes(), b"original")
         self.assertEqual((root / "main-2.tex").read_bytes(), b"new\r\n")
-        self.assertEqual(server.save_upload("folder.txt", b"file", folder=""), "folder-2.txt")
-        self.assertEqual(server.save_upload("../figure.png", b"\x00\xffPNG", folder=""), "figure.png")
+        self.assertEqual(server.PROJECT.upload("folder.txt", b"file", folder=""), "folder-2.txt")
+        self.assertEqual(server.PROJECT.upload("../figure.png", b"\x00\xffPNG", folder=""), "figure.png")
         self.assertEqual((root / "figure.png").read_bytes(), b"\x00\xffPNG")
 
     @unittest.skipIf(os.name == "nt", "needs symlinks")
@@ -528,10 +529,10 @@ class Uploads(unittest.TestCase):
         (outside / "image.png").write_bytes(b"outside")
         (root / "prism-uploads").symlink_to(outside, target_is_directory=True)
         with self.assertRaises(ValueError):
-            server.save_upload("new.png", b"new")
+            server.PROJECT.upload("new.png", b"new")
         (root / "image.png").symlink_to(outside / "image.png")
         with self.assertRaises(ValueError):
-            server.save_upload("image.png", b"new", folder="")
+            server.PROJECT.upload("image.png", b"new", folder="")
         self.assertEqual((outside / "image.png").read_bytes(), b"outside")
         self.assertFalse((outside / "new.png").exists())
 
@@ -540,7 +541,7 @@ class Uploads(unittest.TestCase):
         root = project({})
         contents = [bytes([n]) for n in range(8)]
         with ThreadPoolExecutor(max_workers=8) as pool:
-            paths = list(pool.map(lambda data: server.save_upload("figure.png", data, folder=""), contents))
+            paths = list(pool.map(lambda data: server.PROJECT.upload("figure.png", data, folder=""), contents))
         self.assertEqual(len(set(paths)), len(contents))
         self.assertEqual([(root / p).read_bytes() for p in paths], contents)
 
@@ -570,7 +571,7 @@ class UploadsToGitHub(unittest.TestCase):
         self.git(root, "remote", "add", "origin", str(bare))
         server.GITSYNC.bind_target()
         (root / "main.tex").write_text("two\n", encoding="utf-8")      # your edit, not committed
-        rel = server.save_upload("notes.pdf", b"%PDF-1.4")
+        rel = server.PROJECT.upload("notes.pdf", b"%PDF-1.4")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "synced", server.UPLOAD_SYNC[rel])
         self.assertEqual(self.git(root, "show", "--name-only", "--format=", "HEAD"), "prism-uploads/notes.pdf")
@@ -580,7 +581,7 @@ class UploadsToGitHub(unittest.TestCase):
     def test_no_remote_commits_locally(self):
         root = project({"main.tex": "x\n"})
         self.repo(root)
-        rel = server.save_upload("a.txt", b"a")
+        rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
         self.assertIn("no remote", server.UPLOAD_SYNC[rel]["message"])
@@ -592,14 +593,14 @@ class UploadsToGitHub(unittest.TestCase):
         (outer / "paper" / "main.tex").write_text("x\n", encoding="utf-8")
         self.repo(outer)
         server.set_root(outer / "paper")
-        rel = server.save_upload("a.txt", b"a")
+        rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
         self.assertEqual(self.git(outer, "rev-list", "--count", "HEAD"), "1", "nothing committed outside")
 
     def test_not_a_repository(self):
         project({"main.tex": "x\n"})
-        rel = server.save_upload("a.txt", b"a")
+        rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
 

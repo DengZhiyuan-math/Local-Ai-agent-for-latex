@@ -19,13 +19,11 @@ import gitenv
 import argparse
 import os
 import re
-import shutil
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
-from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -33,12 +31,11 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from projectconfig import Config  # noqa: E402
-from project import MAX_FILES, Project  # noqa: E402
+from project import MAX_FILES, UPLOAD_DIR, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
-from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
-                    project_path, with_line_ends_of, write_bytes)
+from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
 import desktop  # noqa: E402
-from errors import Conflict, NotFound, Refused  # noqa: E402
+from errors import NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
@@ -54,8 +51,6 @@ BUILD_LOCK = threading.Lock()
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
 SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
-SAVE_WAIT = 3           # seconds a save waits for git before the page is told to try again
-UPLOAD_WAIT = 10        # seconds an upload waits for git before it is refused (try again)
 
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
@@ -68,7 +63,7 @@ PROJECT: Project = None  # type: ignore[assignment]
 
 def set_root(root: Path) -> None:
     global PROJECT
-    PROJECT = Project(root)
+    PROJECT = Project(root, files_lock=SAVE_LOCK, turn=AGENT, on_change=lambda: GITSYNC.touched())
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
@@ -118,35 +113,6 @@ def project_diff(spec: str) -> dict:
             shown = git("show", "--no-color", "--relative", "--format=", log[0], "--", spec, timeout=20).stdout
             out["last"] = {"hash": log[0], "at": int(log[1]), "message": log[2], "diff": shown}
     return out
-
-
-def mtime(p: Path) -> float:
-    return p.stat().st_mtime_ns / 1e9
-
-
-def save_file(rel: str, content: str, base_mtime: float | None, force: bool) -> tuple[dict, int]:
-    """Write an editor buffer to disk, unless the file changed on disk since the editor
-    loaded it (a conflict). The file keeps its line ends (the editor sends \\n)."""
-    p = PROJECT.resolve(rel)
-    # Check-then-write must not interleave with another save, nor with git committing or
-    # merging. git's work takes moments, but a repository's hooks may take long: then the
-    # page is told to try again, rather than kept waiting with a connection held.
-    if not SAVE_LOCK.acquire(timeout=SAVE_WAIT):
-        return {"busy": True, "error": "git is busy with the files; saving as soon as it is done"}, 503
-    try:
-        if AGENT.editing():
-            # Its turn's diff and Undo would take your text for the agent's (also from a
-            # page that did not see the turn start, or was reloaded during it).
-            return {"busy": True, "error": "the agent is editing the files; your edits are "
-                                           "saved when its turn ends"}, 503
-        if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
-                and not force:
-            return {"conflict": True, "mtime": mtime(p)}, 409
-        write_bytes(p, with_line_ends_of(content, p).encode("utf-8"))
-        AGENT.server_wrote([p.relative_to(PROJECT.root).as_posix()])     # yours, not an Ask turn's
-        return {"ok": True, "mtime": mtime(p)}, 200
-    finally:
-        SAVE_LOCK.release()
 
 
 # ---------------------------------------------------------------- symbols
@@ -300,192 +266,6 @@ def pdf_state(cfg: Config) -> float | None:
     if writing and writing[0] == cfg.pdf:
         return writing[1]
     return mtime(cfg.pdf) if cfg.pdf.exists() else None
-
-# Files added to an agent message (the + button, drag and drop, a pasted image) are
-# saved in the project, so the agent reads them with its file tools.
-UPLOAD_DIR = "prism-uploads"
-MAX_UPLOAD = 25 * 1024 * 1024
-
-
-def upload_name(name: str) -> str:
-    """A safe file name from the browser's: no folders, no characters Windows refuses."""
-    name = re.sub(r'[\x00-\x1f<>:"/\\|?*]', "_", str(name).replace("\\", "/").split("/")[-1]).strip(" .")
-    stem, dot, ext = name.rpartition(".")
-    if not dot:
-        stem, ext = name, ""
-    stem = stem[:100] or "file"
-    if stem.upper() in WINDOWS_RESERVED:
-        stem += "_"
-    return stem + (f".{ext[:12]}" if ext else "")
-
-
-def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
-    """Save an upload in the project (attachments under prism-uploads/). Reuse identical
-    files; give different files with the same name a number (notes-2.pdf)."""
-    if len(data) > MAX_UPLOAD:
-        raise ValueError(f"the file is larger than {MAX_UPLOAD // (1024 * 1024)} MB")
-    clean = upload_name(name)
-    stem, dot, ext = clean.rpartition(".")
-    if not dot:
-        stem, ext = clean, ""
-    if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
-        raise ValueError("git is busy with the files; try the upload again in a moment")
-    try:
-        for n in range(1, 1000):
-            cand = clean if n == 1 else f"{stem}-{n}" + (f".{ext}" if ext else "")
-            rel = f"{folder}/{cand}" if folder else cand
-            p = project_path(PROJECT.root, rel)
-            if not folder and PROJECT.excluded(p.relative_to(PROJECT.root).as_posix()):
-                raise ValueError("the file is excluded from this project")
-            if p.exists():
-                try:
-                    if p.read_bytes() == data:
-                        return rel
-                except OSError:
-                    pass
-                continue
-            write_bytes(p, data)
-            AGENT.server_wrote([p.relative_to(PROJECT.root).as_posix()])     # yours, not a turn's
-            return rel
-    finally:
-        SAVE_LOCK.release()
-    raise ValueError("too many files with this name")
-
-
-# The Files sidebar's menu: show in Explorer/Finder, copy and paste through the system's
-# clipboard, rename, new file or folder, and delete to the Recycle Bin. Each acts on what
-# the sidebar shows (a file or folder as it is, never through a link) and, like a save,
-# waits for git and never runs during an agent's turn (its diff and Undo would take it).
-
-def item_path(rel: str, *, folder_only: bool = False) -> Path:
-    """The project's file or folder `rel` ("" is the project), as the sidebar shows it."""
-    if not rel:
-        return PROJECT.root
-    p = project_path(PROJECT.root, rel)
-    if p != PROJECT.root / rel or PROJECT.excluded(rel + ("/" if p.is_dir() else "")) or is_metadata(Path(rel)):
-        raise ValueError(f"not a file or folder the editor shows: {rel}")
-    if not p.exists():
-        raise ValueError(f"not found: {rel}")
-    if folder_only and not p.is_dir():
-        raise ValueError(f"not a folder: {rel}")
-    return p
-
-
-def _rel(p: Path) -> str:
-    return p.relative_to(PROJECT.root).as_posix()
-
-
-class FilesBusy(Conflict):
-    """The files cannot change now (git or an agent's turn): try again later."""
-
-
-@contextmanager
-def files_changing():
-    """Hold the files (as a save does); refuse during an agent's turn."""
-    if not AGENT.busy() and SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
-        try:
-            if AGENT.busy():            # it started while we waited for git
-                raise FilesBusy("wait until the agent's turn has finished")
-            yield
-        finally:
-            SAVE_LOCK.release()
-    elif AGENT.busy():
-        raise FilesBusy("wait until the agent's turn has finished")
-    else:
-        raise FilesBusy("git is busy with the files; try again in a moment")
-
-
-def free_name(folder: Path, name: str) -> str:
-    """`name`, or name-copy, name-copy-2 … when it is taken (no spaces: LaTeX's \\input)."""
-    stem, dot, ext = name.rpartition(".")
-    if not dot or not stem:
-        stem, ext = name, ""
-    for n in range(1000):
-        cand = name if n == 0 else f"{stem}-copy" + (f"-{n}" if n > 1 else "") + (f".{ext}" if ext else "")
-        if not os.path.lexists(folder / cand):
-            return cand
-    raise ValueError(f"too many copies of {name}")
-
-
-def paste_files(folder: str, sources: list[Path]) -> dict:
-    """Copy files and folders (from the clipboard) into the project's `folder`. Metadata
-    (.git, .codex …) inside copied folders is left out, so it becomes no nested repository."""
-    target = item_path(folder, folder_only=True)
-    pasted, skipped = [], []
-    with files_changing():
-        for src in sources:
-            src = Path(src)
-            if not src.exists():
-                skipped.append(f"{src.name}: no longer exists")
-                continue
-            if is_metadata(Path(src.name)) or bad_name(src.name):
-                skipped.append(f"{src.name}: {bad_name(src.name) or 'repository metadata is not copied'}")
-                continue
-            real = src.resolve()
-            if src.is_dir() and (real == target or real in target.parents):
-                skipped.append(f"{src.name}: a folder cannot be pasted into itself")
-                continue
-            dest = target / free_name(target, src.name)
-            if src.is_dir():
-                shutil.copytree(src, dest, symlinks=True,
-                                ignore=lambda _, names: [n for n in names if is_metadata(Path(n))])
-            else:
-                shutil.copy2(src, dest)
-            pasted.append(_rel(dest))
-        AGENT.server_wrote(pasted)
-    if pasted:
-        GITSYNC.touched()
-    return {"pasted": pasted, "skipped": skipped}
-
-
-def rename_item(rel: str, name: str) -> dict:
-    src = item_path(rel)
-    if src == PROJECT.root:
-        raise ValueError("rename the project from its name at the top")
-    why = bad_name(name)
-    if why:
-        raise ValueError(why)
-    dest = src.with_name(name)
-    with files_changing():
-        # On Windows and macOS, main.tex -> Main.tex finds the file itself there.
-        if os.path.lexists(dest) and not (dest.exists() and os.path.samefile(src, dest)):
-            raise ValueError(f"{name} already exists in this folder")
-        os.rename(src, dest)
-        AGENT.server_wrote([rel, _rel(dest)])
-    GITSYNC.touched()
-    return {"path": _rel(dest)}
-
-
-def new_item(folder: str, name: str, kind: str) -> dict:
-    target = item_path(folder, folder_only=True)
-    why = bad_name(name)
-    if why:
-        raise ValueError(why)
-    p = target / name
-    if PROJECT.excluded(_rel(p) + ("/" if kind == "folder" else "")):
-        raise ValueError("this project excludes that name; the editor would not show it")
-    with files_changing():
-        if os.path.lexists(p):
-            raise ValueError(f"{name} already exists in this folder")
-        if kind == "folder":
-            p.mkdir()
-        else:
-            p.touch(exist_ok=False)
-        AGENT.server_wrote([_rel(p)])
-    GITSYNC.touched()
-    return {"path": _rel(p), "kind": "folder" if kind == "folder" else "file"}
-
-
-def trash_items(rels: list[str]) -> dict:
-    paths = [item_path(rel) for rel in rels]
-    if PROJECT.root in paths:
-        raise ValueError("delete the project from the Home page")
-    with files_changing():
-        desktop.trash(paths)
-        AGENT.server_wrote(rels)
-    GITSYNC.touched()
-    return {"trashed": rels}
-
 
 # Every upload is committed in the project's own repository, alone (other changes stay as
 # they are), and pushed, through the same machinery as the other commits (gitsync.py).
@@ -857,7 +637,7 @@ class Handler(httpbase.Handler):
             raise ValueError("paths must be a list of project paths")
         if path == "/api/files/reveal":
             rel = str(body.get("path") or "")
-            p = item_path(rel)
+            p = PROJECT.item(rel)
             if p == PROJECT.root:
                 desktop.open_folder(p)
             else:
@@ -865,23 +645,23 @@ class Handler(httpbase.Handler):
             return {"ok": True}
         if path == "/api/files/copy":
             try:
-                desktop.copy_files([item_path(r) for r in rels or []])
+                desktop.copy_files([PROJECT.item(r) for r in rels or []])
             except desktop.Unsupported as e:   # the page keeps them: paste works in this project
                 return {"system": False, "message": str(e)}
             return {"system": True}
         if path == "/api/files/paste":
             # The page's own copy where the system has no file clipboard, else the clipboard.
-            sources = [item_path(r) for r in rels] if rels else desktop.clipboard_files()
+            sources = [PROJECT.item(r) for r in rels] if rels else desktop.clipboard_files()
             if not sources:
                 raise ValueError("the clipboard holds no files; copy some in the editor, Explorer or Finder")
-            return paste_files(str(body.get("folder") or ""), sources)
+            return PROJECT.paste(str(body.get("folder") or ""), sources)
         if path == "/api/files/rename":
-            return rename_item(str(body["path"]), str(body.get("name") or ""))
+            return PROJECT.rename(str(body["path"]), str(body.get("name") or ""))
         if path == "/api/files/new":
-            return new_item(str(body.get("folder") or ""), str(body.get("name") or ""),
+            return PROJECT.new(str(body.get("folder") or ""), str(body.get("name") or ""),
                             str(body.get("kind") or "file"))
         if path == "/api/files/trash":
-            return trash_items(rels or [])
+            return PROJECT.trash(rels or [])
         raise NotFound("unknown file action")
 
     def post(self, path, body):
@@ -913,11 +693,9 @@ class Handler(httpbase.Handler):
             write_bytes(f, with_line_ends_of(str(body.get("content") or ""), f).encode("utf-8"))
             return self._json({"path": str(f)})
         if path == "/api/file":
-            r, code = save_file(body["path"], str(body["content"]), body.get("base_mtime"),
-                                bool(body.get("force")))
-            if code == 200:
-                GITSYNC.touched()       # an autosave commit follows once you stop editing
-            return self._json(r, code)
+            # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
+            return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
+                                            bool(body.get("force"))))
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
             if action == "bind":
@@ -972,8 +750,8 @@ class Handler(httpbase.Handler):
                 data = base64.b64decode(str(body.get("data") or ""), validate=True)
             except ValueError:
                 return self._err(400, "the file data is not base64")
-            rel = save_upload(str(body.get("name") or "file"), data,
-                              folder="" if destination == "project" else UPLOAD_DIR)
+            rel = PROJECT.upload(str(body.get("name") or "file"), data,
+                                 folder="" if destination == "project" else UPLOAD_DIR)
             if destination == "project":
                 GITSYNC.touched()
                 return self._json({"path": rel, "size": len(data)})

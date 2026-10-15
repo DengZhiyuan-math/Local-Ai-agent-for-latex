@@ -593,7 +593,7 @@ class Collaboration(unittest.TestCase):
         g.writes = SaveLock()
         real, unguarded, saves = g.git, [], []
 
-        def save(line):                     # what the editor does (server.save_file)
+        def save(line):                     # what the editor does (Project.save)
             with g.writes:
                 f = d / "main.tex"
                 f.write_text(f.read_text(encoding="utf-8") + line + "\n", encoding="utf-8")
