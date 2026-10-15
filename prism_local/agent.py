@@ -13,6 +13,7 @@ import json
 import re
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
@@ -25,8 +26,17 @@ import snapshot
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
-MAX_TURNS = 50          # turns kept in memory for their events and Undo
+MAX_TURNS = 50          # past turns Undo can still take back
+RECENT_JOBS = 8         # finished turns whose events a page may still be reading
 UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files (a slow hook) before saying so
+
+
+@dataclass(frozen=True)
+class Undoable:
+    """What Undo needs of a past turn: the files it changed, as they were and became."""
+    root: Path
+    before: dict[str, snapshot.FileState | None]
+    after: dict[str, snapshot.FileState | None]
 
 
 class AgentManager:
@@ -43,7 +53,7 @@ class AgentManager:
         self.writable_fn = writable_fn
         self.backends, self.default, self.config_error = backends or load_backends()
         self.jobs: dict[int, Job] = {}
-        self.turns: dict[int, Job] = {}
+        self.turns: dict[int, Undoable] = {}
         self.ids = itertools.count(1)
         self.lock = threading.Lock()
         self.active: Job | None = None
@@ -216,16 +226,18 @@ class AgentManager:
         # Codex keeps only metadata present at the start read-only, and no snapshot looks
         # inside .git: name what appeared, and leave deleting it to the author.
         new_metadata = sorted(self._metadata(job) - job.metadata_before)
-        # Undo needs only the files this turn changed: keep just those in memory.
+        # Undo needs only the files this turn changed, as they were and became; the turn's
+        # events stay only while a page may still be reading them (RECENT_JOBS).
         keep = [c["path"] for c in changed]
         job.before = {r: job.before.get(r) for r in keep}
         job.after = {r: job.after.get(r) for r in keep}
-        self.turns[job.id] = job
         with self.lock:
+            self.turns[job.id] = Undoable(job.root, job.before, job.after)
             while len(self.turns) > MAX_TURNS:
                 self.turns.pop(next(iter(self.turns)))
-            while len(self.jobs) > MAX_TURNS and next(iter(self.jobs)) != job.id:
-                self.jobs.pop(next(iter(self.jobs)))
+            done = [j for j in self.jobs if j != job.id and self.jobs[j].done]
+            for old in done[:max(0, len(done) - RECENT_JOBS)]:
+                self.jobs.pop(old)
         ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
               "exit": res.get("exit"), "scope": job.scope,
               "snapshot_issues": sorted(job.snapshot_issues),
@@ -333,14 +345,14 @@ class AgentManager:
 
     def undo(self, turn: int) -> dict:
         """Restore files changed in `turn`, only where they still match the turn's result."""
-        job = self.turns.get(turn)
-        if not job:
+        past = self.turns.get(turn)
+        if not past:
             return {"error": "unknown turn"}
-        rels = snapshot.changed_paths(job.before, job.after)
+        rels = snapshot.changed_paths(past.before, past.after)
         if not self.writes.acquire(timeout=UNDO_WAIT):
             return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
         try:
-            restored = snapshot.restore(job.root, job.before, job.after, rels)
+            restored = snapshot.restore(past.root, past.before, past.after, rels)
         finally:
             self.writes.release()
         if restored:

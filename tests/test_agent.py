@@ -610,6 +610,28 @@ class Snapshots(unittest.TestCase):
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
 
+    def test_a_past_turn_keeps_only_what_undo_needs(self):
+        """A turn's events (a written file streams its whole text) are kept while a page
+        may still read them; for Undo, only the files the turn changed, as they were."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+
+            class Write(backends.Backend):
+                def run(self, job):
+                    n = job.prompt.split()[0]
+                    job.emit({"t": "tool_live", "id": n, "text": "x" * 100_000})
+                    (job.root / f"f{n}.tex").write_text(n, encoding="utf-8")
+                    return {"exit": 0}
+
+            m = manager(root, write=Write("write"))
+            turns = [wait_done(m.jobs[m.start(str(n), None, "edit")["job"]])["turn"] for n in range(agent.RECENT_JOBS + 3)]
+            self.assertLessEqual(len(m.jobs), agent.RECENT_JOBS + 1)
+            past = m.turns[turns[0]]
+            self.assertFalse(hasattr(past, "events"), "no event log, process or prompt")
+            self.assertEqual(list(past.after), ["f0.tex"])
+            self.assertEqual(m.undo(turns[0])["restored"], ["f0.tex"])
+            self.assertFalse((root / "f0.tex").exists())
+
     def test_undo_writes_holding_the_save_lock_and_commits_after(self):
         """Undo writes the files while holding the editor's save lock (a sync's merge holds it
         too: a merge that gives up would put back what it saw), and lets go of it before the
@@ -846,11 +868,14 @@ class Snapshots(unittest.TestCase):
 
 
 def wait_done(job, timeout=10):
-    end = time.time() + timeout
+    """The turn's done event. Waits for new events only (asking from 0 again would return
+    at once and spin, taking the time the turn's own thread needs)."""
+    end, seen = time.time() + timeout, []
     while time.time() < end:
-        evs, done = job.wait_events(0, 0.5)
+        evs, done = job.wait_events(len(seen), 0.5)
+        seen += evs
         if done:
-            return next(e for e in evs if e["t"] == "done")
+            return next(e for e in seen if e["t"] == "done")
     raise AssertionError("turn did not finish")
 
 
