@@ -98,41 +98,18 @@ async function loadOpenedGit() {
 /* ------------------------------------------------------------------ folders and tags
    Folders (a research topic, its sub-projects, …) and tags only organize this list;
    hub.py keeps them in projects.json, and no file moves on disk. */
-const folderById = (id) => H.folders.find((f) => f.id === id);
-const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
-// When a project in folder f (or its subfolders) was last edited or opened; 0 if none.
-function folderTime(f, mode) {
-  const t = (p) => (mode === "edited" ? p.edited || 0 : p.opened || p.added || 0);
-  return H.projects.reduce((m, p) => (inFolder(p, f.id) ? Math.max(m, t(p)) : m), 0);
-}
-// Folders by name, or most recently edited/opened first (empty ones last, by name).
-function sortFolders(list, mode = H.folderSort) {
-  if (mode !== "edited" && mode !== "opened") return list.sort(byName);
-  const t = new Map(list.map((f) => [f.id, folderTime(f, mode)]));
-  return list.sort((a, b) => t.get(b.id) - t.get(a.id) || byName(a, b));
-}
-const childFolders = (id, mode) => sortFolders(H.folders.filter((f) => (f.parent || null) === (id || null)), mode);
-// Every folder below `id` (null: all of them), depth first, with its depth.
-function folderTree(id = null, depth = 0, out = [], mode = undefined) {
-  for (const f of childFolders(id, mode)) { out.push({ f, depth }); folderTree(f.id, depth + 1, out, mode); }
-  return out;
-}
-// A project's folder; one whose folder was deleted elsewhere counts as not in a folder.
-const folderOf = (p) => (p.folder_id && folderById(p.folder_id) ? p.folder_id : null);
-function folderPath(id) {
-  const out = [];
-  for (let f = folderById(id); f && out.length < 50; f = f.parent && folderById(f.parent)) out.unshift(f);
-  return out;
-}
-const isInside = (fid, ancestor) => folderPath(fid).some((f) => f.id === ancestor);
-const inFolder = (p, fid) => { const f = folderOf(p); return !!f && isInside(f, fid); };
-function allTags() {
-  const set = new Map();
-  for (const t of Object.keys(H.tagColors)) set.set(t, 0);
-  for (const p of H.projects) for (const t of p.tags || []) set.set(t, (set.get(t) || 0) + 1);
-  const list = [...set].map(([name, n]) => ({ name, n }));
-  return H.tagSort === "count" ? list.sort((a, b) => b.n - a.n || byName(a, b)) : list.sort(byName);
-}
+// Folders, their trees and the tags (homeview.js, on this page's state H).
+const folderById = (id) => HomeView.folderById(H, id);
+const byName = HomeView.byName;
+const folderTime = (f, mode) => HomeView.folderTime(H, f, mode);
+const sortFolders = (list, mode = H.folderSort) => HomeView.sortFolders(H, list, mode);
+const childFolders = (id, mode) => HomeView.childFolders(H, id, mode);
+const folderTree = (id = null, depth = 0, out = [], mode = undefined) => HomeView.folderTree(H, id, depth, out, mode);
+const folderOf = (p) => HomeView.folderOf(H, p);
+const folderPath = (id) => HomeView.folderPath(H, id);
+const isInside = (fid, ancestor) => HomeView.isInside(H, fid, ancestor);
+const inFolder = (p, fid) => HomeView.inFolder(H, p, fid);
+const allTags = () => HomeView.allTags(H);
 const TAG_PALETTE = ["#2f6db3", "#2e8540", "#b07800", "#c0392b", "#7d4fb3", "#00897b", "#c2185b", "#6b7280"];
 function tagColor(name) {
   const c = H.tagColors[name] && H.tagColors[name].color;
@@ -205,41 +182,15 @@ const locationName = () => ({ all: "Projects", pinned: "Pinned", unfiled: "Not i
   || (H.view.kind === "tag" ? `Tag “${H.view.id}”` : (folderById(H.view.id) || {}).name || "Projects"));
 
 /* ------------------------------------------------------------------ items: what the view lists */
-const fItem = (f) => ({ k: "f", id: f.id, f, key: "f:" + f.id });
-const pItem = (p) => ({ k: "p", id: p.id, p, key: "p:" + p.id });
+// What the view lists, and in which order (homeview.js).
+const { fItem, pItem, SORTS } = HomeView;
 function itemByKey(key) {
   const id = key.slice(2);
   if (key[0] === "f") { const f = folderById(id); return f && fItem(f); }
   const p = byId(id); return p && pItem(p);
 }
-function matches(p, q) {
-  if (!q) return true;
-  const hay = [p.name, p.folder, p.title || "", p.path, ...(p.tags || []),
-               ...folderPath(folderOf(p)).map((f) => f.name)].join("\n").toLowerCase();
-  return q.toLowerCase().split(/\s+/).every((w) => hay.includes(w));
-}
-const folderMatches = (f, q) => q.toLowerCase().split(/\s+/).every((w) => (f.name + "\n" + (f.note || "")).toLowerCase().includes(w));
-// {flat, items}: flat lists say where each item is (a Location column).
-function viewItems(q) {
-  const v = H.view, list = (pred) => H.projects.filter((p) => pred(p) && matches(p, q)).map(pItem);
-  if (v.kind === "pinned") return { flat: true, items: list((p) => p.pinned) };
-  if (v.kind === "unfiled") return { flat: true, items: list((p) => !folderOf(p)) };
-  if (v.kind === "tag") return { flat: true, items: list((p) => (p.tags || []).includes(v.id)) };
-  const fid = v.kind === "folder" ? v.id : null;
-  if (q) return { flat: true, items: [
-    ...folderTree(fid).map(({ f }) => f).filter((f) => folderMatches(f, q)).map(fItem),
-    ...list((p) => !fid || inFolder(p, fid)),
-  ] };
-  return { flat: false, items: [...childFolders(fid, "name").map(fItem), ...H.projects.filter((p) => folderOf(p) === fid).map(pItem)] };
-}
-/* Sorting: folders first (as in Explorer), then by the chosen column. */
-const SORTS = {
-  name: { label: "Name", dir: 1, f: (f) => f.name, p: (p) => p.name },
-  edited: { label: "Date modified", dir: -1, f: (f) => folderTime(f, "edited"), p: (p) => p.edited || 0 },
-  opened: { label: "Last opened", dir: -1, f: (f) => folderTime(f, "opened"), p: (p) => p.opened || p.added || 0 },
-  where: { label: "Location", dir: 1, f: (f) => folderPath(f.parent).map((x) => x.name).join("/"),
-           p: (p) => folderPath(folderOf(p)).map((x) => x.name).join("/") },
-};
+const matches = (p, q) => HomeView.matches(H, p, q);
+const viewItems = (q) => HomeView.viewItems(H, q);
 H.sortKey = SORTS[store.get("home.sort", "opened")] ? store.get("home.sort", "opened") : "opened";
 H.sortDir = store.get("home.sortDir", SORTS[H.sortKey].dir);
 function setSort(key, dir = null) {
@@ -247,14 +198,7 @@ function setSort(key, dir = null) {
   H.sortKey = key; H.sortDir = dir;
   store.set("home.sort", key); store.set("home.sortDir", dir); render();
 }
-const cmpVal = (x, y) => (typeof x === "string" ? x.localeCompare(y, undefined, { numeric: true, sensitivity: "base" }) : x - y);
-function sortItems(items, flat) {
-  const s = SORTS[!flat && H.sortKey === "where" ? "name" : H.sortKey];
-  const val = (it) => (it.k === "f" ? s.f(it.f) : s.p(it.p)), name = (it) => (it.k === "f" ? it.f.name : it.p.name);
-  const v = new Map(items.map((it) => [it.key, val(it)]));
-  return items.sort((a, b) => (a.k === b.k ? 0 : a.k === "f" ? -1 : 1)
-    || H.sortDir * cmpVal(v.get(a.key), v.get(b.key)) || cmpVal(name(a), name(b)));
-}
+const sortItems = (items, flat) => HomeView.sortItems(H, items, flat);
 
 /* ------------------------------------------------------------------ render helpers */
 const fmtDate = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" }) : "");

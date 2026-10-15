@@ -695,27 +695,7 @@ function renderSync(st) {
   $("#sync-github").hidden = !S.githubUrl;
   if (S.githubUrl) $("#sync-github").href = S.githubUrl;
   else $("#sync-github").removeAttribute("href");
-  const targetText = (t) => t ? `${t.repository_identity}, branch ${t.branch_ref.replace(/^refs\/heads\//, "")}` : "unavailable";
-  let text, cls = "", detail;
-  const when = st.last_push || (st.last_commit && st.last_commit.at);
-  if (!st.own) { text = "Not on GitHub"; cls = "off"; detail = "This project has no git repository yet. Create a private GitHub repository for it below: it is then saved and synced automatically."; }
-  else if (!st.enabled) { text = "Sync off"; cls = "off"; detail = "Changes are not committed or pushed automatically. Switch it on below."; }
-  else if (st.blocked_reason && st.remote) { text = "Sync paused"; cls = "warn"; detail = `Local edits are saved. ${st.blocked_reason}. Bound target: ${targetText(st.bound_target)}. Current target: ${targetText(st.target)}.`; }
-  else if (st.clash && st.clash.length) { text = "Clash with GitHub"; cls = "warn"; detail = st.error || ""; }
-  else if (st.error) { text = "Not synced"; cls = "warn"; detail = st.error; }
-  else if (st.state !== "idle") { text = { committing: "Saving…", pushing: "Pushing…", pulling: "Pulling…" }[st.state] || "Syncing…"; cls = "busy"; detail = "Working with git…"; }
-  else if (st.pending) {
-    const n = Math.ceil((st.next_autosave || 0) / 60);
-    text = "Unsaved changes"; cls = "pending";
-    detail = `Your latest edits are saved on disk, not yet in GitHub. They are committed ${n <= 0 ? "now" : `in about ${n} min`} (or once you stop editing for 2 min).`;
-  }
-  else if (st.ahead && st.remote) { text = `${st.ahead} to push`; cls = "pending"; detail = `${st.ahead} commit${st.ahead > 1 ? "s" : ""} not on GitHub yet.`; }
-  else if (st.remote && st.kept && st.kept.length) {
-    text = `Both versions kept (${st.kept.length})`; cls = "pending";
-    detail = "Synced with GitHub. Where you and a co-author changed the same lines, both versions are in the file: open the menu to go there.";
-  }
-  else if (!st.remote) { text = "Not on GitHub"; cls = "off"; detail = "Committed in the project's repository, which has no GitHub remote yet: nothing is pushed. Create one below."; }
-  else { text = "Saved to GitHub"; cls = "ok"; detail = `Synced to ${targetText(st.target)}${when ? ", " + ago(when) : ""}.`; }
+  const { text, cls, detail } = SyncState.describeSync(st, ago);     // syncstate.js
   label.textContent = text;
   b.className = "ghost sync-" + cls;
   b.title = detail.replace(/<[^>]+>/g, "");
@@ -910,42 +890,18 @@ $("#btn-restart").onclick = async () => {
 
 /* ------------------------------------------------------------------ completion */
 function lineBefore(ed) { const c = ed.getCursor(); return ed.getLine(c.line).slice(0, c.ch); }
-const REF_RE = /\\(?:[cC]ref|[cC]pageref|ref|eqref|autoref|pageref|labelcref|namecref|nameref)\*?\{([^}]*)$/;
-const CITE_RE = /\\(?:cite[tp]?|nocite|citeauthor|citeyear)\*?(?:\[[^\]]*\]){0,2}\{([^}]*)$/;
-const CMD_RE = /\\([A-Za-z]*)$/;
-const COMMON_CMDS = ["begin", "end", "label", "cref", "Cref", "eqref", "cite", "section", "subsection", "emph", "textbf",
-  "mathbb", "mathcal", "mathrm", "operatorname", "frac", "sum", "int", "lim", "sup", "inf", "left", "right", "langle", "rangle",
-  "varepsilon", "alpha", "beta", "gamma", "delta", "lambda", "mu", "sigma", "omega", "Omega", "partial", "nabla", "infty",
-  "subseteq", "coloneqq", "quad", "qquad", "text", "item", "input", "footnote", "ref", "includegraphics"];
-
+// What to complete (\ref, \cite, \commands): chatlogic.js decides, this draws.
 function computeHints(ed, explicit) {
-  const before = lineBefore(ed), cur = ed.getCursor();
-  let m, items = [], word = "";
-  if ((m = before.match(REF_RE))) {
-    word = m[1].split(",").pop().trimStart();
-    const titles = S.symbols.env_titles || {};
-    items = S.symbols.labels.map((l) => ({ text: l.label, kind: `${titles[l.kind] || l.kind} · ${l.file.split("/").pop()}:${l.line}` }));
-  } else if ((m = before.match(CITE_RE))) {
-    word = m[1].split(",").pop().trimStart();
-    items = S.symbols.bibkeys.map((k) => ({ text: k.key, kind: k.type }));
-  } else if ((m = before.match(CMD_RE)) && (explicit || m[1].length >= 2)) {
-    word = m[1];
-    const mine = new Set((S.symbols.macros || []).map((x) => x.name));
-    items = [...new Set([...mine, ...COMMON_CMDS])].map((n) => ({ text: n, kind: mine.has(n) ? "macros.tex" : "" }));
-  } else return null;
-  const w = word.toLowerCase();
-  const list = items.filter((i) => i.text.toLowerCase().includes(w) && i.text !== word)
-    .sort((a, b) => (a.text.toLowerCase().startsWith(w) ? 0 : 1) - (b.text.toLowerCase().startsWith(w) ? 0 : 1) || a.text.localeCompare(b.text))
-    .slice(0, 60)
-    .map((i) => ({ text: i.text, render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
-  if (!list.length) return null;
-  return { list, from: { line: cur.line, ch: cur.ch - word.length }, to: cur };
+  const cur = ed.getCursor(), found = ChatLogic.completions(lineBefore(ed), S.symbols, explicit);
+  if (!found) return null;
+  const list = found.items.map((i) => ({ text: i.text, render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
+  return { list, from: { line: cur.line, ch: cur.ch - found.word.length }, to: cur };
 }
 
 function showCompletions(ed, explicit) {
   if (ed.state.completionActive) return;          // the open widget re-queries by itself
   if (!computeHints(ed, explicit)) {
-    if (explicit && CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
+    if (explicit && ChatLogic.CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
     return;
   }
   ed.showHint({ hint: (e) => computeHints(e, explicit), completeSingle: false });
@@ -1294,11 +1250,10 @@ const C = { provider: store.get("chat.provider", null), job: null, cur: null };
 const prov = () => P.byId[C.provider] || { id: C.provider, label: "Agent", models: [], efforts: [] };
 const provLabel = () => prov().label || "the agent";
 // Settings saved before providers existed belong to Claude Code.
-const conversationKey = (k, provider = C.provider) => P.projectKey ? `chat.${P.projectKey}.${provider}.${k}` : null;
-const provGet = (k) => ["session", "context", "log", "snips"].includes(k)
-  ? (conversationKey(k) ? store.get(conversationKey(k), null) : null)
-  : store.get(`chat.${k}.${C.provider}`, null);
-const provSet = (k, v) => { const key = ["session", "context", "log", "snips"].includes(k) ? conversationKey(k) : `chat.${k}.${C.provider}`; if (key) store.set(key, v); };
+// Where each is kept: per project and provider, or per provider (chatlogic.js).
+const conversationKey = (k, provider = C.provider) => ChatLogic.storageKey(k, P.projectKey, provider);
+const provGet = (k) => { const key = conversationKey(k); return key ? store.get(key, null) : null; };
+const provSet = (k, v) => { const key = conversationKey(k); if (key) store.set(key, v); };
 // The account the provider runs under (Claude Code: `claude auth status`), and whether
 // it is the one allowed in Home → Settings. A mismatch stops every turn on the server.
 async function loadAccount() {
@@ -1495,7 +1450,6 @@ post-turn restoration is not an access boundary.`, "msg intro");
    Claude and Codex use native permissions; API tools check paths before writing.
    Deep Code scope uses post-turn restoration. Without any, it may change any
    file in the project and create new ones. */
-const MENTION_RE = /(^|\s)@([^\s@]+)/g;
 C.snips = {};      // selection text belongs to the current project and provider
 
 function selectionMention() {
@@ -1504,18 +1458,7 @@ function selectionMention() {
   const from = cm.getCursor("from").line + 1, to = cm.getCursor("to").line + 1;
   return { token: `@${t.path}:${from === to ? from : from + "-" + to}`, file: t.path, text: sel.slice(0, 6000) };
 }
-function parseMentions(text) {
-  const out = [], seen = new Set();
-  for (const m of text.matchAll(MENTION_RE)) {
-    const raw = m[2].replace(/[.,;!?)]+$/, "");
-    const mm = /^(.+?)(?::(\d+)(?:-(\d+))?)?$/.exec(raw);
-    if (!mm || seen.has(raw) || !S.files.some((f) => f.path === mm[1] && f.editable !== false)) continue;
-    seen.add(raw);
-    const from = mm[2] ? +mm[2] : null;
-    out.push({ token: "@" + raw, file: mm[1], from, to: mm[3] ? +mm[3] : from });
-  }
-  return out;
-}
+const parseMentions = (text) => ChatLogic.parseMentions(text, S.files);
 const rangeLabel = (m) => m.from ? `${m.file}:${m.from}${m.to !== m.from ? "–" + m.to : ""}` : m.file;
 
 async function referenceBlock(mentions) {
@@ -2281,11 +2224,7 @@ function renderProviders(info) {
 }
 $("#chat-provider").onchange = (e) => setProvider(e.target.value);
 
-// The prompt for a message starting with "/": the command must come first. Skills take
-// free text. Keep referenced text for unknown commands and all providers too.
-function slashPrompt(text, refs) {
-  return refs ? text + "\n\n" + refs : text;
-}
+const slashPrompt = ChatLogic.slashPrompt;      // a /command comes first
 
 /* Completion menu: "/" at the start of the message lists commands and skills;
    "@" anywhere lists the editor selection, the open file and the project files. */

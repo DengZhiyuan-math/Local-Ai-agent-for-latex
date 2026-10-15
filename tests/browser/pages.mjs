@@ -37,8 +37,26 @@ check("theme button cycles", await ed.ev(`
 check("diff panel colours lines", await ed.ev(`
   $("#diff").innerHTML = diffHtml("+a\\n-b");
   return document.querySelectorAll("#diff .add, #diff .del").length === 2;`));
+check("sync menu drops a stale GitHub link", await ed.ev(`
+  S.githubUrl = "https://github.com/owner/tool"; $("#sync-github").href = S.githubUrl;
+  renderSync({ own: true, enabled: true, remote: true, state: "idle", target: null,
+               bound_target: { repository_identity: "github.com/owner/paper", branch_ref: "refs/heads/main" },
+               blocked_reason: "Fetch and push differ" });
+  return S.githubUrl === "" && $("#sync-github").hidden && !$("#sync-github").hasAttribute("href")
+    && $("#sync-label").textContent === "Sync paused" && $("#sync-detail").innerHTML.includes("github.com/owner/paper");`));
+check("completion of a label", await ed.ev(`
+  for (let i = 0; i < 50 && !S.tabs.length; i++) await new Promise((r) => setTimeout(r, 100));
+  S.symbols = { ...S.symbols, labels: [{ label: "thm:main", kind: "theorem", file: "main.tex", line: 1 }], env_titles: { theorem: "Theorem" } };
+  cm.setValue("see \\\\cref{thm"); cm.setCursor({ line: 0, ch: 13 });
+  const h = computeHints(cm, false);
+  return !!h && h.list.length === 1 && h.list[0].text === "thm:main" && h.from.ch === 10;`));
 ed.close();
 const hm = await open(home);
+check("home search lists the project", await hm.ev(`
+  for (let i = 0; i < 50 && !H.loaded; i++) await new Promise((r) => setTimeout(r, 100));
+  const before = viewItems("").items.length;
+  const found = viewItems("proj").items.map((i) => i.p && i.p.name);
+  return before >= 1 && found.includes("proj");`));
 check("home loads", hm.errors.length === 0, hm.errors.join(" | "));
 check("home ago and plural", await hm.ev(`return ago(Date.now() / 1000 - 7200) === "2 h ago" && plural(2, "item") === "2 items"`));
 hm.close();

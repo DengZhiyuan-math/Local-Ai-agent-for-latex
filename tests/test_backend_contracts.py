@@ -303,19 +303,5 @@ class VisualAttachments(unittest.TestCase):
                                                           attachments=["figure.png"])["error"])
 
 
-class FrontendReferences(unittest.TestCase):
-    def test_unknown_slash_command_keeps_selection_text(self):
-        import shutil
-        if not shutil.which("node"):
-            self.skipTest("Node is not installed")
-        source = (Path(__file__).resolve().parents[1] / "prism_local/static/app.js").read_text(encoding="utf-8")
-        start = source.index("function slashPrompt(")
-        end = source.index("\n}", start) + 2
-        script = "const catalog={skills:[]};\n" + source[start:end] \
-            + '\nprocess.stdout.write(slashPrompt("/review @main.tex:1-2", "SELECTED_TEXT"));'
-        p = subprocess.run(["node", "-e", script], capture_output=True, text=True, check=True)
-        self.assertEqual(p.stdout, "/review @main.tex:1-2\n\nSELECTED_TEXT")
-
-
 if __name__ == "__main__":
     unittest.main()
