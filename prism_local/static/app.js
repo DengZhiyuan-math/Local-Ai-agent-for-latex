@@ -4,7 +4,7 @@
 
 /* ------------------------------------------------------------------ state */
 const S = {
-  files: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
+  files: [], folders: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 
@@ -357,9 +357,11 @@ function showBanner(t) {
 
 /* ------------------------------------------------------------------ file tree & outline */
 function renderTree() {
+  if ($("#tree input")) return;        // a name is being typed (askName draws it afterwards)
   const groups = new Map();
   const rank = (p) => { const i = S.order.indexOf(p); return i < 0 ? 999 : i; };
   const files = [...S.files].sort((a, b) => rank(a.path) - rank(b.path) || a.path.localeCompare(b.path));
+  for (const d of S.folders) groups.set(d, []);          // empty folders are shown too
   for (const f of files) {
     const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
     if (!groups.has(dir)) groups.set(dir, []);
@@ -372,7 +374,7 @@ function renderTree() {
   });
   let html = "";
   for (const d of dirs) {
-    if (d) html += `<li class="folder">${esc(d)}/</li>`;
+    if (d) html += `<li class="folder" data-dir="${esc(d)}" title="${esc(d)}">${esc(d)}/</li>`;
     for (const f of groups.get(d)) {
       html += `<li data-path="${esc(f.path)}" class="${f.path === S.active ? "active" : ""}" title="${esc(f.path)}">
         ${esc(f.path.split("/").pop())}${f.git ? `<span class="git" title="git status">${esc(f.git)}</span>` : ""}</li>`;
@@ -381,7 +383,121 @@ function renderTree() {
   $("#tree").innerHTML = html;
   AH.refresh();
 }
-$("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li) openFile(li.dataset.path); });
+$("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li && !li.querySelector("input")) openFile(li.dataset.path); });
+
+/* The Files sidebar's menu (right-click), as Explorer or Finder offers it. Copy and Paste
+   use the system's clipboard, so files go to and come from Explorer, Finder and other
+   projects; where the system has none (Linux), a copy stays in this page, for this project. */
+const parentDir = (p) => p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
+const within = (p, root) => p === root || p.startsWith(root + "/");
+let fileClip = null;              // paths copied here, where the system has no file clipboard
+
+function fileMenu(target) {      // target: {path, dir}, or null for the project itself
+  const folder = !target ? "" : target.dir ? target.path : parentDir(target.path);
+  const fresh = [["New file…", () => askNew(folder, "file")], ["New folder…", () => askNew(folder, "folder")]];
+  if (!target) return [...fresh, "-", ["Paste", () => pasteInto("")], "-",
+    [`Open project folder in ${FILE_MANAGER}`, () => fileAction("reveal", { path: "" })]];
+  return [
+    ...(target.dir ? fresh : [["Open", () => openFile(target.path)]]),
+    "-",
+    [`Show in ${FILE_MANAGER}`, () => fileAction("reveal", { path: target.path })],
+    "-",
+    ["Copy", () => copyItems([target.path])],
+    ["Paste", () => pasteInto(folder)],
+    "-",
+    ["Rename…", () => askRename(target)],
+    [`Delete (to ${TRASH})`, () => trashItems(target), "danger"],
+  ];
+}
+$("#tree").closest("section").addEventListener("contextmenu", (e) => {
+  const li = e.target.closest("#tree li[data-path], #tree li[data-dir]");
+  e.preventDefault();
+  if (li?.querySelector("input")) return;
+  const target = li && { path: li.dataset.path ?? li.dataset.dir, dir: li.dataset.dir !== undefined };
+  showMenu(null, fileMenu(target), { x: e.clientX, y: e.clientY });
+});
+
+async function fileAction(action, body) {
+  const r = await api("/api/files/" + action, body);
+  if (r._status !== 200) { toast(r.error || `Could not ${action}`); return null; }
+  return r;
+}
+async function copyItems(paths) {
+  const r = await fileAction("copy", { paths }); if (!r) return;
+  fileClip = r.system ? null : paths;
+  toast(r.system ? `Copied: paste it here, in ${FILE_MANAGER} or in another project`
+    : `Copied, to paste in this project (${r.message})`);
+}
+async function pasteInto(folder) {
+  const r = await fileAction("paste", { folder, paths: fileClip || undefined }); if (!r) return;
+  await poll();
+  toast((r.pasted.length ? `Pasted ${r.pasted.join(", ")}` : "Nothing was pasted")
+    + (r.skipped.length ? `\nLeft out: ${r.skipped.join("; ")}` : ""));
+}
+
+// A name typed in the sidebar itself: Enter or leaving the box keeps it, Escape cancels.
+// The tree is not redrawn meanwhile (renderTree waits), so the box stays.
+function askName(li, initial, placeholder, done) {
+  const input = Object.assign(document.createElement("input"), { value: initial, placeholder, spellcheck: false });
+  li.replaceChildren(input);
+  input.focus();
+  const dot = initial.lastIndexOf(".");
+  input.setSelectionRange(0, dot > 0 ? dot : initial.length);
+  let over = false;
+  const finish = async (keep) => {
+    if (over) return;
+    over = true;
+    const name = input.value.trim();
+    li.textContent = keep && name ? name : initial;    // until renderTree draws the tree again
+    if (keep && name && name !== initial) await done(name);
+    renderTree();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+}
+const treeItem = (target) => $("#tree").querySelector(target.dir
+  ? `li[data-dir="${CSS.escape(target.path)}"]` : `li[data-path="${CSS.escape(target.path)}"]`);
+
+function askRename(target) {
+  const li = treeItem(target); if (!li) return;
+  askName(li, target.path.split("/").pop(), "", async (name) => {
+    const tabs = S.tabs.filter((t) => within(t.path, target.path));
+    for (const t of tabs) if (isDirty(t) && !t.conflict) await saveTab(t);   // its text goes with it
+    const r = await fileAction("rename", { path: target.path, name }); if (!r) return;
+    const moved = (p) => r.path + p.slice(target.path.length);
+    for (const t of tabs) t.path = moved(t.path);
+    if (S.active && within(S.active, target.path)) S.active = moved(S.active);
+    renderTabs(); persistSession(); await poll();
+  });
+}
+function askNew(folder, kind) {
+  const li = document.createElement("li");
+  const header = folder && $("#tree").querySelector(`li[data-dir="${CSS.escape(folder)}"]`);
+  if (header) header.after(li); else $("#tree").prepend(li);
+  askName(li, "", kind === "folder" ? "folder name" : "name.tex", async (name) => {
+    const r = await fileAction("new", { folder, name, kind }); if (!r) return;
+    await poll();
+    if (r.kind === "file" && S.files.some((f) => f.path === r.path && f.editable)) openFile(r.path);
+  });
+}
+async function trashItems(target) {
+  const unsaved = S.tabs.filter((t) => within(t.path, target.path) && isDirty(t)).map((t) => t.path);
+  if (!confirm(`Move ${target.dir ? "the folder " : ""}${target.path} to the ${TRASH}?`
+    + (unsaved.length ? `\n\nUnsaved edits in ${unsaved.join(", ")} will be lost.` : ""))) return;
+  const r = await fileAction("trash", { paths: [target.path] }); if (!r) return;
+  S.tabs = S.tabs.filter((t) => !within(t.path, target.path));
+  if (S.active && within(S.active, target.path)) {
+    const next = S.tabs[S.tabs.length - 1];
+    if (next) openFile(next.path);
+    else { S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false; }
+  }
+  renderTabs(); persistSession(); await poll();
+  toast(`Moved ${target.path} to the ${TRASH}`);
+}
 
 const MAX_UPLOAD_SIZE = 25 * 1024 * 1024;
 async function uploadFile(file, destination = "attachment") {
@@ -543,8 +659,9 @@ async function pollOnce() {
   if (r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
-  const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]));
-  S.files = r.files; S.order = r.order || [];
+  const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]))
+    || JSON.stringify(r.folders || []) !== JSON.stringify(S.folders);
+  S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];
   if (changed) renderTree();
   let anyChange = false;
   for (const t of S.tabs) {

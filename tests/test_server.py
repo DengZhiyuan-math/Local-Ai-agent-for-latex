@@ -245,6 +245,94 @@ class Files(unittest.TestCase):
 
 
 @unittest.skipUnless(shutil.which("git"), "needs git")
+class FileMenu(unittest.TestCase):
+    """The Files sidebar's menu: new, rename, copy and paste, delete to the Recycle Bin."""
+
+    def files(self, action, **body):
+        return server.Handler._files(None, "/api/files/" + action, body)
+
+    def test_the_tree_shows_empty_folders_but_not_hidden_or_excluded_ones(self):
+        root = project({"main.tex": "", "a/b.tex": "", "build/x.log": ""})
+        for d in ("empty", "a/sub", ".hidden", "node_modules"):
+            (root / d).mkdir()
+        walked = []
+        server.list_both(walked)
+        self.assertEqual(sorted(walked), ["a", "a/sub", "empty"])
+
+    def test_new_file_and_folder_with_names_that_work_everywhere(self):
+        root = project({"main.tex": ""})
+        self.assertEqual(self.files("new", folder="", name="figs", kind="folder"), {"path": "figs", "kind": "folder"})
+        self.assertEqual(self.files("new", folder="figs", name="a.tex")["path"], "figs/a.tex")
+        self.assertTrue((root / "figs/a.tex").is_file())
+        for bad in ("a.tex", "x/y.tex", "con.tex", ".env", "end.", " lead", 'q"uote'):
+            with self.subTest(name=bad), self.assertRaises(ValueError):
+                self.files("new", folder="figs", name=bad)
+
+    def test_rename_a_file_a_folder_and_only_the_case(self):
+        root = project({"main.tex": "", "a/b.tex": "", "a/c.tex": ""})
+        self.assertEqual(self.files("rename", path="a/b.tex", name="d.tex"), {"path": "a/d.tex"})
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            self.files("rename", path="a/d.tex", name="c.tex")
+        self.assertEqual(self.files("rename", path="a", name="chapters"), {"path": "chapters"})
+        self.assertEqual(self.files("rename", path="main.tex", name="Main.tex"), {"path": "Main.tex"})
+        self.assertIn("Main.tex", os.listdir(root))
+        with self.assertRaises(ValueError):
+            self.files("rename", path="", name="x")
+
+    def test_paste_copies_beside_what_is_there_without_repository_metadata(self):
+        root = project({"main.tex": "body", "figs/a.png": "png", "figs/.git/config": "repo"})
+        r = self.files("paste", folder="", paths=["main.tex", "figs"])
+        self.assertEqual(r, {"pasted": ["main-copy.tex", "figs-copy"], "skipped": []})
+        self.assertEqual(self.files("paste", folder="", paths=["main.tex"])["pasted"], ["main-copy-2.tex"])
+        self.assertEqual((root / "figs-copy/a.png").read_text(), "png")
+        self.assertFalse((root / "figs-copy/.git").exists())
+        r = self.files("paste", folder="figs", paths=["figs"])
+        self.assertEqual((r["pasted"], len(r["skipped"])), ([], 1))
+
+    def test_paste_takes_what_explorer_or_finder_copied(self):
+        root = project({"main.tex": ""})
+        outside = tmpdir()
+        (outside / "fig.pdf").write_text("pdf")
+        with mock.patch.object(server.desktop, "clipboard_files", return_value=[outside / "fig.pdf"]):
+            self.assertEqual(self.files("paste", folder="")["pasted"], ["fig.pdf"])
+        self.assertEqual((root / "fig.pdf").read_text(), "pdf")
+        with mock.patch.object(server.desktop, "clipboard_files", return_value=[]), \
+                self.assertRaisesRegex(ValueError, "holds no files"):
+            self.files("paste", folder="")
+
+    def test_copy_falls_back_to_the_page_where_the_system_has_no_file_clipboard(self):
+        project({"main.tex": ""})
+        with mock.patch.object(server.desktop, "copy_files") as copy:
+            self.assertEqual(self.files("copy", paths=["main.tex"]), {"system": True})
+        self.assertEqual(copy.call_args.args[0], [server.ROOT / "main.tex"])
+        with mock.patch.object(server.desktop, "copy_files", side_effect=server.desktop.Unsupported("no")):
+            self.assertEqual(self.files("copy", paths=["main.tex"])["system"], False)
+
+    def test_delete_goes_to_the_recycle_bin_and_never_takes_the_project(self):
+        project({"main.tex": "", "a/b.tex": ""})
+        with mock.patch.object(server.desktop, "trash") as trash:
+            self.assertEqual(self.files("trash", paths=["a"]), {"trashed": ["a"]})
+            trash.assert_called_once_with([server.ROOT / "a"])
+            with self.assertRaises(ValueError):
+                self.files("trash", paths=[""])
+
+    def test_only_what_the_sidebar_shows_and_never_during_an_agent_turn(self):
+        root = project({"main.tex": "", "build/x.tex": ""})
+        (root / ".git").mkdir()
+        for rel in (".git", "build/x.tex", "../x", "missing.tex"):
+            with self.subTest(rel=rel), self.assertRaises(ValueError):
+                self.files("rename", path=rel, name="y.tex")
+        if os.name == "nt":
+            import _winapi
+            _winapi.CreateJunction(str(root / "build"), str(root / "link"))
+            with self.assertRaises(ValueError):
+                self.files("rename", path="link/x.tex", name="y.tex")
+        with mock.patch.object(server.AGENT, "busy", return_value=True), \
+                self.assertRaisesRegex(server.FilesBusy, "agent"):
+            self.files("new", folder="", name="new.tex")
+        self.assertFalse((root / "new.tex").exists())
+
+
 class GitState(unittest.TestCase):
     def git(self, cwd, *args):
         subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=cwd,

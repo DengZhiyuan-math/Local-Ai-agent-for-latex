@@ -11,7 +11,7 @@ let projectKey = null;             // fixed for this page's lifetime; never foll
 // Never throws: when the server cannot be reached, the answer is {_status: 0, error}, so
 // every caller handles it like any other failed request (and re-enables its buttons).
 async function api(path, body) {
-  if (projectKey && path.startsWith("/api/agent")) {
+  if (projectKey && (path.startsWith("/api/agent") || path.startsWith("/api/files/"))) {
     if (body !== undefined) body = { ...body, project_key: projectKey };
     else if (path.startsWith("/api/agent/events")) path += (path.includes("?") ? "&" : "?") + "project_key=" + encodeURIComponent(projectKey);
   }
@@ -179,3 +179,39 @@ const pdfChannel = "BroadcastChannel" in window ? new BroadcastChannel("prism-pd
   beat();
   setInterval(beat, 5000);
 })();
+
+/* A context menu, for Home and the editor: items are [[label, fn, cls?], "-", …], shown
+   below an anchor element or at a point {x, y}. */
+let menuItems = [];
+const MENU = $("#menu") || document.body.appendChild(Object.assign(document.createElement("div"),
+  { id: "menu", className: "menu", hidden: true }));
+MENU.setAttribute("role", "menu");
+function showMenu(anchor, items, at = null) {
+  const m = MENU;
+  menuItems = items;
+  m.innerHTML = items.map((it, i) => it === "-" ? "<hr>" : `<button data-m="${i}" class="${it[2] || ""}" role="menuitem">${esc(it[0])}</button>`).join("");
+  m.hidden = false;
+  const mw = m.offsetWidth, mh = m.offsetHeight;
+  const r = anchor ? anchor.getBoundingClientRect() : { left: at.x, right: at.x + mw, top: at.y, bottom: at.y };
+  m.style.left = Math.max(8, Math.min(anchor ? r.right - mw : r.left, innerWidth - mw - 8)) + "px";
+  m.style.top = Math.max(8, r.bottom + mh + 6 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + "px";
+  m.querySelector("button").focus();
+}
+function closeMenu() { MENU.hidden = true; }
+MENU.addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-m]"); if (!b) return;
+  closeMenu(); menuItems[+b.dataset.m][1]();
+});
+MENU.addEventListener("keydown", (e) => {
+  const bs = [...MENU.querySelectorAll("button")], i = bs.indexOf(document.activeElement);
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault(); bs[(i + (e.key === "ArrowDown" ? 1 : bs.length - 1)) % bs.length].focus();
+  }
+});
+document.addEventListener("mousedown", (e) => { if (!MENU.hidden && !e.target.closest("#menu")) closeMenu(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenu(); });
+window.addEventListener("blur", closeMenu);
+window.addEventListener("resize", closeMenu);
+// Which file manager "Show in …" opens.
+const FILE_MANAGER = IS_MAC ? "Finder" : /Windows/.test(navigator.userAgent) ? "File Explorer" : "file manager";
+const TRASH = IS_MAC ? "Trash" : "Recycle Bin";

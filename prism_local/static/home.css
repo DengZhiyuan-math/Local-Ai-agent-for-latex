@@ -205,14 +205,6 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
 .tagchip:hover { border-color: var(--tag); }
 
 /* ---------- menu, toast */
-.menu {
-  position: fixed; z-index: 30; min-width: 180px; background: var(--panel); border: 1px solid var(--border);
-  border-radius: 8px; box-shadow: 0 8px 24px rgba(0, 0, 0, .18); padding: 4px;
-}
-.menu button { display: block; width: 100%; text-align: left; border: none; background: none; padding: 6px 10px; border-radius: 5px; }
-.menu button:hover { background: var(--panel2); }
-.menu button.danger { color: var(--err); }
-.menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
 #toast {
   position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%); z-index: 40; max-width: min(640px, 90vw);
   background: var(--text); color: var(--bg); padding: 8px 14px; border-radius: 8px; font-size: 13px;

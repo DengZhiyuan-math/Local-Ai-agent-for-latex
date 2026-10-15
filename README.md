@@ -136,8 +136,14 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
 - **+ New project** (or `n`) creates a folder from a template (math paper with amsart, article,
   or empty), optionally with a git and a private GitHub repository. **Add existing…** adds a
   folder you already have.
-- A right-click (or the **⋯** in the preview pane) pins, renames, moves to a folder, tags, shows in
-  Explorer/Finder, copies the path, or removes from the list (the files are never touched).
+- A right-click (or the **⋯** in the preview pane) pins, renames, moves to a folder, tags, opens
+  the folder in Explorer/Finder, copies the folder or its path, or removes from the list (the
+  files are never touched). **Move folder to Recycle Bin…** deletes the project's folder to the
+  Recycle Bin (Trash on macOS) and forgets it; close its editor first. It refuses a folder that
+  holds your home folder, prism-local or another project.
+- **Copy folder** puts the project's folder on the system clipboard, to paste in Explorer or
+  Finder. **Paste project folders** (right-click the empty space or a folder) adds folders
+  copied there as projects, where they are; nothing is copied.
 - **Rename** changes the project's folder on disk too (also from the editor: click the name at
   the top left). Characters no folder may have (`: * ? " < > | / \`) become `-` in the
   folder's name; the list keeps the name as typed.
@@ -786,9 +792,12 @@ tests/                     python -m unittest discover -s tests
 - The built-in builder does not run xindy or bib2gls (xindy-style glossaries and indexes,
   glossaries-extra's `\GlsXtrLoadResources`). Use `"builder": "latexmk"` with a latexmkrc
   for those.
-- No collaborative editing, and no file rename or delete inside the editor. Drag existing
-  files onto the Files sidebar to add them. Use your file manager, git or Claude to create,
-  rename or delete files. (The Home page can create new projects.)
+- No collaborative editing. Right-click the Files sidebar to create a file or folder, rename,
+  copy and paste, delete to the Recycle Bin (Trash on macOS), or show an item in Explorer or
+  Finder; drag files onto it to add them. Copy and Paste use the system clipboard, so files go
+  to and from Explorer, Finder and other projects (on Linux, only within the project).
+  Pasting never brings a `.git` or other metadata folder along, and a name that is taken gets
+  `-copy`. None of this runs during an agent's turn. Empty folders are listed too.
 
 ## License
 

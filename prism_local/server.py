@@ -21,11 +21,13 @@ import fnmatch
 import gzip
 import os
 import re
+import shutil
 import subprocess
 import sys
 import threading
 import time
 import webbrowser
+from contextlib import contextmanager
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -34,7 +36,9 @@ import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from repository import FilesLock  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, project_path, with_line_ends_of, write_bytes  # noqa: E402
+from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
+                    project_path, with_line_ends_of, write_bytes)
+import desktop  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
@@ -116,14 +120,17 @@ def _plain(entry: os.DirEntry, rel: str) -> bool:
         return False
 
 
-def _walk():
+def _walk(folders: list[str] | None = None):
     """The project's files folder by folder, in the order of os.walk (sorted, depth first,
     linked folders left out): lists of (rel, plain). plain: a _plain file in a folder that
     resolves to where the walk found it (not reached through a junction), which is inside
-    the project without resolving the file itself (slow on Windows, for every file)."""
+    the project without resolving the file itself (slow on Windows, for every file).
+    Each folder visited, empty ones too, is added to `folders`."""
     stack = [""]
     while stack:
         reld = stack.pop()
+        if reld and folders is not None:
+            folders.append(reld[:-1])
         top = ROOT / reld
         try:
             with os.scandir(top) as it:
@@ -147,11 +154,11 @@ def _walk():
         stack += [reld + d + "/" for d in sorted(dirs, reverse=True) if not os.path.islink(top / d)]
 
 
-def _gather(*wanted: bool) -> list[dict[str, bool]]:
+def _gather(*wanted: bool, folders: list[str] | None = None) -> list[dict[str, bool]]:
     """For each editable_only in `wanted`, the files list_files considers ({rel: plain}),
     all from one walk. Each list stops growing after the folder that takes it past MAX_FILES."""
     found: list[dict[str, bool]] = [{} for _ in wanted]
-    for batch in _walk():
+    for batch in _walk(folders):
         for seen, editable_only in zip(found, wanted):
             if len(seen) <= MAX_FILES:
                 seen.update((rel, plain) for rel, plain in batch
@@ -185,11 +192,12 @@ def list_files(*, editable_only: bool = True) -> list[str]:
     return _checked(_gather(editable_only)[0], editable_only)
 
 
-def list_both() -> tuple[list[str], list[str]]:
-    """list_files(editable_only=False) and list_files(), from one walk of the project."""
+def list_both(folders: list[str] | None = None) -> tuple[list[str], list[str]]:
+    """list_files(editable_only=False) and list_files(), from one walk of the project; the
+    folders it visited, empty ones too, are added to `folders` (not with CFG.files)."""
     if CFG.files:
         return list_files(editable_only=False), list_files()
-    every, editable = _gather(False, True)
+    every, editable = _gather(False, True, folders=folders)
     return _checked(every, False), _checked(editable, True)
 
 
@@ -436,7 +444,7 @@ def upload_name(name: str) -> str:
     if not dot:
         stem, ext = name, ""
     stem = stem[:100] or "file"
-    if stem.upper() in {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)), *(f"LPT{i}" for i in range(10))}:
+    if stem.upper() in WINDOWS_RESERVED:
         stem += "_"
     return stem + (f".{ext[:12]}" if ext else "")
 
@@ -472,6 +480,141 @@ def save_upload(name: str, data: bytes, *, folder: str = UPLOAD_DIR) -> str:
     finally:
         SAVE_LOCK.release()
     raise ValueError("too many files with this name")
+
+
+# The Files sidebar's menu: show in Explorer/Finder, copy and paste through the system's
+# clipboard, rename, new file or folder, and delete to the Recycle Bin. Each acts on what
+# the sidebar shows (a file or folder as it is, never through a link) and, like a save,
+# waits for git and never runs during an agent's turn (its diff and Undo would take it).
+
+def item_path(rel: str, *, folder_only: bool = False) -> Path:
+    """The project's file or folder `rel` ("" is the project), as the sidebar shows it."""
+    if not rel:
+        return ROOT
+    p = project_path(ROOT, rel)
+    if p != ROOT / rel or _excluded(rel + ("/" if p.is_dir() else "")) or is_metadata(Path(rel)):
+        raise ValueError(f"not a file or folder the editor shows: {rel}")
+    if not p.exists():
+        raise ValueError(f"not found: {rel}")
+    if folder_only and not p.is_dir():
+        raise ValueError(f"not a folder: {rel}")
+    return p
+
+
+def _rel(p: Path) -> str:
+    return p.relative_to(ROOT).as_posix()
+
+
+class FilesBusy(Exception):
+    """The files cannot change now (git or an agent's turn): try again later."""
+
+
+@contextmanager
+def files_changing():
+    """Hold the files (as a save does); refuse during an agent's turn."""
+    if not AGENT.busy() and SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+        try:
+            if AGENT.busy():            # it started while we waited for git
+                raise FilesBusy("wait until the agent's turn has finished")
+            yield
+        finally:
+            SAVE_LOCK.release()
+    elif AGENT.busy():
+        raise FilesBusy("wait until the agent's turn has finished")
+    else:
+        raise FilesBusy("git is busy with the files; try again in a moment")
+
+
+def free_name(folder: Path, name: str) -> str:
+    """`name`, or name-copy, name-copy-2 … when it is taken (no spaces: LaTeX's \\input)."""
+    stem, dot, ext = name.rpartition(".")
+    if not dot or not stem:
+        stem, ext = name, ""
+    for n in range(1000):
+        cand = name if n == 0 else f"{stem}-copy" + (f"-{n}" if n > 1 else "") + (f".{ext}" if ext else "")
+        if not os.path.lexists(folder / cand):
+            return cand
+    raise ValueError(f"too many copies of {name}")
+
+
+def paste_files(folder: str, sources: list[Path]) -> dict:
+    """Copy files and folders (from the clipboard) into the project's `folder`. Metadata
+    (.git, .codex …) inside copied folders is left out, so it becomes no nested repository."""
+    target = item_path(folder, folder_only=True)
+    pasted, skipped = [], []
+    with files_changing():
+        for src in sources:
+            src = Path(src)
+            if not src.exists():
+                skipped.append(f"{src.name}: no longer exists")
+                continue
+            if is_metadata(Path(src.name)) or bad_name(src.name):
+                skipped.append(f"{src.name}: {bad_name(src.name) or 'repository metadata is not copied'}")
+                continue
+            real = src.resolve()
+            if src.is_dir() and (real == target or real in target.parents):
+                skipped.append(f"{src.name}: a folder cannot be pasted into itself")
+                continue
+            dest = target / free_name(target, src.name)
+            if src.is_dir():
+                shutil.copytree(src, dest, symlinks=True,
+                                ignore=lambda _, names: [n for n in names if is_metadata(Path(n))])
+            else:
+                shutil.copy2(src, dest)
+            pasted.append(_rel(dest))
+        AGENT.server_wrote(pasted)
+    if pasted:
+        GITSYNC.touched()
+    return {"pasted": pasted, "skipped": skipped}
+
+
+def rename_item(rel: str, name: str) -> dict:
+    src = item_path(rel)
+    if src == ROOT:
+        raise ValueError("rename the project from its name at the top")
+    why = bad_name(name)
+    if why:
+        raise ValueError(why)
+    dest = src.with_name(name)
+    with files_changing():
+        # On Windows and macOS, main.tex -> Main.tex finds the file itself there.
+        if os.path.lexists(dest) and not (dest.exists() and os.path.samefile(src, dest)):
+            raise ValueError(f"{name} already exists in this folder")
+        os.rename(src, dest)
+        AGENT.server_wrote([rel, _rel(dest)])
+    GITSYNC.touched()
+    return {"path": _rel(dest)}
+
+
+def new_item(folder: str, name: str, kind: str) -> dict:
+    target = item_path(folder, folder_only=True)
+    why = bad_name(name)
+    if why:
+        raise ValueError(why)
+    p = target / name
+    if _excluded(_rel(p) + ("/" if kind == "folder" else "")):
+        raise ValueError("this project excludes that name; the editor would not show it")
+    with files_changing():
+        if os.path.lexists(p):
+            raise ValueError(f"{name} already exists in this folder")
+        if kind == "folder":
+            p.mkdir()
+        else:
+            p.touch(exist_ok=False)
+        AGENT.server_wrote([_rel(p)])
+    GITSYNC.touched()
+    return {"path": _rel(p), "kind": "folder" if kind == "folder" else "file"}
+
+
+def trash_items(rels: list[str]) -> dict:
+    paths = [item_path(rel) for rel in rels]
+    if ROOT in paths:
+        raise ValueError("delete the project from the Home page")
+    with files_changing():
+        desktop.trash(paths)
+        AGENT.server_wrote(rels)
+    GITSYNC.touched()
+    return {"trashed": rels}
 
 
 # Every upload is committed in the project's own repository, alone (other changes stay as
@@ -905,7 +1048,9 @@ class Handler(httpbase.Handler):
             return self._send(200, cfg.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
             st = git_status()
-            files, (listed, editable) = [], list_both()
+            walked: list[str] = []
+            files, (listed, editable) = [], list_both(walked)
+            folders = [f for f in walked if not _excluded(f + "/")]
             for f in listed:
                 try:
                     files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(ROOT / f),
@@ -913,7 +1058,8 @@ class Handler(httpbase.Handler):
                 except FileNotFoundError:       # deleted since it was listed (a build, git)
                     pass
             return self._json({"root": ROOT.name, "name": project_name(), "path": str(ROOT),
-                               "move_error": MOVE["error"], "files": files, "order": document_order(editable),
+                               "move_error": MOVE["error"], "files": files, "folders": folders,
+                               "order": document_order(editable),
                                "pdf_main": (cfg := CFG).main, "pdf_mtime": pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
@@ -985,6 +1131,40 @@ class Handler(httpbase.Handler):
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         return self._err(404, "not found")
 
+    def _files(self, path, body) -> dict:
+        """The Files sidebar's menu (see item_path)."""
+        rels = body.get("paths")
+        if rels is not None and (not isinstance(rels, list) or not all(isinstance(r, str) for r in rels)):
+            raise ValueError("paths must be a list of project paths")
+        if path == "/api/files/reveal":
+            rel = str(body.get("path") or "")
+            p = item_path(rel)
+            if p == ROOT:
+                desktop.open_folder(p)
+            else:
+                desktop.reveal(p)
+            return {"ok": True}
+        if path == "/api/files/copy":
+            try:
+                desktop.copy_files([item_path(r) for r in rels or []])
+            except desktop.Unsupported as e:   # the page keeps them: paste works in this project
+                return {"system": False, "message": str(e)}
+            return {"system": True}
+        if path == "/api/files/paste":
+            # The page's own copy where the system has no file clipboard, else the clipboard.
+            sources = [item_path(r) for r in rels] if rels else desktop.clipboard_files()
+            if not sources:
+                raise ValueError("the clipboard holds no files; copy some in the editor, Explorer or Finder")
+            return paste_files(str(body.get("folder") or ""), sources)
+        if path == "/api/files/rename":
+            return rename_item(str(body["path"]), str(body.get("name") or ""))
+        if path == "/api/files/new":
+            return new_item(str(body.get("folder") or ""), str(body.get("name") or ""),
+                            str(body.get("kind") or "file"))
+        if path == "/api/files/trash":
+            return trash_items(rels or [])
+        raise KeyError("unknown file action")
+
     def post(self, path, body):
         refresh_config()
         try:
@@ -999,8 +1179,15 @@ class Handler(httpbase.Handler):
             return self._err(500, f"{type(e).__name__}: {e}")
 
     def _post(self, path, body):
-        if path.startswith("/api/agent") and body.get("project_key") != registry.project_key(ROOT):
+        if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(ROOT):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
+        if path.startswith("/api/files/"):
+            try:
+                return self._json(self._files(path, body))
+            except FilesBusy as e:
+                return self._err(409, str(e))
+            except desktop.Unsupported as e:
+                return self._err(400, str(e))
         if path == "/api/git/publish":
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")

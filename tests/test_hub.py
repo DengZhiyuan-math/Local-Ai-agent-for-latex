@@ -314,6 +314,64 @@ class Create(TempState):
         self.assertEqual(list(hub.all_git_info({g})), [g])
 
 
+class ProjectFolders(TempState):
+    """Home's menu: copy a project's folder, paste folders as projects, delete to the Trash."""
+
+    def project(self, name):
+        p = self.tmp / name
+        p.mkdir(parents=True)
+        (p / "main.tex").write_text("x", encoding="utf-8")
+        return hub.add_project(str(p))["id"], p.resolve()
+
+    def ids(self):
+        return [registry.project_key(Path(e["path"])) for e in registry.load_projects()["projects"]]
+
+    def test_delete_moves_the_folder_to_the_trash_and_forgets_it(self):
+        pid, root = self.project("paper")
+        with mock.patch.object(hub.desktop, "trash") as trash:
+            self.assertEqual(hub.trash_project(pid), {"ok": True})
+        trash.assert_called_once_with([root])
+        self.assertNotIn(pid, self.ids())
+
+    def test_never_while_its_editor_runs_nor_a_folder_holding_more(self):
+        pid, _ = self.project("paper")
+        outer, _ = self.project("topic")
+        self.project("topic/inner")
+        home = hub.add_project(str(Path.home()))["id"]
+        busy = mock.Mock(occupied=True)
+        with mock.patch.object(hub.desktop, "trash") as trash:
+            with mock.patch.object(instances, "inspect", return_value=busy), \
+                    self.assertRaisesRegex(instances.Busy, "editor is open"):
+                hub.trash_project(pid)
+            for bad in (outer, home):
+                with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, "holds more"):
+                    hub.trash_project(bad)
+        trash.assert_not_called()
+        self.assertTrue({pid, outer, home} <= set(self.ids()))
+
+    def test_paste_adds_copied_folders_as_projects_in_place(self):
+        folder = hub.create_folder({"name": "Topic"})
+        a, b, f = self.tmp / "a", self.tmp / "b", self.tmp / "note.txt"
+        a.mkdir(), b.mkdir(), f.write_text("x")
+        before = sorted(p for p in self.tmp.rglob("*") if "state" not in p.parts)
+        with mock.patch.object(hub.desktop, "clipboard_files", return_value=[a, b, f]):
+            r = hub.paste_projects(folder["id"])
+        # Listed where they are: nothing on disk is copied.
+        self.assertEqual(sorted(p for p in self.tmp.rglob("*") if "state" not in p.parts), before)
+        self.assertEqual([x["path"] for x in r["added"]], [str(a.resolve()), str(b.resolve())])
+        self.assertEqual(r["skipped"], ["note.txt: not a folder"])
+        self.assertEqual({e.get("folder_id") for e in registry.load_projects()["projects"]}, {folder["id"]})
+        with mock.patch.object(hub.desktop, "clipboard_files", return_value=[]), \
+                self.assertRaisesRegex(ValueError, "no folders"):
+            hub.paste_projects()
+
+    def test_copy_puts_the_folder_on_the_clipboard(self):
+        pid, root = self.project("paper")
+        with mock.patch.object(hub.desktop, "copy_files") as copy:
+            hub.copy_project(pid)
+        copy.assert_called_once_with([root])
+
+
 class FoldersAndTags(TempState):
     def setUp(self):
         super().setUp()

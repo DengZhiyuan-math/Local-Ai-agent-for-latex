@@ -42,6 +42,7 @@ from publish import (create_github_repo, ensure_ignore, git_init, github_of, pro
                      publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
 from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
+import desktop  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -934,6 +935,45 @@ def remove_project(pid: str) -> dict:
     return {"ok": True}
 
 
+def copy_project(pid: str) -> dict:
+    """Put the project's folder on the system's clipboard, to paste in Explorer or Finder."""
+    root = Path(entry_for(pid)["path"])
+    if not root.is_dir():
+        raise ValueError(f"folder not found: {root}")
+    desktop.copy_files([root])
+    return {"ok": True}
+
+
+def paste_projects(folder_id: str = "") -> dict:
+    """Add the folders copied in Explorer or Finder as projects (their files stay put)."""
+    added, skipped = [], []
+    for p in desktop.clipboard_files():
+        if p.is_dir():
+            added.append(add_project(str(p), folder_id))
+        else:
+            skipped.append(f"{p.name}: not a folder")
+    if not added and not skipped:
+        raise ValueError("the clipboard holds no folders; copy a project folder in Explorer or Finder")
+    return {"added": added, "skipped": skipped}
+
+
+def trash_project(pid: str) -> dict:
+    """Move the project's folder to the Recycle Bin or Trash, and forget it. Not while its
+    editor runs, nor a folder that holds the home folder, prism-local or other projects."""
+    root = Path(entry_for(pid)["path"]).resolve()
+    if not root.is_dir():
+        raise ValueError(f"folder not found: {root}")
+    keep = [Path.home().resolve(), Path(__file__).resolve().parents[1]]
+    others = [Path(e["path"]).resolve() for e in registry.load_projects()["projects"]]
+    if root == Path(root.anchor) or any(k == root or root in k.parents for k in keep) \
+            or any(root in o.parents for o in others):
+        raise ValueError(f"{root} holds more than this project; delete it in your file manager")
+    with instances.exclusive([root]):
+        desktop.trash([root])
+    remove_project(pid)
+    return {"ok": True}
+
+
 def open_project(pid: str) -> dict:
     root = Path(entry_for(pid)["path"])
     if not root.is_dir():
@@ -942,15 +982,6 @@ def open_project(pid: str) -> dict:
     if "url" in r:
         registry.safe_touch(root)
     return r
-
-
-def reveal(path: Path) -> None:
-    if os.name == "nt":
-        os.startfile(str(path))
-    elif sys.platform == "darwin":
-        subprocess.Popen(["open", str(path)])
-    else:
-        subprocess.Popen(["xdg-open", str(path)])
 
 
 PICK_FOLDER = r"""
@@ -1071,6 +1102,12 @@ class Handler(httpbase.Handler):
                 return self._json(r, 502 if "error" in r else 200)
             if path == "/api/projects/remove":
                 return self._json(remove_project(body["id"]))
+            if path == "/api/projects/trash":
+                return self._json(trash_project(body["id"]))
+            if path == "/api/projects/copy":
+                return self._json(copy_project(body["id"]))
+            if path == "/api/projects/paste":
+                return self._json(paste_projects(str(body.get("folder_id") or "")))
             if path == "/api/fetch":
                 return self._json(start_fetch_all())
             if path == "/api/folders/create":
@@ -1104,7 +1141,7 @@ class Handler(httpbase.Handler):
                 p = Path(entry_for(body["id"])["path"])
                 if not p.is_dir():
                     raise ValueError(f"folder not found: {p}")
-                reveal(p)
+                desktop.open_folder(p)
                 return self._json({"ok": True})
             if path == "/api/pick-folder":
                 return self._json(pick_folder(str(body.get("start") or ""),

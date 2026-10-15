@@ -12,6 +12,25 @@ EDITABLE_SUFFIXES = {".tex", ".bib", ".md", ".sty", ".cls", ".bbx", ".cbx", ".tx
 SKIP_DIRS = {"node_modules", "__pycache__", "venv", ".venv"}
 TEMP_SUFFIX = ".prism-tmp"      # a save half-way (replace_file): never a project's file
 METADATA = {".git", ".codex", ".agents", ".aws"}   # repository and agent metadata
+WINDOWS_RESERVED = {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(10)),
+                    *(f"LPT{i}" for i in range(10))}
+
+
+def bad_name(name: str) -> str | None:
+    """Why `name` cannot name a project's file or folder on every system, or None."""
+    if not name.strip() or name in (".", ".."):
+        return "give a name"
+    if re.search(r'[\x00-\x1f<>:"/\\|?*]', name):
+        return 'a name cannot contain / \\ : * ? " < > |'
+    if name != name.strip() or name.endswith("."):
+        return "a name cannot start or end with a space, or end with a dot"
+    if name.startswith("."):
+        return "a name starting with a dot would be hidden in the editor"
+    if name.split(".")[0].upper() in WINDOWS_RESERVED:
+        return f"{name} is a reserved name on Windows"
+    if len(name) > 200:
+        return "the name is too long"
+    return None
 
 
 def is_metadata(path: Path) -> bool:

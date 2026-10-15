@@ -641,6 +641,29 @@ async function reveal(id) {
   const r = await api("/api/projects/reveal", { id });
   if (r._status !== 200) toast(r.error || "Could not open the folder", true);
 }
+async function trashProject(id) {
+  const p = byId(id); if (!p) return;
+  if (!confirm(`Move the folder of "${p.name}" to the ${TRASH}?\n\n${p.path}\n\nAll its files go with it; `
+    + `you can restore them from the ${TRASH}. Close its editor first.`)) return;
+  const r = await api("/api/projects/trash", { id });
+  if (r._status !== 200) return toast(r.error || "Could not move it", true);
+  H.projects = H.projects.filter((x) => x.id !== id); render();
+  toast(`Moved ${p.name} to the ${TRASH}`);
+}
+// Copy and paste through the system's clipboard: a copied project folder pastes in
+// Explorer or Finder; folders copied there paste here as projects (their files stay put).
+async function copyProject(id) {
+  const r = await api("/api/projects/copy", { id });
+  if (r._status !== 200) return toast(r.error || "Could not copy", true);
+  toast(`Copied the folder: paste it in ${FILE_MANAGER}`);
+}
+async function pasteProjects(fid) {
+  const r = await api("/api/projects/paste", { folder_id: fid || "" });
+  if (r._status !== 200) return toast(r.error || "Could not paste", true);
+  await load(); loadAllGit();
+  toast((r.added.length ? `Added ${r.added.map((a) => a.path).join(", ")}` : "No folder was added")
+    + (r.skipped.length ? `\nLeft out: ${r.skipped.join("; ")}` : ""));
+}
 async function copyPath(id) {
   const p = byId(id); if (!p) return;
   try { await navigator.clipboard.writeText(p.path); toast("Path copied"); } catch { toast(p.path); }
@@ -814,7 +837,6 @@ document.addEventListener("contextmenu", (e) => {
 
 /* ------------------------------------------------------------------ menus
    A menu is [[label, fn, cls?], "-", …]. */
-let menuItems = [];
 function projectMenu(id) {
   const p = byId(id);
   const org = [["Move to folder…", () => openMove(["p:" + id])], ["Tags…", () => openTags(id)]];
@@ -825,11 +847,13 @@ function projectMenu(id) {
     "-", ...org,
     ...(H.git[id] && H.git[id].github ? [] : H.git[id] && H.git[id].nested ? [] : [["Create GitHub repository…", () => openPublish(id)]]),
     "-",
-    ["Show in folder", () => reveal(id)],
+    [`Open folder in ${FILE_MANAGER}`, () => reveal(id)],
+    ["Copy folder", () => copyProject(id)],
     ...(H.git[id] && H.git[id].github ? [["Open on GitHub", () => window.open(H.git[id].github, "_blank", "noopener")]] : []),
     ["Copy path", () => copyPath(id)],
     "-",
     ["Remove from list…", () => removeProject(id), "danger"],
+    [`Move folder to ${TRASH}…`, () => trashProject(id), "danger"],
   ] : [...org, "-", ["Copy path", () => copyPath(id)], "-", ["Remove from list…", () => removeProject(id), "danger"]];
 }
 function folderMenu(fid) {
@@ -838,6 +862,7 @@ function folderMenu(fid) {
     ["Open", () => setView({ kind: "folder", id: fid })],
     ["New project here…", () => { setView({ kind: "folder", id: fid }); openNew(); }],
     ["New subfolder…", () => openFolder(null, fid)],
+    ["Paste project folders", () => pasteProjects(fid)],
     "-",
     ["Rename, move, notes…", () => openFolder(fid)],
     ["GitHub sync…", () => openSync(fid)],
@@ -861,6 +886,7 @@ function backgroundMenu() {
   const fid = currentFolder(), check = (on) => (on ? "✓ " : "    ");
   return [
     ["New project…", openNew], ["New folder…", () => openFolder(null, fid)],
+    ["Paste project folders", () => pasteProjects(fid)],
     "-",
     [check(H.mode === "details") + "Details", () => setMode("details")],
     [check(H.mode === "icons") + "Large icons", () => setMode("icons")],
@@ -877,22 +903,6 @@ function tagMenu(name) {
     ["Remove tag…", () => removeTag(name), "danger"],
   ];
 }
-function showMenu(anchor, items, at = null) {
-  const m = $("#menu");
-  menuItems = items;
-  m.innerHTML = items.map((it, i) => it === "-" ? "<hr>" : `<button data-m="${i}" class="${it[2] || ""}" role="menuitem">${esc(it[0])}</button>`).join("");
-  m.hidden = false;
-  const mw = m.offsetWidth, mh = m.offsetHeight;
-  const r = anchor ? anchor.getBoundingClientRect() : { left: at.x, right: at.x + mw, top: at.y, bottom: at.y };
-  m.style.left = Math.max(8, Math.min(anchor ? r.right - mw : r.left, innerWidth - mw - 8)) + "px";
-  m.style.top = Math.max(8, r.bottom + mh + 6 > innerHeight ? r.top - mh - 4 : r.bottom + 4) + "px";
-  m.querySelector("button").focus();
-}
-function closeMenu() { $("#menu").hidden = true; }
-$("#menu").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-m]"); if (!b) return;
-  closeMenu(); menuItems[+b.dataset.m][1]();
-});
 window.addEventListener("scroll", closeMenu, { passive: true });
 window.addEventListener("resize", closeMenu);
 
