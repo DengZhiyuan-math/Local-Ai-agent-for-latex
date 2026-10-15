@@ -28,6 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from errors import Params, Refused
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -154,18 +155,31 @@ class Handler(BaseHTTPRequestHandler):
         return self._answer(self.post, u.path, body)
 
     def _answer(self, handle, path: str, arg):
-        """handle(path, arg). Whatever it raises that it did not answer itself (a git that
-        timed out, a bug) becomes a JSON error the page can show, instead of a connection
-        dropped without an answer, unless part of an answer has already gone out."""
+        """handle(path, Params(arg)). Whatever it raises that it did not answer itself
+        becomes a JSON error the page can show, instead of a connection dropped without an
+        answer, unless part of an answer has already gone out. The one place where errors
+        become statuses: a Refused says its own (not logged); anything not expected (a
+        bug) is a 500 with its traceback in the log."""
         self._answered = False
         try:
-            return handle(path, arg)
+            return handle(path, Params(arg))
         except Exception as e:
             if self._answered or isinstance(e, (ConnectionError, TimeoutError)):
                 raise                       # the page went away, or the answer was started
+            if isinstance(e, Refused):
+                return self._err(e.status, str(e))
             if isinstance(e, subprocess.TimeoutExpired):
                 return self._err(504, f"{Path(str(e.cmd[0] if isinstance(e.cmd, list) else e.cmd)).name} "
                                       f"did not finish in {e.timeout:g} seconds; try again")
+            if isinstance(e, UnicodeDecodeError):
+                return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
+            if isinstance(e, FileNotFoundError):
+                return self._err(404, "file not found")
+            if isinstance(e, ValueError):
+                # Most are a request that cannot be done (a bad path, a bad name); a line
+                # in the log tells them apart from a bug until each says so (Refused).
+                log(f"refused {self.command} {path}: {type(e).__name__}: {e}")
+                return self._err(400, str(e))
             log(f"error in {self.command} {path}:\n" + traceback.format_exc().rstrip())
             return self._err(500, f"{type(e).__name__}: {e}")
 

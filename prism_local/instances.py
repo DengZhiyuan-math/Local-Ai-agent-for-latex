@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import registry
+from errors import Conflict
 from gitenv import git_env
 from proc import kill_tree
 
@@ -145,7 +146,7 @@ READY_TIMEOUT = 30.0
 PKG = Path(__file__).resolve().parent
 
 
-class Busy(ValueError):
+class Busy(Conflict):
     """A project is running, starting, restarting or being moved."""
 
 

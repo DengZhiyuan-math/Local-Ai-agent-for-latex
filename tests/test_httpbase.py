@@ -13,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import errors  # noqa: E402
 import httpbase  # noqa: E402
 from presence import Presence  # noqa: E402
 
@@ -28,6 +29,14 @@ class Failing(httpbase.Handler):
         if path == "/half":
             self._send(200, b"{}")
             raise RuntimeError("after the answer")
+        if path == "/gone":
+            raise errors.NotFound("unknown project")
+        if path == "/param":
+            return self._json({"path": q["path"]})          # missing: a Refused
+        if path == "/keyerror":
+            return self._json({}[path])                     # a bug's KeyError
+        if path == "/value":
+            raise ValueError("not a name")
         return self._json({"ok": True})
 
     def post(self, path, body):
@@ -65,6 +74,19 @@ class Answers(unittest.TestCase):
 
     def test_an_answer_already_sent_is_not_followed_by_another(self):
         self.assertEqual(self.ask("/half"), (200, {}))
+
+    def test_errors_become_statuses_in_one_place(self):
+        """A Refused says its status; a missing parameter is a 400 that names it; a
+        KeyError otherwise is a bug: a 500, with its traceback in the log."""
+        with mock.patch.object(httpbase, "log") as log:
+            self.assertEqual(self.ask("/gone"), (404, {"error": "unknown project"}))
+            self.assertEqual(self.ask("/param"), (400, {"error": "missing path"}))
+            self.assertEqual(self.ask("/param?path=a.tex"), (200, {"path": "a.tex"}))
+            log.assert_not_called()
+            self.assertEqual(self.ask("/keyerror")[0], 500)
+            self.assertIn("Traceback", log.call_args.args[0])
+            self.assertEqual(self.ask("/value"), (400, {"error": "not a name"}))
+            self.assertIn("refused GET /value", log.call_args.args[0])
 
 
 class CodeStamp(unittest.TestCase):

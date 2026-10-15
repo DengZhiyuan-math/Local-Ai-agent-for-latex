@@ -38,6 +38,7 @@ from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
                     project_path, with_line_ends_of, write_bytes)
 import desktop  # noqa: E402
+from errors import Conflict, NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
@@ -505,7 +506,7 @@ def _rel(p: Path) -> str:
     return p.relative_to(ROOT).as_posix()
 
 
-class FilesBusy(Exception):
+class FilesBusy(Conflict):
     """The files cannot change now (git or an agent's turn): try again later."""
 
 
@@ -876,16 +877,7 @@ class Handler(httpbase.Handler):
 
     def get(self, path, q):
         refresh_config()
-        try:
-            return self._get(path, q)
-        except UnicodeDecodeError:
-            return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
-        except (ValueError, KeyError) as e:
-            return self._err(400, str(e))
-        except FileNotFoundError:
-            return self._err(404, "file not found")
-        except OSError as e:                 # e.g. the file is locked by another program
-            return self._err(500, f"{type(e).__name__}: {e}")
+        return self._get(path, q)      # errors: httpbase._answer
 
     def _get(self, path, q):
         if path == "/api/ping":
@@ -1023,20 +1015,11 @@ class Handler(httpbase.Handler):
                             str(body.get("kind") or "file"))
         if path == "/api/files/trash":
             return trash_items(rels or [])
-        raise KeyError("unknown file action")
+        raise NotFound("unknown file action")
 
     def post(self, path, body):
         refresh_config()
-        try:
-            return self._post(path, body)
-        except UnicodeDecodeError:
-            return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
-        except (ValueError, KeyError) as e:
-            return self._err(400, str(e))
-        except FileNotFoundError:
-            return self._err(404, "file not found")
-        except OSError as e:                 # e.g. the file is locked by another program
-            return self._err(500, f"{type(e).__name__}: {e}")
+        return self._post(path, body)      # errors: httpbase._answer
 
     def _post(self, path, body):
         if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(ROOT):
@@ -1044,10 +1027,8 @@ class Handler(httpbase.Handler):
         if path.startswith("/api/files/"):
             try:
                 return self._json(self._files(path, body))
-            except FilesBusy as e:
-                return self._err(409, str(e))
             except desktop.Unsupported as e:
-                return self._err(400, str(e))
+                raise Refused(str(e)) from e
         if path == "/api/git/publish":
             if BUILD_LOCK.locked() or AGENT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")

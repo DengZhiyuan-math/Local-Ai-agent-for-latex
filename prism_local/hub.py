@@ -43,6 +43,7 @@ from publish import (create_github_repo, ensure_ignore, git_init, github_of, pro
 from repository import RepoBusy, Repository  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
+from errors import Conflict, NotFound  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -267,7 +268,7 @@ def entry_for(pid: str) -> dict:
     for e in registry.load_projects()["projects"]:
         if registry.project_key(Path(e["path"])) == pid:
             return e
-    raise KeyError("unknown project")
+    raise NotFound("unknown project")
 
 
 # ---------------------------------------------------------------- actions
@@ -893,7 +894,7 @@ def change_project(pid: str, body: dict) -> dict:
                 return True
         return False
     if not registry.update_projects(fn):
-        raise KeyError("unknown project")
+        raise NotFound("unknown project")
     return {"ok": True}
 
 
@@ -931,7 +932,7 @@ def remove_project(pid: str) -> dict:
                             if registry.project_key(Path(e["path"])) != pid]
         return len(data["projects"]) < before
     if not registry.update_projects(fn):
-        raise KeyError("unknown project")
+        raise NotFound("unknown project")
     return {"ok": True}
 
 
@@ -1075,12 +1076,8 @@ class Handler(httpbase.Handler):
                     return self._err(404, "no PDF yet")
                 return self._send(200, pdf.read_bytes(), "application/pdf")
             return self._err(404, "not found")
-        except KeyError as e:
-            if e.args[0] == "unknown project":
-                return self._err(404, "unknown project")
-            return self._err(400, f"missing {e.args[0]}")
-        except (ValueError, OSError) as e:
-            return self._err(400, str(e))
+        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
+            raise Conflict(f"{e}; try again") from e
 
     def post(self, path, body):
         try:
@@ -1147,12 +1144,8 @@ class Handler(httpbase.Handler):
                 return self._json(pick_folder(str(body.get("start") or ""),
                                               str(body.get("title") or "")))
             return self._err(404, "not found")
-        except KeyError as e:
-            if e.args[0] == "unknown project":
-                return self._err(404, "unknown project")
-            return self._err(400, f"missing {e.args[0]}")
-        except (ValueError, OSError, TimeoutError) as e:
-            return self._err(400, str(e))
+        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
+            raise Conflict(f"{e}; try again") from e
 
 
 def main():
