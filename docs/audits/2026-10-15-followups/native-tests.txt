@@ -1,0 +1,30 @@
+test_edit_compile_mcp_works_with_native_command_network_disabled (test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled) ... ok
+test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only (test_codex_runtime.CodexRuntime.test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only) ... ok
+test_full_project_edit_cannot_patch_a_sibling_outside_the_project (test_codex_runtime.CodexRuntime.test_full_project_edit_cannot_patch_a_sibling_outside_the_project) ... ok
+test_global_hooks_do_not_run_in_editor_turns (test_codex_runtime.CodexRuntime.test_global_hooks_do_not_run_in_editor_turns) ... ok
+test_missing_windows_setting_reproduces_policy_rejection (test_codex_runtime.CodexRuntime.test_missing_windows_setting_reproduces_policy_rejection) ... ok
+test_native_apply_patch_edits_scoped_file_and_denies_other_files (test_codex_runtime.CodexRuntime.test_native_apply_patch_edits_scoped_file_and_denies_other_files) ... ok
+test_reads_work_and_native_writes_follow_each_turn_scope (test_codex_runtime.CodexRuntime.test_reads_work_and_native_writes_follow_each_turn_scope) ... ok
+test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope (test_codex_runtime.CodexRuntime.test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope) ... ok
+test_user_mcp_configuration_is_ignored_without_modifying_it (test_codex_runtime.CodexRuntime.test_user_mcp_configuration_is_ignored_without_modifying_it) ... ok
+test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) ... ok
+test_gui_finds_bundled_native_cli_and_follows_updates (test_codex_discovery.CodexDiscovery.test_gui_finds_bundled_native_cli_and_follows_updates) ... ok
+test_missing_desktop_installation_is_unavailable (test_codex_discovery.CodexDiscovery.test_missing_desktop_installation_is_unavailable) ... ok
+test_one_disappearing_bundle_does_not_hide_another_installation (test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation) ... ok
+test_override_and_path_take_precedence (test_codex_discovery.CodexDiscovery.test_override_and_path_take_precedence) ... ok
+test_other_platforms_do_not_select_a_windows_sandbox (test_codex_discovery.CodexIsolation.test_other_platforms_do_not_select_a_windows_sandbox) ... ok
+test_turn_disables_global_hooks_without_changing_user_settings (test_codex_discovery.CodexIsolation.test_turn_disables_global_hooks_without_changing_user_settings) ... ok
+test_windows_turn_enables_native_sandbox_even_with_user_config_ignored (test_codex_discovery.CodexIsolation.test_windows_turn_enables_native_sandbox_even_with_user_config_ignored) ... ok
+test_a_folder_removed_during_the_check_is_skipped (test_codex_discovery.CodexProtectedPaths.test_a_folder_removed_during_the_check_is_skipped) ... ok
+test_an_unreadable_folder_stops_the_turn_with_a_clear_reason (test_codex_discovery.CodexProtectedPaths.test_an_unreadable_folder_stops_the_turn_with_a_clear_reason) ... ok
+test_existing_nested_metadata_is_read_only (test_codex_discovery.CodexProtectedPaths.test_existing_nested_metadata_is_read_only) ... ok
+test_mentioned_metadata_is_refused_before_the_turn_starts (test_codex_discovery.CodexProtectedPaths.test_mentioned_metadata_is_refused_before_the_turn_starts) ... {"event": "agent_start", "job": 1, "provider": "codex", "project_key": "tmpn5np3yv9-f02f80f458", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpn5np3yv9", "session_id": null}
+ok
+test_metadata_names_match_regardless_of_case_on_every_platform (test_codex_discovery.CodexProtectedPaths.test_metadata_names_match_regardless_of_case_on_every_platform) ... ok
+test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) ... ok
+test_command_policy_enforces_scope_with_the_native_sandbox (test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox) ... ok
+
+----------------------------------------------------------------------
+Ran 24 tests in 46.719s
+
+OK

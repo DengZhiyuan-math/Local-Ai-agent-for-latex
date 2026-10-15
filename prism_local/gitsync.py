@@ -46,6 +46,8 @@ MAX_WAIT = 600           # ... but at the latest this long after the first chang
 FETCH_EVERY = 60         # seconds between fetches from the remote (co-authors' changes arrive soon)
 QUIET = 20               # automatic pulls wait this long after your last save (no clash with typing)
 PUSH_TRIES = 5           # pushes in a row while co-authors keep pushing in between
+MENU_WAIT = 2            # seconds the GitHub menu waits for a push or pull before answering
+BIND_WAIT = 10           # ... and confirming a sync target, before "try again"
 TICK = 5                 # the worker's period
 RETRY = 60               # seconds before a failed push is tried again
 SHARED_MARKER = "prism-repo.json"
@@ -343,12 +345,17 @@ class GitSync:
     def recheck(self) -> bool:
         """Look for a repository again: one may have been created while the editor runs (the
         Home page's "+ GitHub" says so; git init in a terminal is seen when the GitHub menu
-        opens). Not on a timer: a project without a repository costs nothing."""
-        with self.lock:
+        opens). Not on a timer: a project without a repository costs nothing. While a push
+        or pull runs (minutes on a slow network), the menu gets what is known instead."""
+        if not self.lock.acquire(timeout=MENU_WAIT):
+            return bool(self.own)
+        try:
             if not self.own:
                 self._checked = None
             if self.check_repo():
                 self._safe(self._remote_state)
+        finally:
+            self.lock.release()
         return bool(self.own)
 
     @property
@@ -500,12 +507,16 @@ class GitSync:
 
     def bind_target(self, expected: dict | None = None) -> None:
         """Called only after explicit menu confirmation, or after creating a known repo."""
-        with self.lock:
+        if not self.lock.acquire(timeout=BIND_WAIT):
+            raise ValueError("A push or pull is running; try again in a moment")
+        try:
             candidate = self._candidate(fresh=True)
             if expected is not None and public_target(candidate) != expected:
                 raise ValueError("Sync target changed since confirmation; open the menu again")
             self._update_settings(sync_target=candidate)
             self.target, self.blocked_reason = candidate, None
+        finally:
+            self.lock.release()
 
     def validate_target(self, fresh: bool = False) -> bool:
         with self.lock:

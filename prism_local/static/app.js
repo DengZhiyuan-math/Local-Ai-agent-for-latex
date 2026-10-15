@@ -262,7 +262,10 @@ async function saveTabNow(t, force) {
   // here and go as soon as it is done.
   for (let waited = false; ; waited = true) {
     gen = t.doc.changeGeneration();
-    r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force });
+    // In flight: the file on disk is this save's until its answer brings the new mtime.
+    t.inFlight = true;
+    try { r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
+    finally { t.inFlight = false; }
     if (!(r._status === 503 && r.busy)) break;
     if (!waited) toast(`${t.path}: ${r.error || "busy"}.`);
     await new Promise((res) => setTimeout(res, 1000));
@@ -651,12 +654,16 @@ $("#projname").addEventListener("keydown", (e) => { if ((e.key === "Enter" || e.
 // hidden, at once when it is shown again), never two at a time (see poller); poll() asks
 // for one more now.
 const poll = poller(pollOnce, 2000, 30000);
+const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
   const config = BUILD.loaded ? null : loadConfig();
   const r = await api("/api/tree");
   await config;
-  if (r._status !== 200) { $("#build-status").textContent = "server not reachable"; $("#build-status").className = "status err"; return; }
+  const st = $("#build-status");
+  if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
+  if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
+  if (toastPrev?.[0] === UNREACHABLE) toastPrev = ["", "status"];                       // nor shown after a toast
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
   const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]))
@@ -666,7 +673,7 @@ async function pollOnce() {
   let anyChange = false;
   for (const t of S.tabs) {
     const f = r.files.find((x) => x.path === t.path);
-    if (!f || Math.abs(f.mtime - t.mtime) < 1e-6) continue;
+    if (!f || Math.abs(f.mtime - t.mtime) < 1e-6 || t.inFlight) continue;   // in flight: our own write
     anyChange = true;
     if (!isDirty(t)) await reloadFromDisk(t);
     else if (t.conflict !== "disk") { t.conflict = "disk"; showBanner(t); }
@@ -1015,19 +1022,22 @@ async function showBuild(r) {
 
 async function compile(clean = false, active = S.active) {
   if (S.building) return;
-  if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
-  else if (!(await saveAll())) return;
-  const mode = BUILD.mode;
+  // Taken at once: an auto-compile coming while this one saves (git may hold the saves for
+  // a while) is not a second build, which would answer "busy" and reset the button.
   S.building = true;
-  const st = $("#build-status");
-  st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
-  setCompileButton(true);
   try {
+    if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
+    else if (!(await saveAll())) return;
+    const mode = BUILD.mode;
+    const st = $("#build-status");
+    st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
+    setCompileButton(true);
     const r = await api("/api/build", { mode, clean, active });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
     await showBuild(r);
   } catch (e) {
+    const st = $("#build-status");
     st.className = "status err"; st.textContent = "build request failed: " + e;
   } finally {
     S.building = false; setCompileButton(false);
@@ -1823,7 +1833,13 @@ $("#chat-input").addEventListener("paste", (e) => {
 bindFileDrop($("#chat"), $("#chat-drop"), (files) => ATT.add(files));
 
 async function chatSend() {
-  if (C.job) return;
+  if (C.job || C.sending) return;
+  // Taken at once: a second Enter while this message saves, uploads or is being sent sends
+  // nothing (it would only be told "still working on the previous message").
+  C.sending = true;
+  try { return await sendMessage(); } finally { C.sending = false; }
+}
+async function sendMessage() {
   const text = $("#chat-input").value.trim();
   if (!text) return;
   $("#slash-menu").hidden = true;
@@ -1858,7 +1874,13 @@ async function chatSend() {
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
   const extra = [provLabel(), r.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
   chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
-  C.job = r.job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
+  return followTurn(r.job, provider, mode);
+}
+
+// A turn's events into the panel, until it is done: the one just sent, or one already
+// running when this page loaded (a reload), which is then shown and can be stopped.
+async function followTurn(job, provider, mode) {
+  C.job = job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
   const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
@@ -1918,7 +1940,7 @@ async function chatSend() {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
     let retry = 1000;
     while (!done) {
-      const d = await api(`/api/agent/events?job=${r.job}&after=${after}`);
+      const d = await api(`/api/agent/events?job=${job}&after=${after}`);
       if (d._status === 0) {
         status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
         await new Promise((res) => setTimeout(res, retry));
@@ -2410,6 +2432,10 @@ async function loadAgentInfo() {
   renderQuota(store.get("chat.rate", null));
   loadAgentInfo().then((r) => {
     renderProviders(r);
+    if (r.active && !C.job && r.project_key === P.projectKey) {
+      sysNote("The agent was already working when this page loaded: its turn follows, and <b>Stop</b> ends it.");
+      followTurn(r.active.job, r.active.provider, r.active.mode);
+    }
     const p = prov();
     if (!p.available) return chatAppend(`<div class="err">${esc(p.reason || "No AI provider is set up.")}</div>`, "card");
     const known = p.rate || store.get("chat.rate", null);

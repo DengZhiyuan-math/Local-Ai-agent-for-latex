@@ -60,17 +60,20 @@ def state_of(path: Path) -> FileState | None:
         return None
 
 
-def take(root: Path) -> tuple[dict[str, FileState], set[str]]:
+def take(root: Path, skip: str | None = None) -> tuple[dict[str, FileState], set[str]]:
     """Every file under `root` (project-relative path -> state), and what could not be
     looked at. Binary files, hidden files and excluded folders too: the editor's file list
-    is not the list of what may change. Never follows a folder link or enters .git."""
+    is not the list of what may change. Never follows a folder link or enters .git, nor
+    the folder `skip` (project-relative: the build's output, which a build may be writing)."""
     snap: dict[str, FileState] = {}
     issues: set[str] = set()
     budget = MAX_BYTES
+    skip = Path(skip).as_posix() if skip and Path(skip).parts else None    # "." is the project
     for directory, dirs, files in os.walk(root, followlinks=False, onerror=lambda e: issues.add(str(e))):
         parent = Path(directory)
         links = [d for d in dirs if (parent / d).is_symlink() and d != ".git"]
-        dirs[:] = sorted(d for d in dirs if d != ".git" and d not in links)
+        dirs[:] = sorted(d for d in dirs if d != ".git" and d not in links
+                         and (parent / d).relative_to(root).as_posix() != skip)
         for name in sorted(files + links):
             if name == ".git":
                 continue

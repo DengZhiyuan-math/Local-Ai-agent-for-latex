@@ -27,6 +27,7 @@ import sys
 import threading
 import time
 import webbrowser
+import zlib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -35,7 +36,7 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from projectconfig import Config  # noqa: E402
-from repository import FilesLock  # noqa: E402
+from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
                     project_path, with_line_ends_of, write_bytes)
 import desktop  # noqa: E402
@@ -627,6 +628,10 @@ def sync_upload(rel: str) -> None:
     try:
         o = GITSYNC.record_file(rel, f"Add {rel} (a file used in the agent chat)")
         UPLOAD_SYNC[rel] = {"state": o.state, "message": o.message}
+    except RepoBusy:
+        GITSYNC.touched()           # the next autosave commits it
+        UPLOAD_SYNC[rel] = {"state": "local", "message": "Saved here; another prism-local window is "
+                            "using the repository, so it is committed with the next autosave"}
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
         UPLOAD_SYNC[rel] = {"state": "failed", "message": f"git: {str(e)[-300:]}"}
 
@@ -839,16 +844,32 @@ class SyncTex:
 
     def __init__(self) -> None:
         self.stamp = None
+        self.bad = None               # the stamp of a damaged file: not read again
+        self.problem = "no synctex data; build first"
         self.inputs: dict[int, str] = {}
         self.recs: list[tuple] = []   # (page, kind, file, line, x, y, w, h, d) in bp
 
     def load(self) -> bool:
+        """Whether there is data to use; if not, `problem` says why. A file being written
+        (a click during a build) or damaged is read once, until it changes."""
         synctex = CFG.synctex
-        if not synctex.exists():
+        try:
+            st = (synctex, synctex.stat().st_mtime_ns)
+        except FileNotFoundError:
+            self.problem = "no synctex data; build first"
             return False
-        st = (synctex, synctex.stat().st_mtime_ns)
         if st == self.stamp:
             return True
+        if st == self.bad:
+            return False
+        try:
+            self._parse(synctex, st)
+            return True
+        except (OSError, EOFError, zlib.error) as exc:
+            self.bad, self.problem = st, f"the synctex data is incomplete or damaged ({exc}); build again"
+            return False
+
+    def _parse(self, synctex: Path, st: tuple) -> None:
         inputs, recs, page, unit, mag = {}, [], 0, 1.0, 1.0
         with gzip.open(synctex, "rt", encoding="utf-8", errors="replace") as fh:
             for line in fh:
@@ -863,12 +884,16 @@ class SyncTex:
                             inputs[int(tag)] = rel
                         except ValueError:
                             pass
-                elif c == "{":
-                    page = int(line[1:])
-                elif line.startswith("Unit:"):
-                    unit = float(line[5:])
-                elif line.startswith("Magnification:"):
-                    mag = float(line[14:]) / 1000.0
+                elif c in "{UM":
+                    try:            # a damaged line is left out, not the whole file
+                        if c == "{":
+                            page = int(line[1:])
+                        elif line.startswith("Unit:"):
+                            unit = float(line[5:])
+                        elif line.startswith("Magnification:"):
+                            mag = float(line[14:]) / 1000.0
+                    except ValueError:
+                        continue
                 elif c in "[(hvxkg$":
                     m = REC_RE.match(line)
                     if not m:
@@ -881,8 +906,7 @@ class SyncTex:
                                for i in (6, 7, 8))
                     recs.append((page, m.group(1), inputs[f], int(m.group(3)),
                                  int(m.group(4)) * s, int(m.group(5)) * s, w, h, d))
-        self.inputs, self.recs, self.stamp = inputs, recs, st
-        return True
+        self.inputs, self.recs, self.stamp, self.bad = inputs, recs, st, None
 
     # Paragraph line boxes ('(') carry the line where the paragraph *ended*;
     # the fine records (glyph runs x, kerns k, glue g, math $, ...) carry the
@@ -978,7 +1002,7 @@ class SyncTex:
 
 SYNC = SyncTex()
 SYNC_LOCK = threading.Lock()
-AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve)
+AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve, output_fn=lambda: CFG.outdir)
 # The project's changes, recorded in its repository and synced with GitHub (gitsync.py).
 GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
 AGENT.on_start = GITSYNC.before_turn
@@ -1120,13 +1144,13 @@ class Handler(httpbase.Handler):
         if path == "/api/synctex/forward":
             with SYNC_LOCK:
                 if not SYNC.load():
-                    return self._err(404, "no synctex data; build first")
+                    return self._err(404, SYNC.problem)
                 r = SYNC.forward(q["file"], int(q["line"]))
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         if path == "/api/synctex/inverse":
             with SYNC_LOCK:
                 if not SYNC.load():
-                    return self._err(404, "no synctex data; build first")
+                    return self._err(404, SYNC.problem)
                 r = SYNC.inverse(int(q["page"]), float(q["x"]), float(q["y"]))
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         return self._err(404, "not found")

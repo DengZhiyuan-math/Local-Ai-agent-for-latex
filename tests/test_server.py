@@ -495,9 +495,40 @@ class SyncTeXGeneratedFiles(unittest.TestCase):
             self.assertTrue(self.sync.load())
             self.assertEqual(self.sync.inputs, {1: main})
 
+    def test_damaged_data_says_build_again_and_is_read_once(self):
+        """A click while the engine still writes the file, or after a crash: a truncated or
+        damaged .synctex.gz is "build again", not a server error, and not read on each click."""
+        import gzip
+        path = server.CFG.synctex
+        path.parent.mkdir(exist_ok=True)
+        whole = gzip.compress(("Input:1:main.tex\n{1\n" + "x1,3:100,200\n" * 5000).encode())
+        for name, data in (("truncated", whole[:len(whole) // 2]), ("not gzip", b"garbage" * 100)):
+            with self.subTest(name):
+                path.write_bytes(data)
+                sync = server.SyncTex()
+                self.assertFalse(sync.load())
+                self.assertIn("build again", sync.problem)
+                with mock.patch.object(server.gzip, "open", side_effect=AssertionError("read again")):
+                    self.assertFalse(sync.load())
+        path.write_bytes(gzip.compress(b"Input:1:main.tex\n{oops\n{1\nx1,3:100,200\n"))
+        sync = server.SyncTex()
+        self.assertTrue(sync.load())            # a damaged line is left out, not the file
+        self.assertEqual([r[:4] for r in sync.recs], [(1, "x", "main.tex", 3)])
+
 
 class Uploads(unittest.TestCase):
     """Files added to an agent message are saved under prism-uploads/."""
+
+    def test_an_upload_waits_for_another_window_using_the_repository(self):
+        """Another prism-local window is changing the repository: the upload is not "failed"
+        but kept here, and the next autosave commits it."""
+        from repository import RepoBusy
+        project({"main.tex": ""})
+        with mock.patch.object(server.GITSYNC, "record_file", side_effect=RepoBusy("busy")), \
+                mock.patch.object(server.GITSYNC, "touched") as touched:
+            server.sync_upload("prism-uploads/a.pdf")
+        self.assertEqual(server.UPLOAD_SYNC["prism-uploads/a.pdf"]["state"], "local")
+        touched.assert_called_once()
 
     def test_names_are_made_safe(self):
         cases = {"notes.pdf": "notes.pdf", "../../etc/passwd": "passwd",

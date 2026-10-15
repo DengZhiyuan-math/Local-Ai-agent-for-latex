@@ -322,10 +322,10 @@ class DeepCode(Backend):
         start = time.time()
         job.emit({"t": "thinking_start"})       # it prints nothing until the reply
         out_lines: list[str] = []
-        with cli_process(job, cmd, self.message(job), self.env(job)) as (proc, err_lines):
+        with cli_process(job, cmd, self.message(job), self.env(job)) as (proc, lines, err_lines):
             if proc is None:
                 return {"billing": "api"}       # stopped before it started
-            for line in proc.stdout:
+            for line in lines:
                 out_lines.append(line)
             proc.wait()
         st: dict = {"exit": proc.returncode, "billing": "api"}

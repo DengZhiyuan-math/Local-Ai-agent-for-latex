@@ -627,7 +627,8 @@ async function setPinned(id, on) {
   const p = byId(id); if (!p) return;
   p.pinned = on; render();
   const r = await api("/api/projects/update", { id, pinned: on });
-  if (r._status !== 200) { toast(r.error || "Could not save", true); load(); }
+  // The server's list did not change: forget it, so the next load draws it (pin as it was).
+  if (r._status !== 200) { toast(r.error || "Could not save", true); H.sig = null; load(); }
 }
 async function removeProject(id) {
   const p = byId(id); if (!p) return;

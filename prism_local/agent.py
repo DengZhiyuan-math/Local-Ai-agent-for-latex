@@ -32,9 +32,13 @@ UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files
 class AgentManager:
     def __init__(self, root_fn: Callable[[], Path], files_fn: Callable[[], list[str]],
                  writable_fn: Callable[[str], object] | None = None,
-                 backends: tuple[dict[str, Backend], str, str | None] | None = None):
+                 backends: tuple[dict[str, Backend], str, str | None] | None = None,
+                 output_fn: Callable[[], str | None] = lambda: None):
         self.root_fn = root_fn        # current repository root
         self.files_fn = files_fn      # editable files (repo-relative)
+        # The build's output folder: no turn's change, whoever wrote it (a build you started
+        # may still be writing it when the turn ends; the agent's builds go there too).
+        self.output_fn = output_fn
         # Raises ValueError for a path an agent may not write (server.resolve).
         self.writable_fn = writable_fn
         self.backends, self.default, self.config_error = backends or load_backends()
@@ -57,13 +61,17 @@ class AgentManager:
 
     def info(self) -> dict:
         root = self.root_fn().resolve()
+        job = self.active
+        # A page loaded during a turn (a reload) follows its events and can stop it.
+        active = {"job": job.id, "mode": job.mode, "provider": job.provider} \
+            if job and not job.done else None
         return {"default": self.default, "config_error": self.config_error,
                 "project_key": registry.project_key(root), "root": str(root),
-                "providers": [b.info() for b in self.backends.values()]}
+                "providers": [b.info() for b in self.backends.values()], "active": active}
 
     def _snapshot(self, job: Job) -> dict:
         """The project's files now (snapshot.take); what could not be looked at is noted."""
-        files, issues = snapshot.take(job.root)
+        files, issues = snapshot.take(job.root, self.output_fn())
         job.snapshot_issues |= issues
         return files
 
@@ -314,11 +322,14 @@ class AgentManager:
             job.rebased.update(states)
             job.rebased_folders.update(folders)
 
-    def shutdown(self) -> None:
-        """Stop a turn that is still running when the server exits."""
+    def shutdown(self, wait: float = 30) -> None:
+        """Stop a turn that is still running when the server exits, and let it finish: its
+        changes are then recorded as the agent's, before the server's last commit."""
         job = self.active
         if job and not job.done:
             self.stop(job.id)
+            with job.cond:
+                job.cond.wait_for(lambda: job.done, wait)
 
     def undo(self, turn: int) -> dict:
         """Restore files changed in `turn`, only where they still match the turn's result."""

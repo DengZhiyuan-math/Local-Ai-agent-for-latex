@@ -1,0 +1,66 @@
+{
+  "completed_at_utc": "2026-10-15T11:04:26.164346+00:00",
+  "base_commit": "a6d5d0b027fac83cc23a77c7a78a48cacd579d04",
+  "pushed": false,
+  "python": "3.14.2",
+  "node": "24.19.0",
+  "chrome": "155.0.8059.40",
+  "tested_cli": "codex-cli 0.162.0-alpha.17.2",
+  "full": {
+    "total": 471,
+    "passed": 441,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 30,
+    "seconds": 441.499,
+    "resource_warnings": 0,
+    "command": "PRISM_SKIP_TEX=1 python -m unittest discover -s tests -v"
+  },
+  "full_first_run": {
+    "total": 471,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 30,
+    "resource_warnings": 2,
+    "note": "pipes left open by O1's reader threads; fixed, then the suite ran again"
+  },
+  "native_codex": {
+    "total": 24,
+    "passed": 24,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 46.719
+  },
+  "browser_e2e": {
+    "editor_files_menu": "15/16 (the failing check read a let binding through window; script fixed, not rerun)",
+    "home_project_menu": "8/8",
+    "turn_reload_and_double_send": "6/6"
+  },
+  "source_sha256": {
+    "README.md": "6DC32E94BF5B66D0957EEABDDF4D9EAA23C519192693BFDDABCBFFD35DB6CD71",
+    "docs/audits/2026-10-15-codex-windows/report.md": "DC201A17E5E0837EC37AFBCC1674D5B588AA622F2AD12E082476C9F9DDED27CE",
+    "prism_local/agent.py": "696B13389326840FE9A40E8568EE1524EE6C811E678A706A405514A2637551F5",
+    "prism_local/backend_codex.py": "3F69E0EB635B8547ADA1B86F9AA9BF65DE1CEC873090F5766B4C6291BF946085",
+    "prism_local/backend_deepcode.py": "62AA74B94D1CBC0564B81722366B4886E9491BFCAE0C73357B80B7DF6CF2B423",
+    "prism_local/backends.py": "3BC00AC50DD7611503192F76FD5E6B3977F9CC77D7AA2B7ACFEAEC47652776F6",
+    "prism_local/desktop.py": "889BC30A9B6F54416ECE7228CCAE85BAEFF910C3580EBF8CE601E325F9C36C5F",
+    "prism_local/fsutil.py": "6C4B1CBADC77860DC238C1B0C89542D669FECB5A028F576F367FABEBA1E1F7FA",
+    "prism_local/gitsync.py": "FEB0B769E66F786A5B550EB6C0EE6288665DB87F0FB531B0BE06E8F9FC158FF5",
+    "prism_local/hub.py": "F8D13C0C7C0EFFC80E3DAD75B3E3F32B0E3745F6B8FFCD5F1F670F59907C8027",
+    "prism_local/proc.py": "1B79F3FECFDA94380C7D2989EC4928D4252C544D43998C99D40E42E864754F2B",
+    "prism_local/server.py": "7FF076FBF64019796F57E77C3CD3C8746913C20ED5ABD2772D32D2F2F0898EAF",
+    "prism_local/snapshot.py": "349FB02318B0654D98F8D3039B8E93046B0AF9D252316700EBE5E74F95DBD8D5",
+    "prism_local/static/app.css": "B0A1F4A72D239836AA3A30D6E7C5DE8112606BD20192DA78160DF6243BF68F31",
+    "prism_local/static/app.js": "196E0125BD9FBF8F7A835493F2FC7B6252FBD0C7A1532D3CB3FB4028AE451F46",
+    "prism_local/static/common.js": "0B66DAE9A7EFC5F108FAC3B9D9BB3F322A00DBB8CC107B466173B6E15887876A",
+    "prism_local/static/home.css": "39AB4A03C8650E0749A22CB15CC4E49E428096AAD01D8A08268607C23D129602",
+    "prism_local/static/home.js": "33FBE83135945E1E21DF8E157FFA78EBD8FD938CA22E66B8B60BFB7F991B4239",
+    "tests/test_agent.py": "C492679B0B208606429FB00F662524DF31531BDC2D219AD59C96771D540CF470",
+    "tests/test_backend_contracts.py": "F20750BFC8ADEC83F5938AA4C7CD51AAD7C284810338EE29BFE13D9F6EEF6CB9",
+    "tests/test_codex_discovery.py": "A824C7759316978D56B05DFDEF5EBEE0B09B9FD9483CAB8371F8B5FF27AC95E4",
+    "tests/test_codex_runtime.py": "CE3BD8DA691757DCD8E4D40C5D08DCE0251BE836CCC16A17FA5CA63E2B74298B",
+    "tests/test_gitsync.py": "0755B301C991B813C385EC760918CA2F7F23A2E8E13C0D2FEA0FDB9C4B5E7166",
+    "tests/test_hub.py": "42B87B02A66E3E578E29D48CCFA52EB7E1A3DF43229E8F3AA7AE1D094D76DE48",
+    "tests/test_server.py": "BE5142953A43EEC875671BFA05C79BC25AFE4E97F04FB68FB79519D031381434"
+  }
+}

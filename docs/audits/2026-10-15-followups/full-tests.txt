@@ -1,0 +1,543 @@
+test_a_page_loaded_during_a_turn_learns_which_one_runs (test_agent.ActiveTurn.test_a_page_loaded_during_a_turn_learns_which_one_runs)
+A page reloaded mid-turn follows the turn's events and can stop it. ... ok
+test_shutdown_lets_the_stopped_turn_finish (test_agent.ActiveTurn.test_shutdown_lets_the_stopped_turn_finish)
+The server exits mid-turn: the turn is stopped and finishes (its changes recorded ... ok
+test_a_build_still_running_when_a_turn_ends_is_not_the_turns (test_agent.BuildOutput.test_a_build_still_running_when_a_turn_ends_is_not_the_turns)
+You compile during a turn, and the turn ends while the engine still writes the ... ok
+test_matching_account_passes_case_insensitively (test_agent.ClaudeAccountGuard.test_matching_account_passes_case_insensitively) ... ok
+test_no_allowed_account_means_no_check (test_agent.ClaudeAccountGuard.test_no_allowed_account_means_no_check) ... ok
+test_probes_are_checked_like_turns (test_agent.ClaudeAccountGuard.test_probes_are_checked_like_turns)
+The usage probe and the command list start claude only for the allowed account. ... ok
+test_project_settings_that_switch_to_an_api_key_are_found (test_agent.ClaudeAccountGuard.test_project_settings_that_switch_to_an_api_key_are_found) ... ok
+test_refusals (test_agent.ClaudeAccountGuard.test_refusals) ... ok
+test_api_key_shows_the_price (test_agent.ClaudeBilling.test_api_key_shows_the_price) ... ok
+test_subscription_shows_no_price (test_agent.ClaudeBilling.test_subscription_shows_no_price) ... ok
+test_used_and_window (test_agent.ClaudeContext.test_used_and_window) ... ok
+test_edit_streams_old_and_new_text (test_agent.ClaudeLiveEvents.test_edit_streams_old_and_new_text) ... ok
+test_other_tools_stream_nothing (test_agent.ClaudeLiveEvents.test_other_tools_stream_nothing) ... ok
+test_tools_say_where_they_work (test_agent.ClaudeLiveEvents.test_tools_say_where_they_work) ... ok
+test_write_streams_its_content (test_agent.ClaudeLiveEvents.test_write_streams_its_content) ... ok
+test_a_failed_lookup_is_not_repeated_for_a_while (test_agent.ClaudeRemembers.test_a_failed_lookup_is_not_repeated_for_a_while) ... ok
+test_the_command_list_is_kept_until_a_skill_folder_changes (test_agent.ClaudeRemembers.test_the_command_list_is_kept_until_a_skill_folder_changes) ... ok
+test_the_login_is_asked_again_when_a_login_file_changes (test_agent.ClaudeRemembers.test_the_login_is_asked_again_when_a_login_file_changes) ... ok
+test_ask_mode_ignores_scope (test_agent.ClaudeScope.test_ask_mode_ignores_scope) ... ok
+test_mentions_allow_only_those_files (test_agent.ClaudeScope.test_mentions_allow_only_those_files) ... ok
+test_no_mentions_edit_anything (test_agent.ClaudeScope.test_no_mentions_edit_anything) ... ok
+test_allowed_commands_keep_the_shell (test_agent.ClaudeShell.test_allowed_commands_keep_the_shell) ... ok
+test_no_rules_no_shell (test_agent.ClaudeShell.test_no_rules_no_shell) ... ok
+test_refused_steps_are_named (test_agent.ClaudeShell.test_refused_steps_are_named) ... ok
+test_command (test_agent.CodexBackend.test_command) ... ok
+test_events (test_agent.CodexBackend.test_events) ... ok
+test_native_file_tools_in_both_modes (test_agent.CodexBackend.test_native_file_tools_in_both_modes) ... ok
+test_resumed_turn_refreshes_tool_rules_and_scope (test_agent.CodexBackend.test_resumed_turn_refreshes_tool_rules_and_scope) ... ok
+test_claude_gets_the_tool (test_agent.CompileTool.test_claude_gets_the_tool) ... ok
+test_protocol (test_agent.CompileTool.test_protocol) ... ok
+test_report_lists_errors_with_lines (test_agent.CompileTool.test_report_lists_errors_with_lines) ... ok
+test_ask_is_read_only (test_agent.DeepCodeBackend.test_ask_is_read_only) ... ok
+test_project_code_is_deep_codes (test_agent.DeepCodeBackend.test_project_code_is_deep_codes) ... ok
+test_turns_resume_and_tools (test_agent.DeepCodeBackend.test_turns_resume_and_tools) ... ok
+test_unavailable_says_how_to_install (test_agent.DeepCodeBackend.test_unavailable_says_how_to_install) ... ok
+test_efforts_are_per_backend (test_agent.ModelAndEffort.test_efforts_are_per_backend) ... ok
+test_model_names (test_agent.ModelAndEffort.test_model_names) ... ok
+test_rejects_flags_as_model_and_unknown_effort (test_agent.ModelAndEffort.test_rejects_flags_as_model_and_unknown_effort) ... ok
+test_http_error_is_reported (test_agent.OpenAICompatible.test_http_error_is_reported) ... ok
+test_missing_key (test_agent.OpenAICompatible.test_missing_key) ... ok
+test_paths_stay_in_project (test_agent.OpenAICompatible.test_paths_stay_in_project) ... ok
+test_scope_and_ask_mode_block_writes (test_agent.OpenAICompatible.test_scope_and_ask_mode_block_writes) ... ok
+test_tool_loop_edits_and_streams (test_agent.OpenAICompatible.test_tool_loop_edits_and_streams) ... ok
+test_bad_file (test_agent.Registry.test_bad_file) ... ok
+test_presets_and_user_settings (test_agent.Registry.test_presets_and_user_settings) ... ok
+test_metadata_new_this_turn_is_named_and_left_in_place (test_agent.RevertOutsideScope.test_metadata_new_this_turn_is_named_and_left_in_place) ... ok
+test_revert (test_agent.RevertOutsideScope.test_revert) ... ok
+test_a_cli_that_exits_at_once_says_why (test_agent.Snapshots.test_a_cli_that_exits_at_once_says_why)
+The CLI exits before reading its input (a bad flag, no login): writing the prompt ... ok
+test_a_cli_whose_output_breaks_the_handler_is_ended (test_agent.Snapshots.test_a_cli_whose_output_breaks_the_handler_is_ended)
+A line the handler does not expect raises: the CLI must not go on writing the ... ok
+test_a_command_left_holding_the_output_does_not_hold_the_turn (test_agent.Snapshots.test_a_command_left_holding_the_output_does_not_hold_the_turn)
+The CLI exits, but a command it started (a background shell) still holds its ... ok
+test_a_turn_ends_even_when_reporting_it_fails (test_agent.Snapshots.test_a_turn_ends_even_when_reporting_it_fails)
+Whatever goes wrong after the backend (here the commit hook raising something ... ok
+test_an_edit_turn_and_the_editor_do_not_write_the_same_files (test_agent.Snapshots.test_an_edit_turn_and_the_editor_do_not_write_the_same_files)
+While an Edit turn runs the editor holds your saves (editing()); a turn's Undo ... ok
+test_stop_before_the_cli_starts_starts_none (test_agent.Snapshots.test_stop_before_the_cli_starts_starts_none) ... ok
+test_stop_ends_a_turn_whose_cli_has_already_exited (test_agent.Snapshots.test_stop_ends_a_turn_whose_cli_has_already_exited) ... ok
+test_tool_events_have_one_form_whatever_the_cli_printed (test_agent.Snapshots.test_tool_events_have_one_form_whatever_the_cli_printed)
+A CLI's output of a shape not expected (a result that is text, not an object; a ... ok
+test_undo_puts_back_the_exact_bytes (test_agent.Snapshots.test_undo_puts_back_the_exact_bytes) ... ok
+test_undo_while_git_holds_the_files_says_busy (test_agent.Snapshots.test_undo_while_git_holds_the_files_says_busy)
+git holding the files long (a repository's slow hook): Undo says so after a moment, ... ok
+test_undo_writes_holding_the_save_lock_and_commits_after (test_agent.Snapshots.test_undo_writes_holding_the_save_lock_and_commits_after)
+Undo writes the files while holding the editor's save lock (a sync's merge holds it ... ok
+test_what_the_editor_writes_during_a_turn_is_not_the_turns (test_agent.Snapshots.test_what_the_editor_writes_during_a_turn_is_not_the_turns)
+During an Ask turn you keep editing (saves), and a build writes its output folder: ... ok
+test_binary_hidden_and_excluded_changes_are_reported_and_undone (test_backend_contracts.ChangeCoverage.test_binary_hidden_and_excluded_changes_are_reported_and_undone) ... ok
+test_large_file_changes_are_detected_and_marked_as_not_undoable (test_backend_contracts.ChangeCoverage.test_large_file_changes_are_detected_and_marked_as_not_undoable) ... ok
+test_scope_and_ask_restore_binary_hidden_and_build_files (test_backend_contracts.ChangeCoverage.test_scope_and_ask_restore_binary_hidden_and_build_files) ... ok
+test_undo_restores_a_replaced_link_without_touching_its_external_target (test_backend_contracts.ChangeCoverage.test_undo_restores_a_replaced_link_without_touching_its_external_target) ... ok
+test_command_policy_enforces_scope_with_the_native_sandbox (test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox) ... ok
+test_cli_compile_is_only_registered_for_edit_and_errors_are_preserved (test_backend_contracts.CompileContract.test_cli_compile_is_only_registered_for_edit_and_errors_are_preserved) ... ok
+test_a_settings_overlay_left_by_a_killed_editor_is_put_back (test_backend_contracts.DeepCodeContract.test_a_settings_overlay_left_by_a_killed_editor_is_put_back)
+The editor killed during an Ask turn leaves that turn's settings in the project. ... ok
+test_resumed_turn_refreshes_native_tools_and_project_key_is_accepted (test_backend_contracts.DeepCodeContract.test_resumed_turn_refreshes_native_tools_and_project_key_is_accepted) ... ok
+test_configured_model_is_checked_and_used_unless_overridden (test_backend_contracts.DefaultModel.test_configured_model_is_checked_and_used_unless_overridden) ... ok
+test_missing_executable_cannot_start_a_turn (test_backend_contracts.DefaultModel.test_missing_executable_cannot_start_a_turn) ... ok
+test_unknown_slash_command_keeps_selection_text (test_backend_contracts.FrontendReferences.test_unknown_slash_command_keeps_selection_text) ... ok
+test_git_directory_is_off_limits_in_any_case (test_backend_contracts.ProjectPaths.test_git_directory_is_off_limits_in_any_case) ... ok
+test_search_and_catalog_cannot_read_external_links (test_backend_contracts.ProjectPaths.test_search_and_catalog_cannot_read_external_links) ... ok
+test_api_receives_image_content_and_unsupported_inputs_are_rejected (test_backend_contracts.VisualAttachments.test_api_receives_image_content_and_unsupported_inputs_are_rejected) ... ok
+test_commented_out_and_body_packages_do_not_count (test_build.Engine.test_commented_out_and_body_packages_do_not_count) ... ok
+test_magic_comment (test_build.Engine.test_magic_comment) ... ok
+test_packages_that_need_another_engine (test_build.Engine.test_packages_that_need_another_engine) ... ok
+test_plain_documents_use_pdflatex (test_build.Engine.test_plain_documents_use_pdflatex) ... ok
+test_prism_json_wins (test_build.Engine.test_prism_json_wins) ... ok
+test_the_projects_own_class_is_read (test_build.Engine.test_the_projects_own_class_is_read) ... ok
+test_broken_aux_is_recognised (test_build.OutputFolder.test_broken_aux_is_recognised) ... ok
+test_clean_removes_only_what_builds_leave (test_build.OutputFolder.test_clean_removes_only_what_builds_leave) ... ok
+test_feedback_ignores_logs_and_the_pdf (test_build.OutputFolder.test_feedback_ignores_logs_and_the_pdf) ... ok
+test_mirror_dirs_for_included_files (test_build.OutputFolder.test_mirror_dirs_for_included_files) ... ok
+test_aux_citations_follow_included_files (test_build.Parsing.test_aux_citations_follow_included_files) ... ok
+test_biber_messages (test_build.Parsing.test_biber_messages) ... ok
+test_bibtex_messages (test_build.Parsing.test_bibtex_messages) ... ok
+test_file_line_errors (test_build.Parsing.test_file_line_errors) ... ok
+test_log_warnings_are_attributed_to_source_files (test_build.Parsing.test_log_warnings_are_attributed_to_source_files) ... ok
+test_a_program_left_behind_does_not_hold_the_build (test_build.Platform.test_a_program_left_behind_does_not_hold_the_build)
+A program the build started outlives the kill (re-parented, so taskkill /T and ... ok
+test_a_program_that_cannot_start_is_explained (test_build.Platform.test_a_program_that_cannot_start_is_explained) ... ok
+test_ascii_alias_for_names_the_code_page_cannot_spell (test_build.Platform.test_ascii_alias_for_names_the_code_page_cannot_spell) ... ok
+test_missing_engine_is_explained (test_build.Platform.test_missing_engine_is_explained) ... ok
+test_shell_commands_never_run_in_wsl (test_build.Platform.test_shell_commands_never_run_in_wsl) ... ok
+test_shell_commands_without_bash (test_build.Platform.test_shell_commands_without_bash) ... skipped 'Linux and macOS'
+test_stopping_ends_the_programs_a_program_started (test_build.Platform.test_stopping_ends_the_programs_a_program_started) ... skipped 'process groups: Linux and macOS'
+test_tex_is_found_where_distributions_install_it (test_build.Platform.test_tex_is_found_where_distributions_install_it)
+A server started from a desktop menu has no TeX on PATH (no ~/.bashrc). ... ok
+test_a_broken_aux_from_an_earlier_build_is_repaired (test_build.RealBuilds.test_a_broken_aux_from_an_earlier_build_is_repaired) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_biber_in_a_chinese_folder (test_build.RealBuilds.test_biber_in_a_chinese_folder) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_biblatex_with_biber (test_build.RealBuilds.test_biblatex_with_biber) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_bibtex_and_cross_references (test_build.RealBuilds.test_bibtex_and_cross_references) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_bibtex_in_a_chinese_folder (test_build.RealBuilds.test_bibtex_in_a_chinese_folder) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_ctex_in_a_chinese_folder (test_build.RealBuilds.test_ctex_in_a_chinese_folder)
+Fails on a TeX distribution whose ctex is newer than its LaTeX kernel ("Support ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_errors_draft_goes_on_and_strict_stops (test_build.RealBuilds.test_errors_draft_goes_on_and_strict_stops) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_fontspec_documents_are_built_with_xelatex (test_build.RealBuilds.test_fontspec_documents_are_built_with_xelatex) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_index_glossary_and_nomenclature (test_build.RealBuilds.test_index_glossary_and_nomenclature) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_stop_and_time_limit (test_build.RealBuilds.test_stop_and_time_limit) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_the_projects_own_bst_and_included_subfolders (test_build.RealBuilds.test_the_projects_own_bst_and_included_subfolders) ... skipped 'needs a TeX distribution (pdflatex on PATH)'
+test_requires_both_isolation_flags_for_new_and_resumed_turns (test_codex_discovery.CodexCompatibility.test_requires_both_isolation_flags_for_new_and_resumed_turns) ... ok
+test_gui_finds_bundled_native_cli_and_follows_updates (test_codex_discovery.CodexDiscovery.test_gui_finds_bundled_native_cli_and_follows_updates) ... ok
+test_missing_desktop_installation_is_unavailable (test_codex_discovery.CodexDiscovery.test_missing_desktop_installation_is_unavailable) ... ok
+test_one_disappearing_bundle_does_not_hide_another_installation (test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation) ... ok
+test_override_and_path_take_precedence (test_codex_discovery.CodexDiscovery.test_override_and_path_take_precedence) ... ok
+test_other_platforms_do_not_select_a_windows_sandbox (test_codex_discovery.CodexIsolation.test_other_platforms_do_not_select_a_windows_sandbox) ... ok
+test_turn_disables_global_hooks_without_changing_user_settings (test_codex_discovery.CodexIsolation.test_turn_disables_global_hooks_without_changing_user_settings) ... ok
+test_windows_turn_enables_native_sandbox_even_with_user_config_ignored (test_codex_discovery.CodexIsolation.test_windows_turn_enables_native_sandbox_even_with_user_config_ignored) ... ok
+test_a_folder_removed_during_the_check_is_skipped (test_codex_discovery.CodexProtectedPaths.test_a_folder_removed_during_the_check_is_skipped) ... ok
+test_an_unreadable_folder_stops_the_turn_with_a_clear_reason (test_codex_discovery.CodexProtectedPaths.test_an_unreadable_folder_stops_the_turn_with_a_clear_reason) ... ok
+test_existing_nested_metadata_is_read_only (test_codex_discovery.CodexProtectedPaths.test_existing_nested_metadata_is_read_only) ... ok
+test_mentioned_metadata_is_refused_before_the_turn_starts (test_codex_discovery.CodexProtectedPaths.test_mentioned_metadata_is_refused_before_the_turn_starts) ... ok
+test_metadata_names_match_regardless_of_case_on_every_platform (test_codex_discovery.CodexProtectedPaths.test_metadata_names_match_regardless_of_case_on_every_platform) ... ok
+test_scoped_files_cannot_reopen_protected_metadata (test_codex_discovery.CodexProtectedPaths.test_scoped_files_cannot_reopen_protected_metadata) ... ok
+test_edit_compile_mcp_works_with_native_command_network_disabled (test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled) ... skipped 'opt-in Windows sandbox startup'
+test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only (test_codex_runtime.CodexRuntime.test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only) ... skipped 'opt-in Windows sandbox startup'
+test_full_project_edit_cannot_patch_a_sibling_outside_the_project (test_codex_runtime.CodexRuntime.test_full_project_edit_cannot_patch_a_sibling_outside_the_project) ... skipped 'opt-in Windows sandbox startup'
+test_global_hooks_do_not_run_in_editor_turns (test_codex_runtime.CodexRuntime.test_global_hooks_do_not_run_in_editor_turns) ... skipped 'opt-in Windows sandbox startup'
+test_missing_windows_setting_reproduces_policy_rejection (test_codex_runtime.CodexRuntime.test_missing_windows_setting_reproduces_policy_rejection) ... skipped 'opt-in Windows sandbox startup'
+test_native_apply_patch_edits_scoped_file_and_denies_other_files (test_codex_runtime.CodexRuntime.test_native_apply_patch_edits_scoped_file_and_denies_other_files) ... skipped 'opt-in Windows sandbox startup'
+test_reads_work_and_native_writes_follow_each_turn_scope (test_codex_runtime.CodexRuntime.test_reads_work_and_native_writes_follow_each_turn_scope) ... skipped 'opt-in Windows sandbox startup'
+test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope (test_codex_runtime.CodexRuntime.test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope) ... skipped 'opt-in Windows sandbox startup'
+test_user_mcp_configuration_is_ignored_without_modifying_it (test_codex_runtime.CodexRuntime.test_user_mcp_configuration_is_ignored_without_modifying_it) ... skipped 'opt-in Windows sandbox startup'
+test_a_merge_cut_off_by_its_timeout_is_called_off (test_collab.Collaboration.test_a_merge_cut_off_by_its_timeout_is_called_off)
+git killed by its timeout in the middle of a merge leaves it half-way, with its ... ok
+test_a_save_while_git_merges_is_kept (test_collab.Collaboration.test_a_save_while_git_merges_is_kept)
+A merge that gives up puts the files back as they were when it started, undoing a ... ok
+test_agents_and_typing_on_all_sides_at_random (test_collab.Collaboration.test_agents_and_typing_on_all_sides_at_random)
+Three people typing, each with an agent that starts and ends turns at random, all ... ok
+test_agents_cannot_reach_the_remote (test_collab.Collaboration.test_agents_cannot_reach_the_remote)
+Whatever an AI agent runs, with --force or --no-verify, git cannot push from it. ... ok
+test_automatic_pull_waits_while_you_type (test_collab.Collaboration.test_automatic_pull_waits_while_you_type) ... ok
+test_bib_both_entries_kept_without_markers (test_collab.Collaboration.test_bib_both_entries_kept_without_markers) ... ok
+test_clash_then_combined_by_hand (test_collab.Collaboration.test_clash_then_combined_by_hand)
+Only when the automatic merge itself fails (here made to): nothing is lost, and ... ok
+test_deleted_here_changed_there_keeps_the_change (test_collab.Collaboration.test_deleted_here_changed_there_keeps_the_change) ... ok
+test_deleted_there_edited_here (test_collab.Collaboration.test_deleted_there_edited_here) ... ok
+test_deliberate_rewrite_can_be_kept (test_collab.Collaboration.test_deliberate_rewrite_can_be_kept)
+A team that removes something from history on purpose: restore_rewritten off. ... ok
+test_different_files_at_the_same_time (test_collab.Collaboration.test_different_files_at_the_same_time) ... ok
+test_dropped_commits_put_back_over_unrecorded_edits (test_collab.Collaboration.test_dropped_commits_put_back_over_unrecorded_edits)
+B fetched A's commit (the Home page does) without merging it, then someone force ... ok
+test_figure_both_changed_theirs_saved_next_to_it (test_collab.Collaboration.test_figure_both_changed_theirs_saved_next_to_it) ... ok
+test_guard_keeps_a_teams_own_hook (test_collab.Collaboration.test_guard_keeps_a_teams_own_hook) ... ok
+test_history_rewritten_on_the_remote_is_put_back (test_collab.Collaboration.test_history_rewritten_on_the_remote_is_put_back)
+A force push drops A's commit from the remote; B's next sync puts it back with an ... ok
+test_no_force_push_from_a_clone (test_collab.Collaboration.test_no_force_push_from_a_clone)
+A force push from a synced clone (an agent's shell, say) is refused before it leaves. ... ok
+test_no_merge_under_a_running_agent (test_collab.Collaboration.test_no_merge_under_a_running_agent)
+B's changes arrive while A's agent is in a turn and has written nothing yet: the ... ok
+test_positions_seen_in_the_history_are_not_looked_at_again (test_collab.Collaboration.test_positions_seen_in_the_history_are_not_looked_at_again)
+A pull checks the positions GitHub's branch had (its reflog) for a rewrite. Those ... ok
+test_rewrite_put_back_after_a_fetch_in_between (test_collab.Collaboration.test_rewrite_put_back_after_a_fetch_in_between)
+The Home page's background check fetched first: the old position is only in git's ... ok
+test_same_file_different_paragraphs (test_collab.Collaboration.test_same_file_different_paragraphs) ... ok
+test_same_lines_both_versions_kept_and_sync_goes_on (test_collab.Collaboration.test_same_lines_both_versions_kept_and_sync_goes_on)
+Both changed the same sentence: no one has to step in. The file gets both versions ... ok
+test_save_now_waits_for_the_agents_turn (test_collab.Collaboration.test_save_now_waits_for_the_agents_turn) ... ok
+test_stale_lock_and_crashed_merge_clear_themselves (test_collab.Collaboration.test_stale_lock_and_crashed_merge_clear_themselves) ... ok
+test_three_people_and_force_pushes_at_random (test_collab.Collaboration.test_three_people_and_force_pushes_at_random)
+The same, while someone without prism-local now and then force-pushes a rewritten ... ok
+test_three_people_at_random (test_collab.Collaboration.test_three_people_at_random)
+Many rounds of edits, saves and pulls in random order: the rules hold throughout, ... ok
+test_uncommitted_edit_while_someone_pushes (test_collab.Collaboration.test_uncommitted_edit_while_someone_pushes) ... ok
+test_unreachable_remote_changes_nothing (test_collab.Collaboration.test_unreachable_remote_changes_nothing) ... ok
+test_whole_file_rewrite_does_not_double_the_paper (test_collab.Collaboration.test_whole_file_rewrite_does_not_double_the_paper)
+B's agent reformats every line while A edits one: the file keeps one version, the ... ok
+test_a_merge_holds_the_other_editors_saves (test_collab.SharedFolderCollaboration.test_a_merge_holds_the_other_editors_saves)
+Each project of a shared repository has its own editor, and one's merge changes the ... ok
+test_each_editor_its_own_project (test_collab.SharedFolderCollaboration.test_each_editor_its_own_project) ... ok
+test_a_file_left_half_written_is_reported (test_fsutil.Writes.test_a_file_left_half_written_is_reported) ... ok
+test_a_file_open_elsewhere_is_written_in_place (test_fsutil.Writes.test_a_file_open_elsewhere_is_written_in_place) ... ok
+test_a_refused_replace_is_tried_again (test_fsutil.Writes.test_a_refused_replace_is_tried_again) ... ok
+test_an_in_place_write_that_fails_half_way_puts_the_old_version_back (test_fsutil.Writes.test_an_in_place_write_that_fails_half_way_puts_the_old_version_back) ... ok
+test_replace_file_gives_up_with_an_error_and_keeps_the_file (test_fsutil.Writes.test_replace_file_gives_up_with_an_error_and_keeps_the_file) ... ok
+test_conversations_are_isolated_by_project_and_provider (test_git_target.Frontend.test_conversations_are_isolated_by_project_and_provider) ... ok
+test_sync_menu_clears_stale_github_link_and_shows_binding (test_git_target.Frontend.test_sync_menu_clears_stale_github_link_and_shows_binding) ... ok
+test_api_session_is_bound_to_project (test_git_target.SessionOwnership.test_api_session_is_bound_to_project) ... ok
+test_deepcode_collision_allows_a_b_a_and_rejects_foreign_sessions (test_git_target.SessionOwnership.test_deepcode_collision_allows_a_b_a_and_rejects_foreign_sessions) ... ok
+test_deepcode_requires_local_index_and_file (test_git_target.SessionOwnership.test_deepcode_requires_local_index_and_file) ... ok
+test_deepcode_settings_cannot_reinject_git_environment (test_git_target.SessionOwnership.test_deepcode_settings_cannot_reinject_git_environment) ... ok
+test_native_cli_metadata_rejects_foreign_project (test_git_target.SessionOwnership.test_native_cli_metadata_rejects_foreign_project) ... ok
+test_binding_preserves_settings_and_upstream_branch (test_git_target.Targets.test_binding_preserves_settings_and_upstream_branch) ... ok
+test_branch_switch_and_multiple_push_urls (test_git_target.Targets.test_branch_switch_and_multiple_push_urls) ... ok
+test_conflict_merge_ignores_foreign_git_environment (test_git_target.Targets.test_conflict_merge_ignores_foreign_git_environment) ... ok
+test_create_rejects_target_changed_before_binding (test_git_target.Targets.test_create_rejects_target_changed_before_binding) ... ok
+test_detached_local_upstream_and_stale_confirmation (test_git_target.Targets.test_detached_local_upstream_and_stale_confirmation) ... ok
+test_env_keeps_auth_transport_and_platform_variables (test_git_target.Targets.test_env_keeps_auth_transport_and_platform_variables) ... ok
+test_fetch_upstream_remote_branch_without_origin_assumption (test_git_target.Targets.test_fetch_upstream_remote_branch_without_origin_assumption) ... ok
+test_github_transport_identity_and_secret_redaction (test_git_target.Targets.test_github_transport_identity_and_secret_redaction) ... ok
+test_inherited_git_selectors_do_not_select_tool (test_git_target.Targets.test_inherited_git_selectors_do_not_select_tool) ... ok
+test_moved_worktree_keeps_binding (test_git_target.Targets.test_moved_worktree_keeps_binding) ... ok
+test_publishing_commits_holding_the_files (test_git_target.Targets.test_publishing_commits_holding_the_files)
+Publishing commits everything (git add -A): not while a save replaces a file (on ... ok
+test_push_checks_the_target_afresh (test_git_target.Targets.test_push_checks_the_target_afresh) ... ok
+test_push_only_bound_branch_even_with_tags_and_custom_refspec (test_git_target.Targets.test_push_only_bound_branch_even_with_tags_and_custom_refspec) ... ok
+test_redirects_block_and_keep_local_edits (test_git_target.Targets.test_redirects_block_and_keep_local_edits) ... ok
+test_rename_and_move_keep_bound_remote_and_branch (test_git_target.Targets.test_rename_and_move_keep_bound_remote_and_branch) ... ok
+test_same_repository_reached_another_way_rebinds_quietly (test_git_target.Targets.test_same_repository_reached_another_way_rebinds_quietly) ... ok
+test_status_does_not_wait_for_a_sync_in_progress (test_git_target.Targets.test_status_does_not_wait_for_a_sync_in_progress) ... ok
+test_status_runs_no_git_for_the_target_until_the_config_changes (test_git_target.Targets.test_status_runs_no_git_for_the_target_until_the_config_changes) ... ok
+test_unbound_project_binds_itself_and_pushes (test_git_target.Targets.test_unbound_project_binds_itself_and_pushes) ... ok
+test_worktree_binding_and_git_hub_target (test_git_target.Targets.test_worktree_binding_and_git_hub_target) ... ok
+test_bytes_failures_and_check (test_gitenv.Git.test_bytes_failures_and_check) ... ok
+test_git_never_waits_for_input (test_gitenv.Git.test_git_never_waits_for_input) ... ok
+test_only_an_interactive_git_may_ask_for_a_login (test_gitenv.Git.test_only_an_interactive_git_may_ask_for_a_login) ... ok
+test_output_is_utf8_whatever_the_code_page (test_gitenv.Git.test_output_is_utf8_whatever_the_code_page) ... ok
+test_the_repository_is_found_from_cwd_only (test_gitenv.Git.test_the_repository_is_found_from_cwd_only) ... ok
+test_auth_and_protection_process_errors_are_reported (test_github.GitHubCLI.test_auth_and_protection_process_errors_are_reported) ... ok
+test_branch_protection_and_unavailable_plan (test_github.GitHubCLI.test_branch_protection_and_unavailable_plan) ... ok
+test_create_reports_cli_failure_and_timeout (test_github.GitHubCLI.test_create_reports_cli_failure_and_timeout) ... ok
+test_create_uses_the_project_and_sanitizes_inherited_git_selectors (test_github.GitHubCLI.test_create_uses_the_project_and_sanitizes_inherited_git_selectors) ... ok
+test_login_cache_expires (test_github.GitHubCLI.test_login_cache_expires) ... ok
+test_login_is_cached_and_can_be_refreshed (test_github.GitHubCLI.test_login_is_cached_and_can_be_refreshed) ... ok
+test_missing_cli_is_reported_without_starting_a_process (test_github.GitHubCLI.test_missing_cli_is_reported_without_starting_a_process) ... ok
+test_a_failing_start_does_not_end_autosave (test_gitsync.GitSyncTest.test_a_failing_start_does_not_end_autosave)
+The editor's start calls off a merge left half-way; that git cut off by its timeout, ... ok
+test_a_fetch_cut_off_by_its_timeout_leaves_others_index_lock (test_gitsync.GitSyncTest.test_a_fetch_cut_off_by_its_timeout_leaves_others_index_lock)
+A fetch or a read takes no index.lock: when one is cut off by its timeout, an ... ok
+test_a_save_between_the_check_and_the_all_recorded_keeps_its_autosave (test_gitsync.GitSyncTest.test_a_save_between_the_check_and_the_all_recorded_keeps_its_autosave)
+commit_all decides "everything saved is recorded" while a save may call touched(): ... ok
+test_a_save_during_a_commit_keeps_its_autosave_due (test_gitsync.GitSyncTest.test_a_save_during_a_commit_keeps_its_autosave_due)
+git may look at a file just before a save writes it: a save that came in while a ... ok
+test_a_save_half_way_is_not_a_change (test_gitsync.GitSyncTest.test_a_save_half_way_is_not_a_change)
+The temporary file a save writes before it replaces the file (fsutil.replace_file) ... ok
+test_agent_turn_commits_apart (test_gitsync.GitSyncTest.test_agent_turn_commits_apart) ... ok
+test_agent_turn_keeps_tracked_ignored_changes_and_deletions (test_gitsync.GitSyncTest.test_agent_turn_keeps_tracked_ignored_changes_and_deletions) ... ok
+test_agent_turn_skips_ignored_build_output (test_gitsync.GitSyncTest.test_agent_turn_skips_ignored_build_output) ... ok
+test_an_upload_is_told_what_its_own_push_did (test_gitsync.GitSyncTest.test_an_upload_is_told_what_its_own_push_did)
+The worker may push the upload's commit first, and `error` may still say what ... ok
+test_autosave_records_sources_not_build_output (test_gitsync.GitSyncTest.test_autosave_records_sources_not_build_output) ... ok
+test_both_versions_kept_by_a_merge_meanwhile_stay_listed (test_gitsync.GitSyncTest.test_both_versions_kept_by_a_merge_meanwhile_stay_listed)
+The page asks where both versions are still kept while a merge adds new places: ... ok
+test_diverged_histories_are_merged_not_rewritten (test_gitsync.GitSyncTest.test_diverged_histories_are_merged_not_rewritten)
+Both sides moved on (a co-author pushed while you wrote): a merge keeps both; no ... ok
+test_every_page_gets_every_notice (test_gitsync.GitSyncTest.test_every_page_gets_every_notice)
+Several ask for the status (the tree's poll, a button's answer, another tab): the ... ok
+test_files_lock_is_held_across_processes (test_gitsync.GitSyncTest.test_files_lock_is_held_across_processes)
+Another editor of the repository (another process) writing the files, or its git ... ok
+test_files_lock_let_go_when_unlocking_the_file_fails (test_gitsync.GitSyncTest.test_files_lock_let_go_when_unlocking_the_file_fails)
+Unlocking the lock file can fail (the folder on a network drive gone): the lock is ... ok
+test_history_and_old_versions (test_gitsync.GitSyncTest.test_history_and_old_versions) ... ok
+test_inside_another_repository (test_gitsync.GitSyncTest.test_inside_another_repository) ... ok
+test_no_autosave_while_you_type (test_gitsync.GitSyncTest.test_no_autosave_while_you_type) ... ok
+test_nothing_to_commit_does_not_wait_for_the_index (test_gitsync.GitSyncTest.test_nothing_to_commit_does_not_wait_for_the_index)
+Another program's git (an IDE's) holds index.lock for a moment: with nothing to ... ok
+test_only_a_button_may_ask_for_a_login (test_gitsync.GitSyncTest.test_only_a_button_may_ask_for_a_login) ... ok
+test_opening_the_project_pulls_at_once (test_gitsync.GitSyncTest.test_opening_the_project_pulls_at_once) ... ok
+test_pull_fast_forwards (test_gitsync.GitSyncTest.test_pull_fast_forwards) ... ok
+test_switched_off (test_gitsync.GitSyncTest.test_switched_off) ... ok
+test_the_github_menu_answers_while_a_push_runs (test_gitsync.GitSyncTest.test_the_github_menu_answers_while_a_push_runs)
+A push or pull holds the sync for minutes on a slow network: opening the GitHub ... ok
+test_a_merge_another_process_is_making_is_not_called_off (test_gitsync.OtherProcesses.test_a_merge_another_process_is_making_is_not_called_off) ... ok
+test_settings_written_at_once_keep_every_key (test_gitsync.OtherProcesses.test_settings_written_at_once_keep_every_key) ... ok
+test_sync_waits_its_turn_without_an_error (test_gitsync.OtherProcesses.test_sync_waits_its_turn_without_an_error) ... ok
+test_the_lock_is_reentrant_and_shared_by_threads (test_gitsync.OtherProcesses.test_the_lock_is_reentrant_and_shared_by_threads) ... ok
+test_an_open_editor_finds_a_new_repository (test_gitsync.RepositoryCreatedLater.test_an_open_editor_finds_a_new_repository) ... ok
+test_agent_turns_and_history_use_project_paths (test_gitsync.SharedRepositoryTest.test_agent_turns_and_history_use_project_paths) ... ok
+test_commits_only_its_own_project_and_pushes (test_gitsync.SharedRepositoryTest.test_commits_only_its_own_project_and_pushes) ... ok
+test_no_marker_no_sync (test_gitsync.SharedRepositoryTest.test_no_marker_no_sync) ... ok
+test_a_command_that_timed_out_says_so (test_httpbase.Answers.test_a_command_that_timed_out_says_so) ... ok
+test_an_answer_already_sent_is_not_followed_by_another (test_httpbase.Answers.test_an_answer_already_sent_is_not_followed_by_another) ... ok
+test_an_unexpected_error_is_a_json_answer (test_httpbase.Answers.test_an_unexpected_error_is_a_json_answer) ... ok
+test_the_code_is_looked_at_again_only_every_few_seconds (test_httpbase.CodeStamp.test_the_code_is_looked_at_again_only_every_few_seconds) ... ok
+test_errors_read_while_fetching_never_change_under_the_reader (test_hub.CheckGitHub.test_errors_read_while_fetching_never_change_under_the_reader)
+The cards read the fetch errors (git_info, from other threads) while the fetches ... ok
+test_new_commits_elsewhere_are_found (test_hub.CheckGitHub.test_new_commits_elsewhere_are_found) ... ok
+test_a_new_repository_is_announced_to_the_editor_unless_it_is_this_process (test_hub.Create.test_a_new_repository_is_announced_to_the_editor_unless_it_is_this_process) ... ok
+test_creates_template_and_lists_it (test_hub.Create.test_creates_template_and_lists_it) ... ok
+test_git_info_of_new_repository (test_hub.Create.test_git_info_of_new_repository) ... ok
+test_git_info_of_some_or_all_projects (test_hub.Create.test_git_info_of_some_or_all_projects) ... ok
+test_new_repository_is_ready_for_co_authors (test_hub.Create.test_new_repository_is_ready_for_co_authors) ... ok
+test_rejects_bad_names_and_existing_folders (test_hub.Create.test_rejects_bad_names_and_existing_folders) ... ok
+test_zenity_or_kdialog_before_tkinter (test_hub.FolderDialog.test_zenity_or_kdialog_before_tkinter) ... skipped 'desktop dialogs: Linux'
+test_a_rename_waits_for_git_and_says_when_it_could_not_commit (test_hub.FolderSync.test_a_rename_waits_for_git_and_says_when_it_could_not_commit)
+Another editor of the shared repository is committing (git's index.lock, for a ... ok
+test_big_files_stay_out_of_the_first_commit (test_hub.FolderSync.test_big_files_stay_out_of_the_first_commit) ... ok
+test_publish_in_a_shared_repository_publishes_that_repository (test_hub.FolderSync.test_publish_in_a_shared_repository_publishes_that_repository) ... ok
+test_publish_one_project (test_hub.FolderSync.test_publish_one_project) ... ok
+test_refuses_a_repository_inside_a_project (test_hub.FolderSync.test_refuses_a_repository_inside_a_project) ... ok
+test_rename_inside_a_shared_repository_is_committed (test_hub.FolderSync.test_rename_inside_a_shared_repository_is_committed) ... ok
+test_rename_project_and_folder (test_hub.FolderSync.test_rename_project_and_folder) ... ok
+test_restructure_reserves_old_and_new_paths_through_metadata_update (test_hub.FolderSync.test_restructure_reserves_old_and_new_paths_through_metadata_update) ... ok
+test_separate_creates_missing_repositories (test_hub.FolderSync.test_separate_creates_missing_repositories) ... ok
+test_shared_then_separate (test_hub.FolderSync.test_shared_then_separate) ... ok
+test_slow_editor_blocks_both_home_rename_and_repository_restructure (test_hub.FolderSync.test_slow_editor_blocks_both_home_rename_and_repository_restructure) ... ok
+test_two_home_mutations_cannot_use_the_same_preview (test_hub.FolderSync.test_two_home_mutations_cannot_use_the_same_preview) ... ok
+test_add_and_create_into_a_folder (test_hub.FoldersAndTags.test_add_and_create_into_a_folder) ... ok
+test_tags (test_hub.FoldersAndTags.test_tags) ... ok
+test_topic_with_subprojects (test_hub.FoldersAndTags.test_topic_with_subprojects) ... ok
+test_manage_projects (test_hub.HubServer.test_manage_projects) ... ok
+test_requires_header_and_exits_after_last_page (test_hub.HubServer.test_requires_header_and_exits_after_last_page) ... ok
+test_a_live_server_that_does_not_answer_keeps_its_file (test_hub.Instances.test_a_live_server_that_does_not_answer_keeps_its_file) ... ok
+test_a_pid_given_to_a_new_process_is_not_the_server (test_hub.Instances.test_a_pid_given_to_a_new_process_is_not_the_server) ... ok
+test_inspecting_a_server_that_ended_keeps_its_record (test_hub.Instances.test_inspecting_a_server_that_ended_keeps_its_record) ... ok
+test_nothing_listening_at_its_address_is_a_server_gone (test_hub.Instances.test_nothing_listening_at_its_address_is_a_server_gone)
+Where the system cannot say when a process started (macOS), a new process given ... ok
+test_server_alive (test_hub.Instances.test_server_alive) ... ok
+test_copy_puts_the_folder_on_the_clipboard (test_hub.ProjectFolders.test_copy_puts_the_folder_on_the_clipboard) ... ok
+test_delete_moves_the_folder_to_the_trash_and_forgets_it (test_hub.ProjectFolders.test_delete_moves_the_folder_to_the_trash_and_forgets_it) ... ok
+test_never_while_its_editor_runs_nor_a_folder_holding_more (test_hub.ProjectFolders.test_never_while_its_editor_runs_nor_a_folder_holding_more) ... ok
+test_paste_adds_copied_folders_as_projects_in_place (test_hub.ProjectFolders.test_paste_adds_copied_folders_as_projects_in_place) ... ok
+test_a_damaged_project_list_is_never_written_back_empty (test_hub.Registry.test_a_damaged_project_list_is_never_written_back_empty)
+projects.json damaged (a hand edit) or held by another program: opening a project ... ok
+test_damaged_settings_are_kept_and_the_claude_account_is_not_lifted (test_hub.Registry.test_damaged_settings_are_kept_and_the_claude_account_is_not_lifted)
+settings.json damaged: saving a setting does not replace it with the defaults, ... ok
+test_failed_rollback_reports_the_actual_path_and_keeps_recovery_details (test_hub.Registry.test_failed_rollback_reports_the_actual_path_and_keeps_recovery_details) ... ok
+test_folder_move_validates_the_list_before_moving_files (test_hub.Registry.test_folder_move_validates_the_list_before_moving_files) ... ok
+test_metadata_write_failure_rolls_the_folder_back (test_hub.Registry.test_metadata_write_failure_rolls_the_folder_back) ... ok
+test_partial_cross_device_move_is_not_retried_into_its_own_target (test_hub.Registry.test_partial_cross_device_move_is_not_retried_into_its_own_target) ... ok
+test_project_key_is_stable (test_hub.Registry.test_project_key_is_stable) ... ok
+test_touch_adds_once_and_records_opening (test_hub.Registry.test_touch_adds_once_and_records_opening) ... ok
+test_claude_profile_folder (test_hub.SettingsAndGitHub.test_claude_profile_folder) ... ok
+test_concurrent_settings_updates_keep_both_changes (test_hub.SettingsAndGitHub.test_concurrent_settings_updates_keep_both_changes) ... ok
+test_github_refuses_bad_names_before_calling_github (test_hub.SettingsAndGitHub.test_github_refuses_bad_names_before_calling_github) ... ok
+test_project_inside_another_repository_has_none_of_its_own (test_hub.SettingsAndGitHub.test_project_inside_another_repository_has_none_of_its_own) ... ok
+test_repo_names (test_hub.SettingsAndGitHub.test_repo_names) ... ok
+test_settings_round_trip_and_checks (test_hub.SettingsAndGitHub.test_settings_round_trip_and_checks) ... ok
+test_commented_out_and_missing (test_hub.Title.test_commented_out_and_missing) ... ok
+test_example_project (test_hub.Title.test_example_project) ... ok
+test_plain (test_hub.Title.test_plain) ... ok
+test_short_title_thanks_and_macros (test_hub.Title.test_short_title_thanks_and_macros) ... ok
+test_alias_inside_a_moved_project_follows_the_folder (test_instance_lifecycle.Handover.test_alias_inside_a_moved_project_follows_the_folder) ... ok
+test_custom_alias_survives_rename_then_another_restart (test_instance_lifecycle.Handover.test_custom_alias_survives_rename_then_another_restart) ... ok
+test_direct_cli_registers_the_editor_and_refuses_a_duplicate (test_instance_lifecycle.Handover.test_direct_cli_registers_the_editor_and_refuses_a_duplicate) ... ok
+test_editor_started_in_its_project_folder_releases_cwd_before_renaming (test_instance_lifecycle.Handover.test_editor_started_in_its_project_folder_releases_cwd_before_renaming) ... ok
+test_home_restarts_on_the_bound_port_and_concurrent_open_reuses_it (test_instance_lifecycle.Handover.test_home_restarts_on_the_bound_port_and_concurrent_open_reuses_it) ... ok
+test_venv_editor_releases_its_redirectors_cwd_before_renaming (test_instance_lifecycle.Handover.test_venv_editor_releases_its_redirectors_cwd_before_renaming) ... ok
+test_dead_instance_is_absent_but_inspection_does_not_delete_its_record (test_instances.InstanceState.test_dead_instance_is_absent_but_inspection_does_not_delete_its_record) ... ok
+test_failed_exclusive_operation_releases_every_lock (test_instances.InstanceState.test_failed_exclusive_operation_releases_every_lock) ... ok
+test_inspection_of_an_absent_instance_creates_no_state_files (test_instances.InstanceState.test_inspection_of_an_absent_instance_creates_no_state_files) ... ok
+test_invalid_record_is_occupied_and_never_overwritten_by_open (test_instances.InstanceState.test_invalid_record_is_occupied_and_never_overwritten_by_open) ... ok
+test_move_reserves_source_and_destination_and_open_does_not_spawn (test_instances.InstanceState.test_move_reserves_source_and_destination_and_open_does_not_spawn) ... ok
+test_open_does_not_recreate_a_moved_or_missing_project (test_instances.InstanceState.test_open_does_not_recreate_a_moved_or_missing_project) ... ok
+test_slow_live_instance_cannot_be_moved (test_instances.InstanceState.test_slow_live_instance_cannot_be_moved) ... ok
+test_slow_live_instance_is_occupied_and_its_record_is_unchanged (test_instances.InstanceState.test_slow_live_instance_is_occupied_and_its_record_is_unchanged) ... ok
+test_successor_claim_blocks_takeover_even_between_the_two_os_lock_owners (test_instances.InstanceState.test_successor_claim_blocks_takeover_even_between_the_two_os_lock_owners) ... ok
+test_unresponsive_process_is_neither_replaced_nor_killed (test_instances.InstanceState.test_unresponsive_process_is_neither_replaced_nor_killed) ... ok
+test_waiting_for_the_os_lock_obeys_the_startup_time_budget (test_instances.InstanceState.test_waiting_for_the_os_lock_obeys_the_startup_time_budget) ... ok
+test_wrong_application_root_or_pid_is_not_reused (test_instances.InstanceState.test_wrong_application_root_or_pid_is_not_reused) ... ok
+test_wrong_generation_is_not_reused (test_instances.InstanceState.test_wrong_generation_is_not_reused) ... ok
+test_cancelling_a_rename_before_shutdown_allows_retry (test_instances.Registration.test_cancelling_a_rename_before_shutdown_allows_retry) ... ok
+test_custom_alias_and_canonical_record_are_both_published_and_removed (test_instances.Registration.test_custom_alias_and_canonical_record_are_both_published_and_removed) ... ok
+test_failed_handover_reports_failure_and_releases_both_paths (test_instances.Registration.test_failed_handover_reports_failure_and_releases_both_paths) ... ok
+test_locked_ready_record_does_not_prevent_shutdown_and_releasing_locks (test_instances.Registration.test_locked_ready_record_does_not_prevent_shutdown_and_releasing_locks) ... ok
+test_old_cleanup_cannot_remove_a_successors_registration (test_instances.Registration.test_old_cleanup_cannot_remove_a_successors_registration) ... ok
+test_ready_record_waits_for_a_reader_on_windows (test_instances.Registration.test_ready_record_waits_for_a_reader_on_windows) ... ok
+test_shutdown_cannot_accept_another_transition_after_handover_is_released (test_instances.Registration.test_shutdown_cannot_accept_another_transition_after_handover_is_released) ... ok
+test_ensure_starts_and_reuses_without_an_unowned_popen (test_instances.Startup.test_ensure_starts_and_reuses_without_an_unowned_popen) ... ok
+test_failed_start_reports_its_log_and_releases_the_reservation (test_instances.Startup.test_failed_start_reports_its_log_and_releases_the_reservation) ... ok
+test_healthy_legacy_record_without_a_token_is_reused (test_instances.Startup.test_healthy_legacy_record_without_a_token_is_reused) ... ok
+test_home_uses_the_same_startup_protocol (test_instances.Startup.test_home_uses_the_same_startup_protocol) ... ok
+test_real_windows_venv_startup_uses_the_servers_identity (test_instances.Startup.test_real_windows_venv_startup_uses_the_servers_identity) ... ok
+test_redirector_pid_can_differ_from_the_ready_server_pid (test_instances.Startup.test_redirector_pid_can_differ_from_the_ready_server_pid) ... ok
+test_separate_launcher_processes_share_one_startup_lock (test_instances.Startup.test_separate_launcher_processes_share_one_startup_lock) ... ok
+test_startup_timeout_kills_and_reaps_the_child_then_allows_retry (test_instances.Startup.test_startup_timeout_kills_and_reaps_the_child_then_allows_retry) ... ok
+test_two_concurrent_open_requests_start_one_server (test_instances.Startup.test_two_concurrent_open_requests_start_one_server) ... ok
+test_app_mode_opens_an_app_window (test_launcher.BrowserCommand.test_app_mode_opens_an_app_window) ... ok
+test_default_mode_uses_the_default_browser (test_launcher.BrowserCommand.test_default_mode_uses_the_default_browser) ... ok
+test_window_is_the_default_mode (test_launcher.BrowserCommand.test_window_is_the_default_mode) ... ok
+test_window_mode_opens_a_new_normal_window (test_launcher.BrowserCommand.test_window_mode_opens_a_new_normal_window) ... ok
+test_without_chrome_or_edge_falls_back (test_launcher.BrowserCommand.test_without_chrome_or_edge_falls_back) ... ok
+test_exec_arguments_are_quoted_as_the_spec_says (test_launcher.DesktopEntry.test_exec_arguments_are_quoted_as_the_spec_says) ... ok
+test_icon_and_entry (test_launcher.DesktopEntry.test_icon_and_entry) ... ok
+test_error_dialogs_where_there_is_no_console (test_launcher.LinuxBrowser.test_error_dialogs_where_there_is_no_console) ... ok
+test_firefox_as_the_default_means_the_default_browser (test_launcher.LinuxBrowser.test_firefox_as_the_default_means_the_default_browser) ... ok
+test_the_default_browser_when_it_is_chromium_based (test_launcher.LinuxBrowser.test_the_default_browser_when_it_is_chromium_based) ... ok
+test_unknown_default_takes_the_first_installed (test_launcher.LinuxBrowser.test_unknown_default_takes_the_first_installed) ... ok
+test_none_mode_does_not_access_browser (test_launcher.MacBrowser.test_none_mode_does_not_access_browser) ... ok
+test_repeated_home_launch_selects_existing_page (test_launcher.MacBrowser.test_repeated_home_launch_selects_existing_page) ... ok
+test_unavailable_page_opens_in_default_browser (test_launcher.MacBrowser.test_unavailable_page_opens_in_default_browser) ... ok
+test_launcher_starts_server_and_exits (test_lifecycle.LauncherLifecycle.test_launcher_starts_server_and_exits) ... ok
+test_closing_the_stream_exits_without_goodbye (test_lifecycle.ServerLifecycle.test_closing_the_stream_exits_without_goodbye) ... ok
+test_compile_active_document_and_follow_its_pdf (test_lifecycle.ServerLifecycle.test_compile_active_document_and_follow_its_pdf) ... ok
+test_exits_after_last_goodbye (test_lifecycle.ServerLifecycle.test_exits_after_last_goodbye) ... ok
+test_exits_when_no_page_ever_connects (test_lifecycle.ServerLifecycle.test_exits_when_no_page_ever_connects) ... ok
+test_goodbye_is_guarded (test_lifecycle.ServerLifecycle.test_goodbye_is_guarded) ... ok
+test_import_files_through_http_and_open_assets (test_lifecycle.ServerLifecycle.test_import_files_through_http_and_open_assets) ... ok
+test_opening_a_project_while_its_editor_restarts_starts_no_second_one (test_lifecycle.ServerLifecycle.test_opening_a_project_while_its_editor_restarts_starts_no_second_one)
+A restart (after an update): the server stops listening, removes its instance ... ok
+test_other_sites_cannot_use_the_api (test_lifecycle.ServerLifecycle.test_other_sites_cannot_use_the_api) ... ok
+test_port_in_use_moves_up (test_lifecycle.ServerLifecycle.test_port_in_use_moves_up) ... ok
+test_reload_does_not_exit (test_lifecycle.ServerLifecycle.test_reload_does_not_exit) ... ok
+test_rename_only_the_name (test_lifecycle.ServerLifecycle.test_rename_only_the_name) ... ok
+test_rename_the_folder_too (test_lifecycle.ServerLifecycle.test_rename_the_folder_too) ... ok
+test_sigterm_stops_the_server_cleanly (test_lifecycle.ServerLifecycle.test_sigterm_stops_the_server_cleanly) ... skipped 'signals: Linux and macOS'
+test_silent_page_goes_stale (test_lifecycle.ServerLifecycle.test_silent_page_goes_stale) ... ok
+test_stream_from_other_sites_is_refused (test_lifecycle.ServerLifecycle.test_stream_from_other_sites_is_refused) ... ok
+test_browser_selection_scripts_compile_natively (test_macos_app.MacApp.test_browser_selection_scripts_compile_natively) ... skipped 'requires native macOS tools'
+test_bundle_runs_launcher_with_quoted_paths (test_macos_app.MacApp.test_bundle_runs_launcher_with_quoted_paths) ... skipped 'requires native macOS tools'
+test_installer_refuses_an_unrelated_existing_app (test_macos_app.MacApp.test_installer_refuses_an_unrelated_existing_app) ... skipped 'requires native macOS tools'
+test_closed_stream_means_gone (test_presence.PresenceTest.test_closed_stream_means_gone) ... ok
+test_goodbye_then_grace (test_presence.PresenceTest.test_goodbye_then_grace) ... ok
+test_last_of_several_pages (test_presence.PresenceTest.test_last_of_several_pages) ... ok
+test_open_page_keeps_it_alive (test_presence.PresenceTest.test_open_page_keeps_it_alive) ... ok
+test_open_stream_never_goes_stale (test_presence.PresenceTest.test_open_stream_never_goes_stale) ... ok
+test_reload_within_grace (test_presence.PresenceTest.test_reload_within_grace) ... ok
+test_resume_after_sleep (test_presence.PresenceTest.test_resume_after_sleep) ... ok
+test_resume_restarts_grace (test_presence.PresenceTest.test_resume_restarts_grace) ... ok
+test_second_stream_of_same_page (test_presence.PresenceTest.test_second_stream_of_same_page) ... ok
+test_silent_page_goes_stale (test_presence.PresenceTest.test_silent_page_goes_stale) ... ok
+test_unknown_goodbye_is_ignored (test_presence.PresenceTest.test_unknown_goodbye_is_ignored) ... ok
+test_waits_for_first_page (test_presence.PresenceTest.test_waits_for_first_page) ... ok
+test_a_bad_prism_json_is_reported_and_the_defaults_apply (test_projectconfig.ProjectConfig.test_a_bad_prism_json_is_reported_and_the_defaults_apply) ... ok
+test_a_document_opened_on_its_own (test_projectconfig.ProjectConfig.test_a_document_opened_on_its_own) ... ok
+test_a_tex_that_cannot_be_read_is_passed_over (test_projectconfig.ProjectConfig.test_a_tex_that_cannot_be_read_is_passed_over)
+A .tex at the top that cannot be read (here a folder so named; also a broken link, ... ok
+test_no_document_yet (test_projectconfig.ProjectConfig.test_no_document_yet)
+A new folder without a .tex: the editor still has a document to open (main.tex), ... ok
+test_the_document_when_it_is_not_main_tex (test_projectconfig.ProjectConfig.test_the_document_when_it_is_not_main_tex) ... ok
+test_the_output_folder_stays_inside_the_project (test_projectconfig.ProjectConfig.test_the_output_folder_stays_inside_the_project) ... ok
+test_busy_first_push_reports_the_created_repository (test_publish.Publish.test_busy_first_push_reports_the_created_repository) ... ok
+test_creation_failure_keeps_the_local_commit (test_publish.Publish.test_creation_failure_keeps_the_local_commit) ... ok
+test_default_owner_is_used_and_a_second_publish_does_not_create_again (test_publish.Publish.test_default_owner_is_used_and_a_second_publish_does_not_create_again) ... ok
+test_first_push_and_protection_use_the_current_branch (test_publish.Publish.test_first_push_and_protection_use_the_current_branch) ... ok
+test_large_files_are_left_local_and_build_output_is_ignored (test_publish.Publish.test_large_files_are_left_local_and_build_output_is_ignored) ... ok
+test_nested_project_is_rejected_without_creating_its_own_repository (test_publish.Publish.test_nested_project_is_rejected_without_creating_its_own_repository) ... ok
+test_rejected_first_push_keeps_the_commit_and_created_repository_link (test_publish.Publish.test_rejected_first_push_keeps_the_commit_and_created_repository_link) ... ok
+test_wrong_created_target_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_created_target_reports_the_link_without_binding_or_pushing) ... ok
+test_wrong_remote_branch_reports_the_link_without_binding_or_pushing (test_publish.Publish.test_wrong_remote_branch_reports_the_link_without_binding_or_pushing) ... ok
+test_an_index_lock_left_by_a_crash_goes (test_repository.RepositoryTest.test_an_index_lock_left_by_a_crash_goes) ... ok
+test_another_programs_git_is_waited_for (test_repository.RepositoryTest.test_another_programs_git_is_waited_for)
+An IDE's git status holds index.lock for a moment: a commit waits for it, rather ... ok
+test_changes_only_inside_changing (test_repository.RepositoryTest.test_changes_only_inside_changing)
+A command that changes the index outside changing() is a bug: it raises at once, ... ok
+test_found_from_any_folder_inside (test_repository.RepositoryTest.test_found_from_any_folder_inside) ... ok
+test_one_thread_at_a_time_and_again_in_the_same (test_repository.RepositoryTest.test_one_thread_at_a_time_and_again_in_the_same) ... ok
+test_checks_at_most_every_few_minutes (test_selfupdate.SelfUpdate.test_checks_at_most_every_few_minutes) ... ok
+test_fast_forwards_to_github (test_selfupdate.SelfUpdate.test_fast_forwards_to_github) ... ok
+test_local_commits_are_never_merged (test_selfupdate.SelfUpdate.test_local_commits_are_never_merged) ... ok
+test_other_branch_without_upstream_is_left_alone (test_selfupdate.SelfUpdate.test_other_branch_without_upstream_is_left_alone) ... ok
+test_switched_off (test_selfupdate.SelfUpdate.test_switched_off) ... ok
+test_uncommitted_changes_are_left_alone (test_selfupdate.SelfUpdate.test_uncommitted_changes_are_left_alone) ... ok
+test_up_to_date_says_nothing (test_selfupdate.SelfUpdate.test_up_to_date_says_nothing) ... ok
+test_a_started_server_shows_the_pdf_built_last (test_server.Config.test_a_started_server_shows_the_pdf_built_last) ... ok
+test_changes_apply_without_a_restart (test_server.Config.test_changes_apply_without_a_restart) ... ok
+test_the_home_page_names_the_same_document_and_folder (test_server.Config.test_the_home_page_names_the_same_document_and_folder)
+The Home page's card (title, thumbnail) and the editor read prism.json and guess ... ok
+test_copy_falls_back_to_the_page_where_the_system_has_no_file_clipboard (test_server.FileMenu.test_copy_falls_back_to_the_page_where_the_system_has_no_file_clipboard) ... ok
+test_delete_goes_to_the_recycle_bin_and_never_takes_the_project (test_server.FileMenu.test_delete_goes_to_the_recycle_bin_and_never_takes_the_project) ... ok
+test_new_file_and_folder_with_names_that_work_everywhere (test_server.FileMenu.test_new_file_and_folder_with_names_that_work_everywhere) ... ok
+test_only_what_the_sidebar_shows_and_never_during_an_agent_turn (test_server.FileMenu.test_only_what_the_sidebar_shows_and_never_during_an_agent_turn) ... ok
+test_paste_copies_beside_what_is_there_without_repository_metadata (test_server.FileMenu.test_paste_copies_beside_what_is_there_without_repository_metadata) ... ok
+test_paste_takes_what_explorer_or_finder_copied (test_server.FileMenu.test_paste_takes_what_explorer_or_finder_copied) ... ok
+test_rename_a_file_a_folder_and_only_the_case (test_server.FileMenu.test_rename_a_file_a_folder_and_only_the_case) ... ok
+test_the_tree_shows_empty_folders_but_not_hidden_or_excluded_ones (test_server.FileMenu.test_the_tree_shows_empty_folders_but_not_hidden_or_excluded_ones) ... ok
+test_no_save_while_the_agent_edits (test_server.Files.test_no_save_while_the_agent_edits)
+An Edit turn runs: the server holds every save, also from a page that did not see ... ok
+test_one_walk_lists_what_list_files_lists (test_server.Files.test_one_walk_lists_what_list_files_lists) ... ok
+test_only_editable_files_inside_the_project (test_server.Files.test_only_editable_files_inside_the_project) ... ok
+test_save_keeps_the_files_line_ends (test_server.Files.test_save_keeps_the_files_line_ends) ... ok
+test_save_keeps_the_files_permissions (test_server.Files.test_save_keeps_the_files_permissions) ... skipped 'file modes: Linux and macOS'
+test_save_refuses_to_overwrite_a_newer_file (test_server.Files.test_save_refuses_to_overwrite_a_newer_file) ... ok
+test_save_while_another_program_reads_the_file (test_server.Files.test_save_while_another_program_reads_the_file) ... ok
+test_tree_lists_assets_without_reading_them_as_source (test_server.Files.test_tree_lists_assets_without_reading_them_as_source) ... ok
+test_diff_panel_says_what_it_shows (test_server.GitState.test_diff_panel_says_what_it_shows) ... ok
+test_project_inside_a_larger_repository (test_server.GitState.test_project_inside_a_larger_repository) ... ok
+test_project_modules_are_all_loaded_at_the_start (test_server.Imports.test_project_modules_are_all_loaded_at_the_start)
+A server runs for days, and a self-update fast-forwards the code under it: a ... ok
+test_titles_read_as_text (test_server.PlainText.test_titles_read_as_text) ... ok
+test_a_changed_prism_json_keeps_a_standalone_document_shown (test_server.ShownDocument.test_a_changed_prism_json_keeps_a_standalone_document_shown) ... ok
+test_a_chapter_builds_the_document_that_includes_it (test_server.ShownDocument.test_a_chapter_builds_the_document_that_includes_it) ... ok
+test_the_shown_document_changes_when_its_build_ends (test_server.ShownDocument.test_the_shown_document_changes_when_its_build_ends) ... ok
+test_section_titles (test_server.Symbols.test_section_titles) ... ok
+test_standard_names_without_newtheorem (test_server.Symbols.test_standard_names_without_newtheorem) ... ok
+test_theorem_names_and_their_titles (test_server.Symbols.test_theorem_names_and_their_titles) ... ok
+test_unchanged_files_are_not_read_again (test_server.Symbols.test_unchanged_files_are_not_read_again) ... ok
+test_source_to_pdf_and_back (test_server.SyncTeX.test_source_to_pdf_and_back) ... skipped 'needs a TeX distribution'
+test_bibliography_goes_to_the_bib_entry (test_server.SyncTeXGeneratedFiles.test_bibliography_goes_to_the_bib_entry) ... ok
+test_contents_go_to_the_nearest_source_line (test_server.SyncTeXGeneratedFiles.test_contents_go_to_the_nearest_source_line) ... ok
+test_damaged_data_says_build_again_and_is_read_once (test_server.SyncTeXGeneratedFiles.test_damaged_data_says_build_again_and_is_read_once)
+A click while the engine still writes the file, or after a crash: a truncated or ... ok
+test_switch_document_even_when_synctex_timestamps_match (test_server.SyncTeXGeneratedFiles.test_switch_document_even_when_synctex_timestamps_match) ... ok
+test_an_upload_waits_for_another_window_using_the_repository (test_server.Uploads.test_an_upload_waits_for_another_window_using_the_repository)
+Another prism-local window is changing the repository: the upload is not "failed" ... ok
+test_concurrent_imports_do_not_overwrite_each_other (test_server.Uploads.test_concurrent_imports_do_not_overwrite_each_other) ... ok
+test_names_are_made_safe (test_server.Uploads.test_names_are_made_safe) ... ok
+test_project_import_preserves_existing_files_and_bytes (test_server.Uploads.test_project_import_preserves_existing_files_and_bytes) ... ok
+test_same_file_once_other_file_numbered (test_server.Uploads.test_same_file_once_other_file_numbered) ... ok
+test_upload_cannot_follow_a_link_outside_the_project (test_server.Uploads.test_upload_cannot_follow_a_link_outside_the_project) ... skipped 'needs symlinks'
+test_commit_only_the_upload_and_push (test_server.UploadsToGitHub.test_commit_only_the_upload_and_push) ... ok
+test_never_in_a_surrounding_repository (test_server.UploadsToGitHub.test_never_in_a_surrounding_repository) ... ok
+test_no_remote_commits_locally (test_server.UploadsToGitHub.test_no_remote_commits_locally) ... ok
+test_not_a_repository (test_server.UploadsToGitHub.test_not_a_repository) ... ok
+test_a_file_too_big_to_keep_is_seen_but_not_undone (test_snapshot.Snapshot.test_a_file_too_big_to_keep_is_seen_but_not_undone) ... ok
+test_every_file_but_git (test_snapshot.Snapshot.test_every_file_but_git) ... ok
+test_restore_puts_back_the_exact_bytes_but_never_over_a_later_edit (test_snapshot.Snapshot.test_restore_puts_back_the_exact_bytes_but_never_over_a_later_edit) ... ok
+test_what_changed (test_snapshot.Snapshot.test_what_changed) ... ok
+test_what_someone_else_wrote_is_no_change (test_snapshot.Snapshot.test_what_someone_else_wrote_is_no_change)
+rebase: a save, and a build's output folder (also what is gone from it), become ... ok
+test_typing_math_tabstops_and_your_file (test_snippets.Engine.test_typing_math_tabstops_and_your_file) ... ok
+test_a_save_replaces_the_whole_file_and_keeps_its_line_ends (test_snippets.SnippetsFile.test_a_save_replaces_the_whole_file_and_keeps_its_line_ends) ... ok
+test_saved_in_your_settings_and_read_back (test_snippets.SnippetsFile.test_saved_in_your_settings_and_read_back) ... ok
+test_a_new_repository_ignores_what_is_never_a_source (test_sources.Sources.test_a_new_repository_ignores_what_is_never_a_source) ... ok
+test_git_status_read_once (test_sources.Sources.test_git_status_read_once) ... ok
+test_recordable (test_sources.Sources.test_recordable) ... ok
+test_what_latex_writes_is_never_a_source (test_sources.Sources.test_what_latex_writes_is_never_a_source)
+Every auxiliary file the builder knows, glossaries and nomenclatures too; never an ... ok
+test_a_save_while_git_holds_the_files_says_busy (test_sync_buttons.SyncButtons.test_a_save_while_git_holds_the_files_says_busy)
+git holding the files long (a repository's hook, in another editor of it): a save ... ok
+test_agent_rejects_wrong_or_missing_project_key_before_start (test_sync_buttons.SyncButtons.test_agent_rejects_wrong_or_missing_project_key_before_start) ... ok
+test_buttons_while_typing_and_a_coauthor_pushes (test_sync_buttons.SyncButtons.test_buttons_while_typing_and_a_coauthor_pushes)
+Typing (the page saving), clicking Save now and Get changes, a co-author pushing, ... ok
+test_get_changes (test_sync_buttons.SyncButtons.test_get_changes) ... ok
+test_get_changes_with_my_edits_saved_not_committed (test_sync_buttons.SyncButtons.test_get_changes_with_my_edits_saved_not_committed) ... ok
+test_history_after_syncing (test_sync_buttons.SyncButtons.test_history_after_syncing) ... ok
+test_requests_from_elsewhere_are_refused (test_sync_buttons.SyncButtons.test_requests_from_elsewhere_are_refused) ... ok
+test_save_now (test_sync_buttons.SyncButtons.test_save_now) ... ok
+test_save_now_after_a_coauthor_pushed (test_sync_buttons.SyncButtons.test_save_now_after_a_coauthor_pushed) ... ok
+test_save_now_clicked_twice_at_once (test_sync_buttons.SyncButtons.test_save_now_clicked_twice_at_once) ... ok
+test_save_now_same_lines_keeps_both (test_sync_buttons.SyncButtons.test_save_now_same_lines_keeps_both) ... ok
+test_switch_off_and_on (test_sync_buttons.SyncButtons.test_switch_off_and_on) ... ok
+test_target_change_keeps_file_and_pauses_upload_and_close_sync (test_sync_buttons.SyncButtons.test_target_change_keeps_file_and_pauses_upload_and_close_sync) ... ok
+test_unreachable_github_then_back (test_sync_buttons.SyncButtons.test_unreachable_github_then_back) ... ok
+
+----------------------------------------------------------------------
+Ran 471 tests in 441.499s
+
+OK (skipped=30)

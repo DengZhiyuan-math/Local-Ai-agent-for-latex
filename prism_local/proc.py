@@ -41,6 +41,18 @@ def kill_tree(proc: subprocess.Popen) -> None:
             pass
 
 
+def end_group(proc: subprocess.Popen) -> None:
+    """After `proc` (started with TREE) has exited: end the commands it left running. On
+    Linux and macOS its process group outlives it; on Windows nothing records them once it
+    is gone (taskkill /T finds children only through a running parent)."""
+    if os.name == "nt" or proc.poll() is None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def _signal_group(proc: subprocess.Popen, sig: int) -> None:
     """Signal the process group `proc` leads (started with TREE), else only `proc`."""
     try:

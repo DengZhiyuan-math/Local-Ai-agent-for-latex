@@ -49,6 +49,24 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_the_github_menu_answers_while_a_push_runs(self):
+        """A push or pull holds the sync for minutes on a slow network: opening the GitHub
+        menu answers with what is known, and confirming a target says to try again."""
+        held, release = threading.Event(), threading.Event()
+
+        def push():
+            with self.g.lock:
+                held.set()
+                release.wait(30)
+        threading.Thread(target=push, daemon=True).start()
+        self.addCleanup(release.set)
+        held.wait(5)
+        t0 = time.time()
+        self.assertTrue(self.g.recheck())
+        with self.assertRaisesRegex(ValueError, "try again"):
+            self.g.bind_target()
+        self.assertLess(time.time() - t0, gitsync.MENU_WAIT + gitsync.BIND_WAIT + 2)
+
     def test_autosave_records_sources_not_build_output(self):
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
         (self.root / "fig.png").write_bytes(b"\x89PNG")

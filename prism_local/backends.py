@@ -45,14 +45,16 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import shutil
 import subprocess
 import threading
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-from proc import NO_WINDOW, TREE, kill_tree  # noqa: F401 — re-exported
+from proc import NO_WINDOW, TREE, end_group, kill_tree  # noqa: F401 — re-exported
 from fsutil import project_path
 
 
@@ -312,10 +314,10 @@ class CliBackend(Backend):
     def run(self, job: Job) -> dict:
         cmd, stdin = self.command(job)
         st: dict = {}
-        with cli_process(job, cmd, stdin, agent_env(), bufsize=1) as (proc, stderr_lines):
+        with cli_process(job, cmd, stdin, agent_env(), bufsize=1) as (proc, lines, stderr_lines):
             if proc is None:
                 return st                        # stopped before it started
-            for line in proc.stdout:
+            for line in lines:
                 try:
                     d = json.loads(line)
                 except ValueError:
@@ -329,45 +331,99 @@ class CliBackend(Backend):
         return st
 
 
+OUTPUT_GRACE = 5      # seconds a CLI's output may stay open after it exited
+
+
 @contextmanager
 def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     """A turn's CLI, its input `stdin` (the prompt goes through stdin so it can never be
-    parsed as a flag). Yields (process, its stderr lines so far); (None, []) when Stop was
-    pressed before it started, so it never starts. Stop pressed while it starts still ends
-    it. Its stderr is read from the start: a CLI that exits at once (stdin then cannot be
-    written) still says why. And however the with-block is left (a handler raising on a
-    line it did not expect), the CLI and the commands it started (TREE) are ended: none
-    goes on writing the files after its turn."""
+    parsed as a flag). Yields (process, its output lines, its stderr lines so far); (None,
+    [], []) when Stop was pressed before it started, so it never starts. Stop pressed while
+    it starts still ends it. Its stderr is read from the start: a CLI that exits at once
+    (stdin then cannot be written) still says why. And however the with-block is left (a
+    handler raising on a line it did not expect), the CLI and the commands it started
+    (TREE) are ended: none goes on writing the files after its turn.
+
+    The output ends when the CLI's does, or OUTPUT_GRACE after the CLI exited (at once
+    after Stop): a command it started (a background shell) may hold the output open for
+    good, and the turn must not wait for it."""
     if job.cancel.is_set():
-        yield None, []
+        yield None, [], []
         return
     err: list[str] = []
+    out: queue.Queue = queue.Queue()
     proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                             stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
                             env=env, **TREE, **popen)
     job.proc = proc
-    drain = threading.Thread(target=lambda: err.extend(proc.stderr), daemon=True)
+    def drain_err():
+        try:
+            err.extend(proc.stderr)
+        except (OSError, ValueError):
+            pass
+        finally:
+            closing(proc.stderr)        # read to the end, maybe long after the turn
+
+    def read():
+        try:
+            for line in proc.stdout:
+                out.put(line)
+        except (OSError, ValueError):
+            pass
+        finally:
+            closing(proc.stdout)
+            out.put(None)
+    drain = threading.Thread(target=drain_err, daemon=True)
+    reader = threading.Thread(target=read, daemon=True)
+
+    def lines():
+        exited = None
+        while True:
+            try:
+                line = out.get(timeout=0.2)
+            except queue.Empty:
+                if proc.poll() is None:
+                    continue
+                exited = exited or time.monotonic()
+                if job.cancel.is_set() or time.monotonic() - exited > OUTPUT_GRACE:
+                    return
+                continue
+            if line is None:
+                return
+            yield line
     try:
         if job.cancel.is_set():                  # Stop came while it started
             kill_tree(proc)
         drain.start()
+        reader.start()
         try:
             proc.stdin.write(stdin)
             proc.stdin.close()
         except (OSError, ValueError):
             pass                                 # it has exited: its stderr says why
-        yield proc, err
+        yield proc, lines(), err
     finally:
         if proc.poll() is None:
             kill_tree(proc)
-        drain.join(5)
-        # Its pipes go with it. Not stderr while its reader still waits on it (a command
-        # the CLI started may hold it open): closing it then would wait for that command.
-        for pipe in (proc.stdout, proc.stdin) + (() if drain.is_alive() else (proc.stderr,)):
-            try:
-                pipe.close()
-            except (OSError, ValueError):
-                pass
+        reader.join(0.5)
+        drain.join(0.5 if reader.is_alive() else 5)   # held open too, most likely
+        if reader.is_alive() or drain.is_alive():
+            end_group(proc)                      # what it left running holds its output
+        # Its pipes go with it. One whose reader still waits on it (a command the CLI
+        # started holds it open) is closed by that reader when it ends: closing it here
+        # would wait for that command.
+        closing(proc.stdin)
+        if not reader.is_alive():
+            closing(proc.stdout)
+        if not drain.is_alive():
+            closing(proc.stderr)
+
+
+def closing(pipe) -> None:
+    try:
+        pipe.close()
+    except (OSError, ValueError):
+        pass
 
 
 # ---------------------------------------------------------------- registry

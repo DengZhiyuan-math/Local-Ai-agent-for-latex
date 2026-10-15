@@ -27,6 +27,15 @@ from backend_codex import Codex  # noqa: E402
 from backend_openai import OpenAICompat  # noqa: E402
 
 
+def kill_pid(pid: int) -> None:
+    """End a process a test's fake CLI left running (TerminateProcess on Windows)."""
+    import signal
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        pass
+
+
 def manager(root=Path("."), files=lambda: [], **kinds):
     """An AgentManager whose backends are exactly `kinds` (id -> Backend)."""
     return agent.AgentManager(lambda: Path(root), files, backends=(kinds, next(iter(kinds)), None))
@@ -455,6 +464,79 @@ class DeepCodeBackend(unittest.TestCase):
             self.assertIn("npm install -g @vegamo/deepcode-cli", DeepCode("deepcode").unavailable())
 
 
+class ActiveTurn(unittest.TestCase):
+    def test_a_page_loaded_during_a_turn_learns_which_one_runs(self):
+        """A page reloaded mid-turn follows the turn's events and can stop it."""
+        with tempfile.TemporaryDirectory() as d:
+            release = threading.Event()
+
+            class Slow(backends.Backend):
+                def run(self, job):
+                    release.wait(10)
+                    return {"exit": 0}
+
+            m = manager(Path(d), slow=Slow("slow"))
+            self.assertIsNone(m.info()["active"])
+            job = m.start("go", None, "edit")["job"]
+            self.assertEqual(m.info()["active"], {"job": job, "mode": "edit", "provider": "slow"})
+            release.set()
+            wait_done(m.jobs[job])
+            self.assertIsNone(m.info()["active"])
+
+    def test_shutdown_lets_the_stopped_turn_finish(self):
+        """The server exits mid-turn: the turn is stopped and finishes (its changes recorded
+        as the agent's) before the last commit, which would otherwise take them as yours."""
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "a.tex").write_text("a\n", encoding="utf-8")
+
+            class Busy(backends.Backend):
+                def run(self, job):
+                    job.cancel.wait(10)
+                    (job.root / "a.tex").write_text("half done\n", encoding="utf-8")
+                    time.sleep(0.5)                 # winding down after Stop
+                    return {"exit": 1}
+
+            m = manager(Path(d), busy=Busy("busy"))
+            recorded = []
+            m.on_changed = lambda paths, why: recorded.append(paths)
+            job = m.jobs[m.start("go", None, "edit")["job"]]
+            m.shutdown()
+            self.assertTrue(job.done)
+            self.assertEqual(recorded, [["a.tex"]])
+
+
+class BuildOutput(unittest.TestCase):
+    def test_a_build_still_running_when_a_turn_ends_is_not_the_turns(self):
+        """You compile during a turn, and the turn ends while the engine still writes the
+        output folder: its files are neither the turn's changes nor reverted under it."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_text("a\n", encoding="utf-8")
+            (root / "build").mkdir()
+            (root / "build/main.pdf").write_bytes(b"old pdf")
+
+            class Wild(backends.Backend):         # like Deep Code: an Ask turn may write
+                read_only_ask = False
+
+                def run(self, job):
+                    (job.root / "build/main.pdf").write_bytes(b"new pdf")   # the build's
+                    (job.root / "build/main.aux").write_text("aux")
+                    return {"exit": 0}
+
+            for outdir, kept in (("build", True), (".", False)):
+                with self.subTest(outdir=outdir):
+                    (root / "build/main.pdf").write_bytes(b"old pdf")
+                    m = agent.AgentManager(lambda: root, lambda: ["a.tex"],
+                                           backends=({"wild": Wild("wild")}, "wild", None),
+                                           output_fn=lambda: outdir)
+                    done = wait_done(m.jobs[m.start("go", None, "ask")["job"]])
+                    if kept:
+                        self.assertEqual((done["changed"], done["reverted"]), ([], []))
+                        self.assertEqual((root / "build/main.pdf").read_bytes(), b"new pdf")
+                    else:       # output in the project itself: nothing is left out
+                        self.assertIn("build/main.pdf", done["reverted"])
+
+
 class RevertOutsideScope(unittest.TestCase):
     """A backend that cannot enforce the scope has its writes outside it undone."""
 
@@ -668,6 +750,33 @@ class Snapshots(unittest.TestCase):
         with self.assertRaises(KeyError):
             backend.run(job)
         self.assertIsNotNone(job.proc.poll(), "the CLI is ended")
+
+    def test_a_command_left_holding_the_output_does_not_hold_the_turn(self):
+        """The CLI exits, but a command it started (a background shell) still holds its
+        output open: the turn ends a few seconds after the CLI, with what it printed."""
+        backend, d = self.cli(
+            "import json, subprocess, sys\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "open('child.pid', 'w').write(str(child.pid))\n"
+            "print(json.dumps({'type': 'result'}), flush=True)\n")
+        self.addCleanup(lambda: (d / "child.pid").exists() and kill_pid(int((d / "child.pid").read_text())))
+        job = job_for(root=d, prompt="go")
+        t0 = time.time()
+        st = backend.run(job)
+        self.assertLess(time.time() - t0, backends.OUTPUT_GRACE + 8)
+        self.assertEqual((st["exit"], st["seen"]), (0, [{"type": "result"}]))
+
+    def test_stop_ends_a_turn_whose_cli_has_already_exited(self):
+        backend, d = self.cli(
+            "import subprocess, sys\n"
+            "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'])\n"
+            "open('child.pid', 'w').write(str(child.pid))\n")
+        self.addCleanup(lambda: (d / "child.pid").exists() and kill_pid(int((d / "child.pid").read_text())))
+        job = job_for(root=d, prompt="go")
+        threading.Timer(1.5, backend.stop, (job,)).start()
+        t0 = time.time()
+        backend.run(job)
+        self.assertLess(time.time() - t0, min(backends.OUTPUT_GRACE, 5) + 3)
 
     def test_stop_before_the_cli_starts_starts_none(self):
         backend, d = self.cli("open('started.txt', 'w').write('x')\n")
