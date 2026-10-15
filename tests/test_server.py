@@ -444,76 +444,43 @@ class Symbols(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("pdflatex") and not os.environ.get("PRISM_SKIP_TEX"),
                      "needs a TeX distribution")
-class SyncTeX(unittest.TestCase):
-    def test_source_to_pdf_and_back(self):
-        import build
-        root = project({})
-        shutil.copytree(Path(__file__).resolve().parents[1] / "examples" / "minimal", root,
-                        dirs_exist_ok=True, ignore=shutil.ignore_patterns("build"))
-        server.set_root(root)
-        r = build.Build(root, server.CFG.main, server.CFG.outdir).run()
-        self.assertEqual(r["exit"], 0, r["output"][-2000:])
-        sync = server.SyncTex()
-        self.assertTrue(sync.load())
-        line = next(n for n, t in enumerate((root / "sections/intro.tex").read_text(
-            encoding="utf-8").splitlines(), 1) if len(t) > 40 and not t.startswith(("\\", "%")))
-        box = sync.forward("sections/intro.tex", line)
-        self.assertIsNotNone(box)
-        back = sync.inverse(box["page"], box["x"] + 20, box["y"] + box["h"] / 2)
-        self.assertEqual(back["file"], "sections/intro.tex")
-        self.assertLessEqual(abs(back["line"] - line), 1)
-
-
-class SyncTeXGeneratedFiles(unittest.TestCase):
-    """A click on text LaTeX read back from the build folder goes where it is edited."""
+class Routes(unittest.TestCase):
+    """The editor's HTTP routes, served in this process."""
 
     def setUp(self):
-        project({"main.tex": "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n",
-                 "refs.bib": "% refs\n@article {knuth84,\n  title={TeX}\n}\n",
-                 "build/main.bbl": "\\begin{thebibliography}{1}\n\n\\bibitem{knuth84}\nD. Knuth.\n"})
-        self.sync = server.SyncTex()
-        # (page, kind, file, line, x, y, w, h, d): a .bbl line, a .toc line, a main.tex line.
-        self.sync.recs = [(1, "x", "build/main.bbl", 4, 100.0, 100.0, 0, 0, 0),
-                          (2, "x", "build/main.toc", 2, 100.0, 100.0, 0, 0, 0),
-                          (2, "x", "main.tex", 3, 100.0, 300.0, 0, 0, 0)]
+        import threading
+        self.srv = server.httpbase.Server(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
-    def test_bibliography_goes_to_the_bib_entry(self):
-        self.assertEqual(self.sync.inverse(1, 100, 100), {"file": "refs.bib", "line": 2})
+    def ask(self, path, body=None):
+        import json
+        import urllib.error
+        import urllib.request
+        req = urllib.request.Request(self.url + path, None if body is None else json.dumps(body).encode(),
+                                     {"Content-Type": "application/json", "X-Prism-Local": "1"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, json.loads(r.read())
+        except urllib.error.HTTPError as e:
+            with e:
+                return e.code, json.loads(e.read())
 
-    def test_contents_go_to_the_nearest_source_line(self):
-        self.assertEqual(self.sync.inverse(2, 100, 100), {"file": "main.tex", "line": 3})
-
-    def test_switch_document_even_when_synctex_timestamps_match(self):
+    def test_synctex_says_what_to_do_until_there_is_data(self):
         import gzip
-        out = server.ROOT / server.CFG.outdir
-        for main in ("main.tex", "other.tex"):
-            path = out / (Path(main).stem + ".synctex.gz")
-            with gzip.open(path, "wt", encoding="utf-8") as stream:
-                stream.write(f"Input:1:{main}\n")
-            os.utime(path, ns=(1_000_000_000, 1_000_000_000))
-            server.CFG = server.Config(server.ROOT, main=main)
-            self.assertTrue(self.sync.load())
-            self.assertEqual(self.sync.inputs, {1: main})
-
-    def test_damaged_data_says_build_again_and_is_read_once(self):
-        """A click while the engine still writes the file, or after a crash: a truncated or
-        damaged .synctex.gz is "build again", not a server error, and not read on each click."""
-        import gzip
-        path = server.CFG.synctex
-        path.parent.mkdir(exist_ok=True)
-        whole = gzip.compress(("Input:1:main.tex\n{1\n" + "x1,3:100,200\n" * 5000).encode())
-        for name, data in (("truncated", whole[:len(whole) // 2]), ("not gzip", b"garbage" * 100)):
-            with self.subTest(name):
-                path.write_bytes(data)
-                sync = server.SyncTex()
-                self.assertFalse(sync.load())
-                self.assertIn("build again", sync.problem)
-                with mock.patch.object(server.gzip, "open", side_effect=AssertionError("read again")):
-                    self.assertFalse(sync.load())
-        path.write_bytes(gzip.compress(b"Input:1:main.tex\n{oops\n{1\nx1,3:100,200\n"))
-        sync = server.SyncTex()
-        self.assertTrue(sync.load())            # a damaged line is left out, not the file
-        self.assertEqual([r[:4] for r in sync.recs], [(1, "x", "main.tex", 3)])
+        root = project({"main.tex": "\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n"})
+        self.assertEqual(self.ask("/api/synctex/forward?file=main.tex&line=3"),
+                         (404, {"error": "no synctex data; build first"}))
+        sp = 1 / server.synctex.SP_TO_BP
+        (root / "build").mkdir()
+        server.CFG.synctex.write_bytes(gzip.compress(
+            f"Input:1:main.tex\nUnit:1\nMagnification:1000\n{{1\nx1,3:{round(100 * sp)},{round(200 * sp)}\n}}1\n".encode()))
+        code, box = self.ask("/api/synctex/forward?file=main.tex&line=3")
+        self.assertEqual((code, box["page"], box["line"]), (200, 1, 3))
+        self.assertEqual(self.ask("/api/synctex/inverse?page=1&x=101&y=199"),
+                         (200, {"file": "main.tex", "line": 3}))
 
 
 class Uploads(unittest.TestCase):

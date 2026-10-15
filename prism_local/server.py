@@ -18,7 +18,6 @@ import gitenv
 
 import argparse
 import fnmatch
-import gzip
 import os
 import re
 import shutil
@@ -27,7 +26,6 @@ import sys
 import threading
 import time
 import webbrowser
-import zlib
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -40,6 +38,7 @@ from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,  # noqa: E402
                     project_path, with_line_ends_of, write_bytes)
 import desktop  # noqa: E402
+import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
@@ -835,173 +834,7 @@ def stop_build() -> bool:
 
 # ---------------------------------------------------------------- synctex
 
-SP_TO_BP = 72.0 / 72.27 / 65536.0     # scaled points -> PDF points
-REC_RE = re.compile(r"^([\[(hvxkg$])(\d+),(\d+):(-?\d+),(-?\d+)(?::(-?\d+),(-?\d+),(-?\d+))?")
-
-
-class SyncTex:
-    """Minimal reader for .synctex.gz files (pdfTeX, XeTeX, LuaTeX, Tectonic)."""
-
-    def __init__(self) -> None:
-        self.stamp = None
-        self.bad = None               # the stamp of a damaged file: not read again
-        self.problem = "no synctex data; build first"
-        self.inputs: dict[int, str] = {}
-        self.recs: list[tuple] = []   # (page, kind, file, line, x, y, w, h, d) in bp
-
-    def load(self) -> bool:
-        """Whether there is data to use; if not, `problem` says why. A file being written
-        (a click during a build) or damaged is read once, until it changes."""
-        synctex = CFG.synctex
-        try:
-            st = (synctex, synctex.stat().st_mtime_ns)
-        except FileNotFoundError:
-            self.problem = "no synctex data; build first"
-            return False
-        if st == self.stamp:
-            return True
-        if st == self.bad:
-            return False
-        try:
-            self._parse(synctex, st)
-            return True
-        except (OSError, EOFError, zlib.error) as exc:
-            self.bad, self.problem = st, f"the synctex data is incomplete or damaged ({exc}); build again"
-            return False
-
-    def _parse(self, synctex: Path, st: tuple) -> None:
-        inputs, recs, page, unit, mag = {}, [], 0, 1.0, 1.0
-        with gzip.open(synctex, "rt", encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                c = line[:1]
-                if c == "I" and line.startswith("Input:"):
-                    tag, _, path = line[6:].rstrip("\n").partition(":")
-                    if path:
-                        try:
-                            # pdfTeX writes paths relative to the working directory.
-                            pp = Path(path) if os.path.isabs(path) else ROOT / path
-                            rel = pp.resolve().relative_to(ROOT).as_posix()
-                            inputs[int(tag)] = rel
-                        except ValueError:
-                            pass
-                elif c in "{UM":
-                    try:            # a damaged line is left out, not the whole file
-                        if c == "{":
-                            page = int(line[1:])
-                        elif line.startswith("Unit:"):
-                            unit = float(line[5:])
-                        elif line.startswith("Magnification:"):
-                            mag = float(line[14:]) / 1000.0
-                    except ValueError:
-                        continue
-                elif c in "[(hvxkg$":
-                    m = REC_RE.match(line)
-                    if not m:
-                        continue
-                    f = int(m.group(2))
-                    if f not in inputs:
-                        continue
-                    s = unit * mag * SP_TO_BP
-                    w, h, d = (int(m.group(i)) * s if m.group(i) else 0.0
-                               for i in (6, 7, 8))
-                    recs.append((page, m.group(1), inputs[f], int(m.group(3)),
-                                 int(m.group(4)) * s, int(m.group(5)) * s, w, h, d))
-        self.inputs, self.recs, self.stamp, self.bad = inputs, recs, st, None
-
-    # Paragraph line boxes ('(') carry the line where the paragraph *ended*;
-    # the fine records (glyph runs x, kerns k, glue g, math $, ...) carry the
-    # line they were typeset from. So boxes locate the visual line, and fine
-    # records supply the source line.
-    FINE = "xkg$h"
-
-    def _line_box(self, page, x, y):
-        """Smallest wide hbox on `page` whose vertical extent contains y."""
-        best = None
-        for r in self.recs:
-            if r[0] == page and r[1] == "(" and r[6] > 0 \
-                    and r[5] - r[7] - 1 <= y <= r[5] + r[8] + 1 \
-                    and r[4] - 1 <= x <= r[4] + r[6] + 1:
-                if best is None or r[6] > best[6]:   # widest = the text line
-                    best = r
-        return best
-
-    def forward(self, rel: str, line: int) -> dict | None:
-        cands = [r for r in self.recs if r[2] == rel and r[3] > 0
-                 and r[1] in self.FINE]
-        if not cands:
-            cands = [r for r in self.recs if r[2] == rel and r[3] > 0]
-        if not cands:
-            return None
-        after = [r for r in cands if r[3] >= line]
-        target = min(r[3] for r in after) if after else max(r[3] for r in cands)
-        first = min((r for r in cands if r[3] == target),
-                    key=lambda r: (r[0], r[5], r[4]))
-        box = self._line_box(first[0], first[4], first[5])
-        if box:
-            return {"page": first[0], "x": box[4], "y": box[5] - box[7],
-                    "w": box[6], "h": max(box[7] + box[8], 8.0), "line": target}
-        return {"page": first[0], "x": first[4], "y": first[5] - 9,
-                "w": 60.0, "h": 12.0, "line": target}
-
-    def inverse(self, page: int, x: float, y: float) -> dict | None:
-        """The source line typeset at (x, y) on `page`. Text that LaTeX wrote into a
-        generated file and read back (the table of contents from .toc, the bibliography from
-        .bbl) is not where you edit it: a click there goes to the .bib entry of a reference,
-        or else to the nearest line of a source file."""
-        hit = self._inverse(page, x, y)
-        if hit and hit["file"].startswith(CFG.outdir + "/"):
-            hit = (self._bib_entry(hit) if hit["file"].endswith(".bbl") else None) \
-                or self._inverse(page, x, y, lambda f: not f.startswith(CFG.outdir + "/"))
-        return hit
-
-    @staticmethod
-    def _bib_entry(hit: dict) -> dict | None:
-        """The .bib entry of the \\bibitem whose text is at hit's line of a .bbl file."""
-        try:
-            lines = (ROOT / hit["file"]).read_text(encoding="utf-8", errors="replace").splitlines()
-        except OSError:
-            return None
-        key = None
-        for text in reversed(lines[:hit["line"]]):
-            m = re.search(r"\\bibitem\s*(?:\[[^\]]*\])?\s*\{([^}]+)\}|\\entry\{([^}]+)\}", text)
-            if m:
-                key = m.group(1) or m.group(2)
-                break
-        if not key:
-            return None
-        entry = re.compile(r"@\w+\s*[{(]\s*" + re.escape(key.strip()) + r"\s*,")
-        for rel in list_files():
-            if not rel.endswith(".bib"):
-                continue
-            try:
-                text = (ROOT / rel).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                continue
-            m = entry.search(text)
-            if m:
-                return {"file": rel, "line": text.count("\n", 0, m.start()) + 1}
-        return None
-
-    def _inverse(self, page: int, x: float, y: float, keep=lambda f: True) -> dict | None:
-        box = self._line_box(page, x, y)
-        on_page = [r for r in self.recs if r[0] == page and r[3] > 0 and keep(r[2])]
-        if box:
-            base = box[5]
-            row = [r for r in on_page if r[1] in self.FINE
-                   and box[4] - 1 <= r[4] <= box[4] + box[6] + 1
-                   and base - box[7] - 1 <= r[5] <= base + box[8] + 1]
-            if row:
-                left = [r for r in row if r[4] <= x + 0.5]
-                r = max(left, key=lambda r: r[4]) if left else min(row, key=lambda r: r[4])
-                return {"file": r[2], "line": r[3]}
-        if not on_page:
-            return None
-        r = min(on_page, key=lambda r: (r[4] - x) ** 2 + 4 * (r[5] - y) ** 2)
-        return {"file": r[2], "line": r[3]}
-
-
-SYNC = SyncTex()
-SYNC_LOCK = threading.Lock()
+SYNC = synctex.SyncIndex()           # the shown document's, read once until it changes
 AGENT = AgentManager(lambda: ROOT, lambda: list_files(), resolve, output_fn=lambda: CFG.outdir)
 # The project's changes, recorded in its repository and synced with GitHub (gitsync.py).
 GITSYNC = GitSync(lambda: ROOT, lambda: CFG.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
@@ -1142,16 +975,19 @@ class Handler(httpbase.Handler):
         if path == "/api/upload/sync":             # how the uploads' commits and pushes went
             return self._json({p: UPLOAD_SYNC.get(p) for p in q.get("paths", "").split("\n") if p})
         if path == "/api/synctex/forward":
-            with SYNC_LOCK:
-                if not SYNC.load():
-                    return self._err(404, SYNC.problem)
-                r = SYNC.forward(q["file"], int(q["line"]))
+            try:
+                records = SYNC.lookup(CFG.synctex, ROOT)
+            except synctex.NoData as e:
+                return self._err(404, str(e))
+            r = records.forward(q["file"], int(q["line"]))
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         if path == "/api/synctex/inverse":
-            with SYNC_LOCK:
-                if not SYNC.load():
-                    return self._err(404, SYNC.problem)
-                r = SYNC.inverse(int(q["page"]), float(q["x"]), float(q["y"]))
+            try:
+                records = SYNC.lookup(CFG.synctex, ROOT)
+            except synctex.NoData as e:
+                return self._err(404, str(e))
+            r = records.inverse(int(q["page"]), float(q["x"]), float(q["y"]), CFG.outdir,
+                                lambda: [f for f in list_files() if f.endswith(".bib")])
             return self._json(r or {"error": "no match"}, 200 if r else 404)
         return self._err(404, "not found")
 
