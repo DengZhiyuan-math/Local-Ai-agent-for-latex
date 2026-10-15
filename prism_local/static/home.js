@@ -11,17 +11,6 @@ const H = { projects: [], folders: [], tagColors: {}, defaultParent: "", git: {}
 const thumbs = new Map();          // `${id}:${pdf_mtime}` -> canvas (or null while rendering)
 
 /* ------------------------------------------------------------------ helpers */
-function ago(t) {
-  if (!t) return "";
-  const s = Date.now() / 1000 - t;
-  if (s < 60) return "just now";
-  const units = [[60, "min"], [3600, "h"], [86400, "d"], [86400 * 30, "mo"], [86400 * 365, "y"]];
-  let out = "";
-  for (let i = units.length - 1; i >= 0; i--) {
-    if (s >= units[i][0]) { out = Math.floor(s / units[i][0]) + " " + units[i][1]; break; }
-  }
-  return out + " ago";
-}
 let toastTimer = null;
 function toast(msg, err = false) {
   const t = $("#toast");
@@ -30,12 +19,6 @@ function toast(msg, err = false) {
   toastTimer = setTimeout(() => { t.hidden = true; }, err ? 7000 : 2600);
 }
 const byId = (id) => H.projects.find((p) => p.id === id);
-
-$("#btn-theme").onclick = () => {
-  const cur = store.get("theme", null);
-  const next = cur === null ? "dark" : cur === "dark" ? "light" : null;
-  store.set("theme", next); applyTheme(next);
-};
 
 /* ------------------------------------------------------------------ data */
 // Never two at a time (see poller), so an older answer cannot land after a newer one; a
@@ -65,11 +48,8 @@ $("#btn-restart").onclick = async () => {
   const r = await api("/api/restart", {});
   if (r._status === 0) r.error = "Home server not reachable";
   if (!r.error && before._status === 200) {
-    for (let i = 0; i < 80; i++) {           // the new server listens within a few seconds
-      await new Promise((res) => setTimeout(res, 500));
-      const p = await fetch("/api/ping", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
-      if (p && p.pid !== before.pid) return location.reload();
-    }
+    const ping = () => fetch("/api/ping", { cache: "no-store" }).then((x) => x.ok && x.json());
+    if (await Util.waitForRestart(ping, (p) => p.pid !== before.pid)) return location.reload();
   }
   b.disabled = false; b.textContent = "Update: restart";
   toast(r.error || "The Home page did not come back. Open prism-local again.", true);
@@ -298,7 +278,6 @@ function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);
   return esc(((w[0] || "?")[0] + (w[1] ? w[1][0] : "")).toUpperCase());
 }
-const plural = (n, w) => `${n} ${w}${n === 1 ? "" : "s"}`;
 function folderCounts(fid) {
   const n = H.projects.filter((p) => folderOf(p) === fid).length, subs = H.folders.filter((f) => f.parent === fid).length;
   return [subs && plural(subs, "folder"), n && plural(n, "project")].filter(Boolean).join(", ") || "Empty";
@@ -1283,17 +1262,19 @@ async function openPublish(id) {
   dlg.showModal();
   const r = await api("/api/projects/publish?id=" + encodeURIComponent(id));
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not check the project");
-  const gh = r.gh || {};
+  const pub = Util.publishState(r), gh = pub.gh;
   f.elements.name.value = r.name;
   $("#pub-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
-  $("#pub-private").innerHTML = (r.private_dirs || []).filter((d) => !d.ignored).map((d) =>
+  $("#pub-private").innerHTML = pub.leaveOut.map((d) =>
     `<label class="check"><input type="checkbox" name="leave_out" value="${esc(d.dir)}" checked> Keep <code>${esc(d.dir)}/</code> (${esc(d.what)}) off GitHub</label>`).join("");
   if (r.github) { $("#pub-note").innerHTML = `Already on GitHub: <a href="${esc(r.github)}" target="_blank" rel="noopener">${esc(r.github)}</a>`; return; }
-  $("#pub-note").textContent = r.kind === "nested" ? `This folder is inside another repository (${r.top}); move the project out of it first.`
-    : !gh.logged_in ? (gh.error || "The GitHub CLI is not logged in.") + " See Settings (top right)."
-    : r.kind === "shared" ? `It is part of the repository in ${r.top}: that whole repository goes to GitHub.`
-    : (r.kind === "none" ? "A git repository is created first. " : "") + "Build output and LaTeX's auxiliary files stay out (.gitignore). Its editor then saves and pushes changes automatically.";
-  btn.disabled = r.kind === "nested" || !gh.logged_in;
+  $("#pub-note").textContent = {
+    nested: `This folder is inside another repository (${r.top}); move the project out of it first.`,
+    login: (gh.error || "The GitHub CLI is not logged in.") + " See Settings (top right).",
+    shared: `It is part of the repository in ${r.top}: that whole repository goes to GitHub.`,
+    ok: (r.kind === "none" ? "A git repository is created first. " : "") + "Build output and LaTeX's auxiliary files stay out (.gitignore). Its editor then saves and pushes changes automatically.",
+  }[pub.why];
+  btn.disabled = pub.blocked;
 }
 $("#form-publish").addEventListener("submit", async (e) => {
   e.preventDefault();

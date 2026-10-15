@@ -27,7 +27,9 @@ async function api(path, body) {
   data._status = r.status;
   return data;
 }
-const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+// util.js (loaded first): plain helpers both pages use, checked under Node.
+const { ago, plural, diffHtml } = Util;
+const esc = Util.escapeHtml;
 
 /* Polling. nap() waits `ms`, or `hiddenMs` while the page is hidden (null: until it is
    shown again), and stops waiting the moment a hidden page is shown. */
@@ -66,6 +68,12 @@ function applyTheme(t) {
 }
 applyTheme(store.get("theme", null));
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => applyTheme(store.get("theme", null)));
+// The theme button (editor, Home): the system's, then dark, then light.
+if (document.querySelector("#btn-theme")) document.querySelector("#btn-theme").onclick = () => {
+  const cur = store.get("theme", null);
+  const next = cur === null ? "dark" : cur === "dark" ? "light" : null;
+  store.set("theme", next); applyTheme(next);
+};
 
 /* Icons: one line-icon set drawn on a 24px grid, so every icon has the same size, stroke
    and centre (text glyphs such as ☰ ⌂ ◐ differ in size and sit at different heights).

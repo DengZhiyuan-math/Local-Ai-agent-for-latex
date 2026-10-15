@@ -1,0 +1,49 @@
+// Every page loads without an error, and what util.js now provides works on it.
+// usage: node e2e_pages.mjs <editor url> <home url>
+const [editor, home] = process.argv.slice(2);
+const results = [];
+const check = (name, ok, detail = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ": " + detail : ""}`);
+
+async function open(url) {
+  const tab = await (await fetch("http://127.0.0.1:9333/json/new?" + encodeURIComponent(url), { method: "PUT" })).json();
+  const ws = new WebSocket(tab.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r));
+  let id = 0;
+  const pending = new Map(), errors = [];
+  ws.addEventListener("message", (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); }
+    if (d.method === "Runtime.exceptionThrown") errors.push(d.params.exceptionDetails.exception?.description || d.params.exceptionDetails.text);
+  });
+  const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  await send("Runtime.enable");
+  await send("Page.enable");
+  await send("Page.reload");                     // errors thrown while loading are seen
+  await new Promise((r) => setTimeout(r, 2500));
+  const ev = async (expr) => {
+    const r = await send("Runtime.evaluate", { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true });
+    if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "evaluate failed");
+    return r.result.result.value;
+  };
+  return { ev, errors, close: () => ws.close() };
+}
+
+const ed = await open(editor);
+check("editor loads", ed.errors.length === 0, ed.errors.join(" | "));
+check("theme button cycles", await ed.ev(`
+  const b = document.querySelector("#btn-theme"), seen = [];
+  for (let i = 0; i < 3; i++) { b.click(); seen.push(document.documentElement.dataset.theme || "system"); }
+  return seen.join(",") === "dark,light,system";`), "");
+check("diff panel colours lines", await ed.ev(`
+  $("#diff").innerHTML = diffHtml("+a\\n-b");
+  return document.querySelectorAll("#diff .add, #diff .del").length === 2;`));
+ed.close();
+const hm = await open(home);
+check("home loads", hm.errors.length === 0, hm.errors.join(" | "));
+check("home ago and plural", await hm.ev(`return ago(Date.now() / 1000 - 7200) === "2 h ago" && plural(2, "item") === "2 items"`));
+hm.close();
+const vw = await open(editor.replace(/\/$/, "") + "/viewer");
+check("pdf viewer loads", vw.errors.length === 0, vw.errors.join(" | "));
+vw.close();
+console.log(results.join("\n"));
+process.exit(0);

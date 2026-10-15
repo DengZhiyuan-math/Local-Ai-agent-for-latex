@@ -25,7 +25,7 @@ const check = (name, ok, detail = "") => { results.push(`${ok ? "PASS" : "FAIL"}
 
 // Helpers in the page: right-click an item, pick a menu entry, wait for a condition.
 await ev(`
-  for (let i = 0; i < 100 && !(projectKey && S.files.length); i++) await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 100 && !(typeof projectKey !== "undefined" && projectKey && S.files.length); i++) await new Promise((r) => setTimeout(r, 100));
   window.confirm = () => true;
   window.T = {
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -42,7 +42,7 @@ await ev(`
   };
   return true;`);
 
-const ready = await ev(`return { key: !!projectKey, files: T.files(), folders: S.folders }`);
+const ready = await ev(`return { key: typeof projectKey !== "undefined" && !!projectKey, files: T.files(), folders: S.folders }`);
 check("page ready with folders listed", ready.key && ready.folders.includes("figs"), JSON.stringify(ready));
 check("empty folder shown in tree", await ev(`return !!document.querySelector('#tree li[data-dir="figs"]')`));
 

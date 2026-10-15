@@ -8,13 +8,6 @@ const S = {
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 
-/* ------------------------------------------------------------------ theme */
-$("#btn-theme").onclick = () => {
-  const cur = store.get("theme", null);
-  const next = cur === null ? "dark" : cur === "dark" ? "light" : null;
-  store.set("theme", next); applyTheme(next);
-};
-
 /* ------------------------------------------------------------------ home */
 // The Home page (hub.py) lists all projects. Its tab calls itself "prism-home", so this
 // finds and reuses it when it opened us; the server starts the Home page if needed.
@@ -689,11 +682,6 @@ async function pollOnce() {
 /* ------------------------------------------------------------------ GitHub sync */
 // The project's changes are committed to its repository and pushed (gitsync.py): after you
 // stop editing, after each agent turn, and from this menu. The button says how far that is.
-function ago(t) {
-  const s = Math.max(0, Date.now() / 1000 - t);
-  return s < 60 ? "just now" : s < 3600 ? `${Math.round(s / 60)} min ago` : s < 86400 ? `${Math.round(s / 3600)} h ago`
-    : new Date(t * 1000).toLocaleDateString();
-}
 const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
 function renderSync(st) {
   S.sync = st;
@@ -796,16 +784,17 @@ async function loadPublish() {
   if (!r || r._status !== 200) { note.textContent = "Could not check: " + ((r && r.error) || "server not reachable"); return; }
   f.dataset.loaded = "1";
   if (!f.elements.name.value) f.elements.name.value = r.name;
-  const gh = r.gh || {};
+  const pub = Util.publishState(r), gh = pub.gh;
   $("#pub-owner").textContent = `github.com/${gh.account || "…"}/ · private`;
-  $("#pub-private").innerHTML = (r.private_dirs || []).filter((d) => !d.ignored).map((d) =>
+  $("#pub-private").innerHTML = pub.leaveOut.map((d) =>
     `<label class="dd-check"><input type="checkbox" name="leave_out" value="${esc(d.dir)}" checked> Keep <code>${esc(d.dir)}/</code> (${esc(d.what)}) off GitHub</label>`).join("");
-  const why = r.kind === "nested" ? `This folder is inside another repository (${r.top}), so it cannot have one of its own. Move the project out of it first.`
-    : !gh.logged_in ? (gh.error || "The GitHub CLI is not logged in.") + " Then reopen this menu."
-    : r.kind === "shared" ? `This project is part of the repository in ${r.top}: that whole repository goes to GitHub.`
-    : "Build output and LaTeX's auxiliary files stay out (.gitignore). From then on, changes are saved and pushed automatically.";
-  note.textContent = why;
-  go.disabled = r.kind === "nested" || !gh.logged_in;
+  note.textContent = {
+    nested: `This folder is inside another repository (${r.top}), so it cannot have one of its own. Move the project out of it first.`,
+    login: (gh.error || "The GitHub CLI is not logged in.") + " Then reopen this menu.",
+    shared: `This project is part of the repository in ${r.top}: that whole repository goes to GitHub.`,
+    ok: "Build output and LaTeX's auxiliary files stay out (.gitignore). From then on, changes are saved and pushed automatically.",
+  }[pub.why];
+  go.disabled = pub.blocked;
 }
 $("#sync-publish").addEventListener("click", (e) => e.stopPropagation());
 $("#sync-publish").addEventListener("submit", async (e) => {
@@ -841,10 +830,7 @@ $("#sync-clash").addEventListener("click", async (e) => {
   if (seq !== diffSeq) return;                        // the diff view was asked for again
   if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
   const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
-  $("#diff").innerHTML = [head, "", ...(r.diff || "(the same)").split("\n")].map((l) => {
-    const cls = l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "";
-    return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
-  }).join("\n");
+  $("#diff").innerHTML = diffHtml([head, "", r.diff || "(the same)"].join("\n"));
   openPanel("diff");
 });
 $("#sync-auto").onchange = async (e) => {
@@ -906,12 +892,9 @@ async function restartServer() {
 }
 // The server stopped to start again (restart, folder rename): wait until the new one answers.
 async function waitForNewServer() {
-  for (let i = 0; i < 80; i++) {           // the new server listens within a few seconds
-    await new Promise((res) => setTimeout(res, 500));
-    const t = await fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json()).catch(() => null);
-    if (t && t.server !== S.server) return true;
-  }
-  return "The server did not come back. Reopen the project from the Home page.";
+  const tree = () => fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json());
+  return await Util.waitForRestart(tree, (t) => t.server !== S.server)
+    || "The server did not come back. Reopen the project from the Home page.";
 }
 function reloadPage() {
   if (pdfChannel) pdfChannel.postMessage({ type: "reload" });     // the pop-out PDF too
@@ -991,7 +974,6 @@ function setCompileButton(running) {
   $("#compile-label").textContent = running ? "Stop" : "Compile";
   b.title = running ? "Stop the build" : keys(`Save all and compile (${(MODE_INFO[BUILD.mode] || [BUILD.mode])[0]}) (⌘↵)`);
 }
-const plural = (n, w, ws = w + "s") => `${n} ${n === 1 ? w : ws}`;
 
 // The result of a build, yours or the agent's (its compile tool): status, problems, PDF.
 async function showBuild(r) {
@@ -1138,10 +1120,7 @@ async function showDiff(path) {
     else if (!parts.length) parts.push(`No uncommitted changes in ${what}.`);
     text = parts.join("\n\n") || r.diff || "";
   }
-  $("#diff").innerHTML = text.split("\n").map((l) => {
-    const cls = l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "";
-    return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
-  }).join("\n");
+  $("#diff").innerHTML = diffHtml(text);
   openPanel("diff");
 }
 
@@ -2107,12 +2086,6 @@ $("#quota").addEventListener("click", (e) => {
   }
 });
 
-function diffHtml(diff) {
-  return diff.split("\n").map((l) => {
-    const cls = l.startsWith("+") && !l.startsWith("+++") ? "add" : l.startsWith("-") && !l.startsWith("---") ? "del" : l.startsWith("@@") ? "hunk" : "";
-    return cls ? `<span class="${cls}">${esc(l)}</span>` : esc(l);
-  }).join("\n");
-}
 
 function renderTurnCard(e) {
   let h = "";
