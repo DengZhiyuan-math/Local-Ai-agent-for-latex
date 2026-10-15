@@ -69,6 +69,7 @@ try:
         return (r.stdout + r.stderr).strip()
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
+    results["saving"] = node(scripts / "saving.mjs", editor, str(work / "proj"))
     results["home menu"] = node(scripts / "home_menu.mjs", home, str(work / "proj"), str(work / "proj2"))
     results["pages load"] = node(scripts / "pages.mjs", editor, home)
 finally:

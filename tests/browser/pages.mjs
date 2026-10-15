@@ -25,7 +25,8 @@ async function open(url) {
     if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "evaluate failed");
     return r.result.result.value;
   };
-  return { ev, errors, close: () => ws.close() };
+  // Its page goes too when done: an open page holds connections the next one needs.
+  return { ev, errors, close: () => { ws.close(); return fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
 }
 
 const ed = await open(editor);
@@ -50,18 +51,18 @@ check("completion of a label", await ed.ev(`
   cm.setValue("see \\\\cref{thm"); cm.setCursor({ line: 0, ch: 13 });
   const h = computeHints(cm, false);
   return !!h && h.list.length === 1 && h.list[0].text === "thm:main" && h.from.ch === 10;`));
-ed.close();
+await ed.close();
 const hm = await open(home);
 check("home search lists the project", await hm.ev(`
-  for (let i = 0; i < 50 && !H.loaded; i++) await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 300 && !(typeof H !== "undefined" && H.loaded); i++) await new Promise((r) => setTimeout(r, 100));
   const before = viewItems("").items.length;
   const found = viewItems("proj").items.map((i) => i.p && i.p.name);
   return before >= 1 && found.includes("proj");`));
 check("home loads", hm.errors.length === 0, hm.errors.join(" | "));
 check("home ago and plural", await hm.ev(`return ago(Date.now() / 1000 - 7200) === "2 h ago" && plural(2, "item") === "2 items"`));
-hm.close();
+await hm.close();
 const vw = await open(editor.replace(/\/$/, "") + "/viewer");
 check("pdf viewer loads", vw.errors.length === 0, vw.errors.join(" | "));
-vw.close();
+await vw.close();
 console.log(results.join("\n"));
 process.exit(0);

@@ -21,7 +21,7 @@ const results = [];
 const check = (name, ok, detail = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ": " + detail : ""}`);
 
 await ev(`
-  for (let i = 0; i < 100 && !document.querySelector("#view-wrap"); i++) await new Promise((r) => setTimeout(r, 100));
+  for (let i = 0; i < 300 && !(typeof H !== "undefined" && H.loaded); i++) await new Promise((r) => setTimeout(r, 100));   // scripts and the list
   window.confirm = () => true;
   window.T = {
     sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
@@ -62,4 +62,5 @@ check("project without editor goes to Recycle Bin", await ev(`return T.until(() 
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 ws.close();
+await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
 process.exit(0);

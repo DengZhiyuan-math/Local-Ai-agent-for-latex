@@ -7,6 +7,12 @@ const S = {
   files: [], folders: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
+// The open files and how each is saved (tabs.js); S.tabs is its list.
+const TABS = Tabs.createTabStore({
+  api, isHeld: () => C.editTurn, notify: (m) => toast(m),
+  onChange: (t, what) => { renderTabs(); showBanner(t); if (what === "saved") scheduleSymbols(); },
+});
+S.tabs = TABS.tabs;
 
 /* ------------------------------------------------------------------ home */
 // The Home page (hub.py) lists all projects. Its tab calls itself "prism-home", so this
@@ -155,7 +161,7 @@ cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z
 
 function modeFor(path) { return path.endsWith(".md") ? "markdown" : "stex"; }
 function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }
-function isDirty(t) { return !t.doc.isClean(t.gen); }
+const isDirty = (t) => TABS.dirty(t);
 
 // The file of a tab being opened, asked for once: two quick clicks share the request (and
 // get one tab), and the files of the last session download together (see init).
@@ -164,23 +170,29 @@ function fileRequest(path) {
   if (!opening.has(path)) opening.set(path, api("/api/file?path=" + encodeURIComponent(path)));
   return opening.get(path);
 }
+// The tab of `path`, its file fetched if it is not open yet; null if it cannot be had.
+async function loadTab(path) {
+  let t = S.tabs.find((x) => x.path === path);
+  if (t) return t;
+  const r = await fileRequest(path);
+  opening.delete(path);
+  t = S.tabs.find((x) => x.path === path);            // opened meanwhile, by the same request
+  if (t) return t;
+  if (r._status !== 200) { toast(`Cannot open ${path}: ${r.error || r._status}`); return null; }
+  return TABS.add(path, CodeMirror.Doc(r.content, modeFor(path)), r.mtime);
+}
+// Each file asked for to be shown counts: the last one asked for is the one in front, even
+// if an earlier one's file arrives after it (see init: the tabs of the last session).
+let openAsked = 0;
 async function openFile(path, line) {
   if (S.files.some((f) => f.path === path && f.editable === false)) {
     window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
     return;
   }
-  let t = S.tabs.find((x) => x.path === path);
-  if (!t) {
-    const r = await fileRequest(path);
-    opening.delete(path);
-    t = S.tabs.find((x) => x.path === path);          // opened meanwhile, by the same request
-    if (!t) {
-      if (r._status !== 200) return toast(`Cannot open ${path}: ${r.error || r._status}`);
-      const doc = CodeMirror.Doc(r.content, modeFor(path));
-      t = { path, doc, mtime: r.mtime, gen: doc.changeGeneration(true) };
-      S.tabs.push(t);
-    }
-  }
+  const asked = ++openAsked;
+  const t = await loadTab(path);
+  if (asked !== openAsked) { renderTabs(); return; }   // another file asked for since: it goes in front
+  if (!t) return;
   S.active = path;
   cm.swapDoc(t.doc);
   AH.apply(path);
@@ -208,7 +220,7 @@ async function closeTab(path) {
   const t = S.tabs.find((x) => x.path === path);
   if (t && isDirty(t) && !t.conflict) await saveTab(t);      // autosave may still be pending
   if (t && isDirty(t) && !confirm(`${path} has unsaved changes. Close anyway?`)) return;
-  S.tabs = S.tabs.filter((x) => x.path !== path);
+  TABS.remove((x) => x.path === path);
   if (S.active === path) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) return openFile(next.path);
@@ -233,47 +245,9 @@ $("#tabs").addEventListener("auxclick", (e) => { const t = e.target.closest(".ta
 function persistSession() { store.set("session", { tabs: S.tabs.map((t) => t.path), active: S.active }); }
 
 /* ------------------------------------------------------------------ save & external changes */
-// One save per tab at a time: a second save waits for the first, so two writes never
-// race on the server (the second would otherwise look like a change made on disk).
-// While the agent works in Edit mode, nothing is written: your edits would end up in its
-// turn's diff (and its Undo). They are saved when the turn ends; a file the agent changed
-// meanwhile gets the conflict banner instead.
-function saveTab(t, force = false) {
-  if (C.editTurn) {
-    if (!C.heldNote) { C.heldNote = true; toast("Your edits are saved when the agent's turn ends."); }
-    return Promise.resolve(false);
-  }
-  const run = () => saveTabNow(t, force);
-  t.saving = (t.saving || Promise.resolve()).then(run, run);
-  return t.saving;
-}
-async function saveTabNow(t, force) {
-  if (!isDirty(t) && !force) return true;
-  let gen, r;
-  // git is committing or merging (a repository's hooks can take long), or an agent's Edit
-  // turn runs: the server says so instead of keeping the request waiting; the edits stay
-  // here and go as soon as it is done.
-  for (let waited = false; ; waited = true) {
-    gen = t.doc.changeGeneration();
-    // In flight: the file on disk is this save's until its answer brings the new mtime.
-    t.inFlight = true;
-    try { r = await api("/api/file", { path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
-    finally { t.inFlight = false; }
-    if (!(r._status === 503 && r.busy)) break;
-    if (!waited) toast(`${t.path}: ${r.error || "busy"}.`);
-    await new Promise((res) => setTimeout(res, 1000));
-    if (C.editTurn) return false;       // an Edit turn began meanwhile: saved when it ends
-  }
-  if (r._status === 409 && r.conflict) {
-    t.conflict = "disk"; showBanner(t);
-    toast(`${t.path} changed on disk — not saved. Resolve in the banner.`);
-    return false;
-  }
-  if (r._status !== 200) { toast(`Save failed: ${r.error || r._status}`); return false; }
-  t.mtime = r.mtime; t.gen = gen; t.conflict = null;
-  renderTabs(); showBanner(t); scheduleSymbols();
-  return true;
-}
+// Saving: one at a time per tab, held during an agent's Edit turn, busy git waited out,
+// a file changed on disk never overwritten (tabs.js).
+const saveTab = async (t, force = false) => (await TABS.save(t, force)).ok;
 async function saveActive() {
   const t = activeTab(); if (!t) return;
   clearTimeout(t.saveTimer);
@@ -310,32 +284,23 @@ function scheduleCompile(active = undefined) {
     compile(false, active);
   }, AUTOCOMPILE_MS);
 }
-async function saveAll() {
-  let ok = true;
-  for (const t of S.tabs) if (isDirty(t)) ok = (await saveTab(t)) && ok;
-  return ok;
-}
+// Every edited tab: {ok}, or {ok: false, reason} (Tabs.unsavedWhy says it).
+const saveAll = () => TABS.saveAll();
 
 // `discard`: the author chose the disk version over unsaved edits (the conflict banner).
 async function reloadFromDisk(t, discard = false) {
   const r = await api("/api/file?path=" + encodeURIComponent(t.path));
   if (r._status !== 200) return;
-  if (!discard && isDirty(t)) {             // typed into while the file was fetched
-    if (t.conflict !== "disk") { t.conflict = "disk"; showBanner(t); }
-    return;
+  const what = TABS.loaded(t, r.content, discard);   // typed into while it was fetched: "kept"
+  if (what === "kept") return;
+  if (what === "replace") {                          // else the same text: keep cursor and undo
+    const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
+    t.doc.setValue(r.content);
+    AH.apply(t.path);                                // setValue drops line classes
+    t.doc.setCursor(cur);
+    if (scroll) cm.scrollTo(scroll.left, scroll.top);
   }
-  if (r.content === t.doc.getValue()) {     // same text (a save of ours, a touch): keep cursor and undo
-    t.mtime = r.mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
-    renderTabs(); showBanner(t);
-    return;
-  }
-  const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
-  t.doc.setValue(r.content);
-  AH.apply(t.path);                          // setValue drops line classes
-  t.doc.setCursor(cur);
-  if (scroll) cm.scrollTo(scroll.left, scroll.top);
-  t.mtime = r.mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
-  renderTabs(); showBanner(t);
+  TABS.synced(t, r.mtime);
 }
 
 function showBanner(t) {
@@ -485,7 +450,7 @@ async function trashItems(target) {
   if (!confirm(`Move ${target.dir ? "the folder " : ""}${target.path} to the ${TRASH}?`
     + (unsaved.length ? `\n\nUnsaved edits in ${unsaved.join(", ")} will be lost.` : ""))) return;
   const r = await fileAction("trash", { paths: [target.path] }); if (!r) return;
-  S.tabs = S.tabs.filter((t) => !within(t.path, target.path));
+  TABS.remove((t) => within(t.path, target.path));
   if (S.active && within(S.active, target.path)) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) openFile(next.path);
@@ -609,7 +574,8 @@ function renameProject() {
     if (!save || name === old) return showProjectName(old, S.projectFolder);
     showProjectName(name || S.projectFolder, S.projectFolder);
     if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
-    if (!(await saveAll())) { showProjectName(old, S.projectFolder); return toast("Resolve the save conflict first."); }
+    const saved = await saveAll();
+    if (!saved.ok) { showProjectName(old, S.projectFolder); return toast(Tabs.unsavedWhy(saved)); }
     let r = await api("/api/project/rename", { name }).catch(() => ({ error: "server not reachable" }));
     if (r._status === 404) {
       // This project's server started before renaming existed: restart it with the new
@@ -664,12 +630,12 @@ async function pollOnce() {
   S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];
   if (changed) renderTree();
   let anyChange = false;
-  for (const t of S.tabs) {
+  for (const t of [...S.tabs]) {
     const f = r.files.find((x) => x.path === t.path);
-    if (!f || Math.abs(f.mtime - t.mtime) < 1e-6 || t.inFlight) continue;   // in flight: our own write
+    const seen = f ? TABS.diskSeen(t, f.mtime) : "same";     // tabs.js: a save in flight is ours
+    if (seen === "same") continue;
     anyChange = true;
-    if (!isDirty(t)) await reloadFromDisk(t);
-    else if (t.conflict !== "disk") { t.conflict = "disk"; showBanner(t); }
+    if (seen === "reload") await reloadFromDisk(t);
   }
   if (anyChange || changed) loadSymbols();
   if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
@@ -745,10 +711,10 @@ $("#sync-menu").addEventListener("click", async (e) => {
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
-  if (b.dataset.sync === "resolve" && !(await saveAll())) return;
+  if (b.dataset.sync === "resolve" && !(await saveAll()).ok) return;
   // Your open files go to disk first: committed by Save now, and out of the way of what Get
   // changes brings in (no "changed on disk" clash with text not saved yet).
-  if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll())) return;
+  if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll()).ok) return;
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
   const r = await api("/api/git/sync", { action: b.dataset.sync, target: b.dataset.sync === "bind" ? S.sync.target : undefined }).catch(() => null);
   if (r && r._status === 200) renderSync(r);
@@ -781,7 +747,8 @@ $("#sync-publish").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target, go = $("#pub-go");
   if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
-  if (!(await saveAll())) return toast("Resolve the save conflict first.");
+  const saved = await saveAll();
+  if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   go.disabled = true; go.textContent = "Creating…";
   const r = await api("/api/git/publish", {
     name: f.elements.name.value.trim(),
@@ -865,7 +832,8 @@ $("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('
 // to true once the new server answers (or to an error message). The page then reloads.
 async function restartServer() {
   if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
-  if (!(await saveAll())) return "Resolve the save conflict first.";
+  const saved = await saveAll();
+  if (!saved.ok) return Tabs.unsavedWhy(saved);
   const r = await api("/api/restart", {}).catch(() => ({ error: "server not reachable" }));
   if (r.error) return r.error;
   return waitForNewServer();
@@ -965,7 +933,7 @@ async function compile(clean = false, active = S.active) {
   S.building = true;
   try {
     if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
-    else if (!(await saveAll())) return;
+    else if (!(await saveAll()).ok) return;
     const mode = BUILD.mode;
     const st = $("#build-status");
     st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
@@ -1771,7 +1739,8 @@ async function sendMessage() {
     chatAppend(esc(text), "msg user");
     return runLocal(slash[1], (slash[2] || "").trim());
   }
-  if (!(await saveAll())) return toast("Resolve the save conflict before asking the agent.");
+  const saved = await saveAll();
+  if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   if (ATT.files.some((f) => !f.path && !f.error)) return toast("Wait until the files are uploaded.");
   const mode = $("#chat-mode").value;
   const mentions = parseMentions(text);
@@ -1803,7 +1772,7 @@ async function sendMessage() {
 // running when this page loaded (a reload), which is then shown and can be stopped.
 async function followTurn(job, provider, mode) {
   C.job = job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
-  C.editTurn = mode === "edit"; C.heldNote = false;       // saves wait for the turn (see saveTab)
+  C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
   const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
@@ -2095,7 +2064,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-compile]")) return compile();
   const u = ev.target.closest("[data-undo]");
   if (u) {
-    if (S.tabs.some(isDirty) && !(await saveAll())) return;
+    if (S.tabs.some(isDirty) && !(await saveAll()).ok) return;
     const r = await api("/api/agent/undo", { turn: +u.dataset.undo });
     if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
@@ -2365,7 +2334,15 @@ async function loadAgentInfo() {
     const paths = sess && sess.tabs ? sess.tabs.filter((p) => exists(p) && p !== sess.active) : [];
     if (sess && sess.active && exists(sess.active)) paths.push(sess.active);
     paths.forEach(fileRequest);                         // downloaded together, opened in order
-    for (const p of paths) await openFile(p);
+    let restoring = openAsked;
+    for (const p of paths) {
+      // A file you opened meanwhile stays in front: the rest only come back as tabs.
+      if (openAsked !== restoring) { await loadTab(p); continue; }
+      const mine = openAsked + 1;
+      await openFile(p);
+      if (openAsked === mine) restoring = mine;
+    }
+    renderTabs(); persistSession();
     // No saved session: open the file the server builds (prism.json's "main", or the guess).
     if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
     renderProblems();

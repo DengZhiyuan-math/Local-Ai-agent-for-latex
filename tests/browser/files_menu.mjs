@@ -83,4 +83,5 @@ check("tree intact after refusal", await ev(`return T.until(() => !!document.que
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 ws.close();
+await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
 process.exit(0);

@@ -55,4 +55,5 @@ const info = await ev(`return (await api("/api/agent/info")).active`);
 check("server has no running turn", info === null, JSON.stringify(info));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close(); process.exit(0);
+ws.close(); await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
+process.exit(0);

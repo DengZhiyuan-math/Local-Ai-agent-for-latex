@@ -150,6 +150,164 @@ check("tags by name or by count", () => {
   assert.deepStrictEqual(HV.allTags(H).map((t) => `${t.name}:${t.n}`), ["draft:2", "old:1", "done:0"]);
 });
 
+// ---------------------------------------------------------------- tabs.js
+const Tabs = require("../prism_local/static/tabs.js");
+// A CodeMirror Doc's generations: every edit is one; isClean(g): no edit since g.
+class FakeDoc {
+  constructor(text) { this.text = text; this.edits = 0; }
+  getValue() { return this.text; }
+  setValue(t) { this.text = t; this.edits++; }
+  type(s) { this.text += s; this.edits++; }
+  changeGeneration() { return this.edits; }
+  isClean(g) { return this.edits === g; }
+}
+// A server: answers in order (a function of the request, or a fixed answer); `hold()`
+// makes the next save wait until the test lets it go.
+function fakeServer(...answers) {
+  const calls = [];
+  let gate = null;
+  const api = async (path, body) => {
+    calls.push(body);
+    if (gate) { const g = gate; gate = null; await g.promise; }
+    const a = answers.length > 1 ? answers.shift() : answers[0];
+    return typeof a === "function" ? a(body) : a;
+  };
+  const hold = () => { let release; gate = { promise: new Promise((r) => { release = r; }) }; return () => release(); };
+  return { api, calls, hold };
+}
+const saved = (mtime) => ({ _status: 200, ok: true, mtime });
+function store(server, extra = {}) {
+  const changes = [], notes = [];
+  const s = Tabs.createTabStore({ api: server.api, sleep: () => Promise.resolve(), notify: (m) => notes.push(m),
+                                  onChange: (t, what) => changes.push(what), ...extra });
+  return { s, changes, notes };
+}
+
+check("a save sends the text against the mtime it was loaded at", async () => {
+  const srv = fakeServer(saved(2));
+  const { s, changes } = store(srv);
+  const t = s.add("main.tex", new FakeDoc("a"), 1);
+  t.doc.type("b");
+  assert.deepStrictEqual(await s.save(t), { ok: true });
+  assert.deepStrictEqual(srv.calls, [{ path: "main.tex", content: "ab", base_mtime: 1, force: false }]);
+  assert.deepStrictEqual([t.mtime, s.dirty(t), changes], [2, false, ["saved"]]);
+  assert.deepStrictEqual(await s.save(t), { ok: true }, "nothing to save: no request");
+  assert.strictEqual(srv.calls.length, 1);
+});
+
+check("one save per tab at a time", async () => {
+  const order = [];
+  const srv = fakeServer((b) => { order.push("answer " + b.content); return saved(order.length); });
+  const { s } = store(srv);
+  const t = s.add("main.tex", new FakeDoc(""), 0);
+  t.doc.type("1");
+  const release = srv.hold();
+  const first = s.save(t);
+  await new Promise((r) => setImmediate(r));           // its request is on its way
+  t.doc.type("2");
+  const second = s.save(t);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(srv.calls.length, 1, "the second waits for the first");
+  release();
+  await Promise.all([first, second]);
+  assert.deepStrictEqual(srv.calls.map((c) => c.content), ["1", "12"]);
+  assert.strictEqual(srv.calls[1].base_mtime, 1, "against the first save's mtime");
+});
+
+check("git busy is waited out, said once", async () => {
+  const srv = fakeServer({ _status: 503, busy: true, error: "git is busy" }, { _status: 503, busy: true }, saved(5));
+  const { s, notes } = store(srv);
+  const t = s.add("a.tex", new FakeDoc("x"), 1);
+  t.doc.type("y");
+  assert.deepStrictEqual(await s.save(t), { ok: true });
+  assert.deepStrictEqual([srv.calls.length, notes], [3, ["a.tex: git is busy."]]);
+});
+
+check("during an agent's Edit turn nothing is written, and it says so once per turn", async () => {
+  let held = true;
+  const srv = fakeServer(saved(2));
+  const { s, notes } = store(srv, { isHeld: () => held });
+  const t = s.add("a.tex", new FakeDoc("x"), 1);
+  t.doc.type("y");
+  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "held" });
+  await s.save(t);
+  assert.deepStrictEqual([srv.calls.length, notes.length], [0, 1]);
+  s.turnStarted();
+  await s.save(t);
+  assert.strictEqual(notes.length, 2, "a new turn says it again");
+  held = false;
+  assert.deepStrictEqual(await s.save(t), { ok: true });
+});
+
+check("a file changed on disk is not overwritten: the conflict, then Keep mine", async () => {
+  const srv = fakeServer({ _status: 409, conflict: true, mtime: 9 }, saved(10));
+  const { s, changes } = store(srv);
+  const t = s.add("a.tex", new FakeDoc("x"), 1);
+  t.doc.type("y");
+  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "conflict" });
+  assert.deepStrictEqual([t.conflict, changes], ["disk", ["conflict"]]);
+  assert.deepStrictEqual(await s.save(t, true), { ok: true }, "force: the author keeps theirs");
+  assert.deepStrictEqual([srv.calls[1].force, t.conflict], [true, null]);
+});
+
+check("the poll sees a save of ours in flight as no change on disk", async () => {
+  const srv = fakeServer(saved(7));
+  const { s } = store(srv);
+  const t = s.add("a.tex", new FakeDoc("x"), 1);
+  t.doc.type("y");
+  const release = srv.hold();
+  const saving = s.save(t);
+  await new Promise((r) => setImmediate(r));
+  assert.strictEqual(s.diskSeen(t, 7), "same", "the file on disk is this save's");
+  assert.strictEqual(t.conflict, null);
+  t.doc.type("z");                                    // typed while the save was on its way
+  release();
+  await saving;
+  assert.deepStrictEqual([t.mtime, s.dirty(t)], [7, true], "what was typed meanwhile is still to save");
+});
+
+check("the poll: reload a clean tab, flag an edited one", () => {
+  const { s, changes } = store(fakeServer(saved(1)));
+  const clean = s.add("a.tex", new FakeDoc("x"), 1), edited = s.add("b.tex", new FakeDoc("x"), 1);
+  edited.doc.type("y");
+  assert.deepStrictEqual([s.diskSeen(clean, 1), s.diskSeen(clean, 2), s.diskSeen(edited, 2)], ["same", "reload", "conflict"]);
+  assert.deepStrictEqual([edited.conflict, changes], ["disk", ["conflict"]]);
+});
+
+check("a reload: kept when typed into meanwhile, else the disk's text", () => {
+  const { s } = store(fakeServer(saved(1)));
+  const t = s.add("a.tex", new FakeDoc("x"), 1);
+  assert.strictEqual(s.loaded(t, "x"), "same");
+  assert.strictEqual(s.loaded(t, "disk"), "replace");
+  t.doc.type("y");
+  assert.deepStrictEqual([s.loaded(t, "disk"), t.conflict], ["kept", "disk"]);
+  assert.strictEqual(s.loaded(t, "disk", true), "replace", "Load disk version (discard mine)");
+  t.doc.setValue("disk");
+  s.synced(t, 4);
+  assert.deepStrictEqual([t.mtime, t.conflict, s.dirty(t)], [4, null, false]);
+});
+
+check("saveAll says why, the reason needing you most", async () => {
+  const srv = fakeServer((b) => (b.path === "a.tex" ? { _status: 500, error: "disk full" } : { _status: 409, conflict: true }));
+  const { s } = store(srv);
+  for (const p of ["a.tex", "b.tex", "c.tex"]) s.add(p, new FakeDoc(""), 0);
+  s.tabs[0].doc.type("1"); s.tabs[1].doc.type("2");
+  const r = await s.saveAll();
+  assert.deepStrictEqual(r, { ok: false, reason: "conflict", paths: ["a.tex", "b.tex"], message: "Save failed: disk full" });
+  assert.match(Tabs.unsavedWhy(r), /conflict/);
+  assert.match(Tabs.unsavedWhy({ ok: false, reason: "failed", message: "Save failed: disk full" }), /disk full/);
+  assert.deepStrictEqual(await store(fakeServer(saved(1))).s.saveAll(), { ok: true });
+});
+
+check("closing tabs", () => {
+  const { s } = store(fakeServer(saved(1)));
+  for (const p of ["a.tex", "sec/b.tex", "sec/c.tex"]) s.add(p, new FakeDoc(""), 0);
+  const tabs = s.tabs;
+  assert.deepStrictEqual(s.remove((t) => t.path.startsWith("sec/")).map((t) => t.path), ["sec/b.tex", "sec/c.tex"]);
+  assert.strictEqual(s.tabs, tabs, "the same list: the page holds it");
+  assert.deepStrictEqual([s.tabs.map((t) => t.path), s.get("sec/b.tex")], [["a.tex"], null]);
+});
+
 Promise.all(pending).then(() => {
   if (failures.length) {
     console.error(failures.join("\n"));
