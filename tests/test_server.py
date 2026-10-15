@@ -70,16 +70,16 @@ class Config(unittest.TestCase):
                         "build/main.pdf": "%PDF", "build/notes.pdf": "%PDF", "build/intro.pdf": "%PDF"})
         os.utime(root / "build/main.pdf", (1000, 1000))
         os.utime(root / "build/notes.pdf", (2000, 2000))
-        server.show_last_built()
+        server.PROJECT.show_last_built()
         self.assertEqual((server.PROJECT.config.main, server.PROJECT.config.pdf.name), ("notes.tex", "notes.pdf"))
         self.assertEqual(server.PROJECT.config.project_main, "main.tex", "prism.json's main is kept")
         os.utime(root / "build/main.pdf", (3000, 3000))
         os.utime(root / "build/intro.pdf", (4000, 4000))
         server.set_root(root)
-        server.show_last_built()
+        server.PROJECT.show_last_built()
         self.assertEqual(server.PROJECT.config.main, "main.tex", "a .tex that is no document is skipped")
         root = project({"main.tex": doc, "notes.tex": doc})
-        server.show_last_built()
+        server.PROJECT.show_last_built()
         self.assertEqual(server.PROJECT.config.main, "main.tex", "nothing built yet: the project's main")
 
     def test_changes_apply_without_a_restart(self):
@@ -158,7 +158,7 @@ class Files(unittest.TestCase):
         self.assertEqual(set(server.PROJECT.list_files(editable_only=False)),
                          {"main.tex", "figure.png", "reference.pdf"})
         self.assertEqual(server.PROJECT.list_files(), ["main.tex"])
-        self.assertEqual(server.symbols()["outline"][0]["title"], "Introduction")
+        self.assertEqual(server.PROJECT.symbols()["outline"][0]["title"], "Introduction")
         for bad in (".env", "build/output.pdf", "../outside.png", ".git/config"):
             with self.assertRaises(ValueError, msg=bad):
                 server.PROJECT.resolve(bad, editable_only=False)
@@ -393,7 +393,7 @@ class Symbols(unittest.TestCase):
 \end{thm}
 \end{document}
 """})
-        s = server.symbols()
+        s = server.PROJECT.symbols()
         self.assertEqual(s["env_titles"], {"thm": "Theorem", "lem": "Lemma", "rem*": "Remark",
                                            "assump": "Assumption", "claim": "Claim"})
         self.assertEqual([(o["kind"], o["title"]) for o in s["outline"]],
@@ -403,22 +403,22 @@ class Symbols(unittest.TestCase):
 
     def test_standard_names_without_newtheorem(self):
         project({"main.tex": "\\documentclass{article}\\begin{document}\\end{document}\n"})
-        self.assertEqual(server.symbols()["env_titles"]["lemma"], "Lemma")
+        self.assertEqual(server.PROJECT.symbols()["env_titles"]["lemma"], "Lemma")
 
     def test_section_titles(self):
         project({"main.tex": "\\begin{document}\n\\chapter{One}\n"
                              "\\section[Short]{Long $\\frac{a}{b^{2}}$}\n"
                              "\\subsection*{\\texorpdfstring{$\\mathbb{R}^d$}{Rd} and $\\SO(n)$}\n"
                              "\\end{document}\n"})
-        self.assertEqual([(o["kind"], o["title"]) for o in server.symbols()["outline"]],
+        self.assertEqual([(o["kind"], o["title"]) for o in server.PROJECT.symbols()["outline"]],
                          [("chapter", "One"), ("section", "Long a/b^2"),
                           ("subsection", "Rd and SO(n)")])
 
     def test_unchanged_files_are_not_read_again(self):
         root = project({"main.tex": "\\newtheorem{thm}{Theorem}\n\\input{a}\n",
                         "a.tex": "\\section{A}\\label{a}\n", "refs.bib": "@book{knuth,\n}\n"})
-        first = server.symbols()
-        self.assertEqual(server.document_order(), ["main.tex", "a.tex"])
+        first = server.PROJECT.symbols()
+        self.assertEqual(server.PROJECT.document_order(), ["main.tex", "a.tex"])
         reads = []
         real = Path.read_text
 
@@ -426,17 +426,17 @@ class Symbols(unittest.TestCase):
             reads.append(p.name)
             return real(p, *a, **k)
         with mock.patch.object(Path, "read_text", counted):
-            self.assertEqual(server.symbols(), first)
-            self.assertEqual(server.document_order(), ["main.tex", "a.tex"])
+            self.assertEqual(server.PROJECT.symbols(), first)
+            self.assertEqual(server.PROJECT.document_order(), ["main.tex", "a.tex"])
             self.assertEqual(reads, [], "nothing changed: nothing is read")
             (root / "a.tex").write_text("\\section{B}\\label{b}\\input{c}\n", encoding="utf-8")
             (root / "c.tex").write_text("\\begin{thm}[C]\\end{thm}\n", encoding="utf-8")
             os.utime(root / "a.tex", ns=(1, 1))      # a new modification time, also on a coarse clock
-            s = server.symbols()
+            s = server.PROJECT.symbols()
             self.assertEqual(sorted(reads), ["a.tex", "c.tex"], "only the changed and the new file")
         self.assertEqual([l["label"] for l in s["labels"]], ["b"])
         self.assertEqual([(o["kind"], o["title"]) for o in s["outline"]], [("section", "B"), ("thm", "C")])
-        self.assertEqual(server.document_order(), ["main.tex", "a.tex", "c.tex"])
+        self.assertEqual(server.PROJECT.document_order(), ["main.tex", "a.tex", "c.tex"])
         self.assertEqual(s["bibkeys"], [{"key": "knuth", "type": "book", "file": "refs.bib", "line": 1}])
 
 

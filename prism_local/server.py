@@ -18,7 +18,6 @@ import gitenv
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import threading
@@ -31,14 +30,13 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from projectconfig import Config  # noqa: E402
-from project import MAX_FILES, UPLOAD_DIR, Project, mtime  # noqa: E402
+from project import UPLOAD_DIR, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
-from texutil import group, plain_text  # noqa: E402
 import build  # noqa: E402
 import httpbase  # noqa: E402
 import instances  # noqa: E402
@@ -51,9 +49,6 @@ BUILD_LOCK = threading.Lock()
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
 SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
-
-STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
-                     "remark", "example"]
 
 
 # The project this editor works on (project.py): its folder, its settings with the
@@ -115,144 +110,7 @@ def project_diff(spec: str) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- symbols
-
-LABEL_RE = re.compile(r"\\label\{([^}]+)\}")
-BEGIN_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}(?:\[([^\]]*)\])?")
-# \section{…}, \section*{…}, \section[short]{long}; the title is read with its braces paired.
-SECTION_RE = re.compile(
-    r"\\(part|chapter|section|subsection|subsubsection)\*?\s*(?:\[[^\]]*\])?\s*\{")
-INPUT_RE = re.compile(r"\\(?:input|include)\{([^}]+)\}")
-MACRO_RE = re.compile(
-    r"\\(?:newcommand|renewcommand|providecommand|DeclareMathOperator|DeclarePairedDelimiter)\*?"
-    r"\s*\{?\\([A-Za-z]+)\}?")
-BIBKEY_RE = re.compile(r"^\s*@(\w+)\s*\{\s*([^,\s]+)\s*,", re.M)
-# \newtheorem{thm}{Theorem}[section], \newtheorem{lem}[thm]{Lemma}, llncs, mdframed, tcolorbox …
-NEWTHEOREM_RE = re.compile(r"\\(?:newtheorem|spnewtheorem|newmdtheoremenv|newtcbtheorem)\*?\s*"
-                           r"\{([^}]+)\}\s*(?:\[[^\]]*\]\s*)?(?:\{([^}]*)\})?")
-# thmtools: \declaretheorem[name=Theorem, numberwithin=section]{thm}
-DECLARETHEOREM_RE = re.compile(r"\\declaretheorem\*?\s*(?:\[([^\]]*)\])?\s*\{([^}]+)\}")
-
-
-def strip_comment(line: str) -> str:
-    return re.sub(r"(?<!\\)%.*", "", line)
-
-
-def _scan_tex(text: str) -> dict:
-    """What a .tex, .sty or .cls file holds for document_order and symbols, line by line
-    in the order symbols() takes it: its \\input's, theorem definitions, and its sections,
-    \\begin's, macros and labels (events: (what, line, name, title))."""
-    inputs, theorems, events = [], [], []
-    for n, raw in enumerate(text.splitlines(), 1):
-        line = strip_comment(raw)
-        inputs += [m.group(1).strip() for m in INPUT_RE.finditer(line)]
-        for m in NEWTHEOREM_RE.finditer(line):
-            theorems.append((m.group(1).strip(), (m.group(2) or m.group(1)).strip()))
-        for m in DECLARETHEOREM_RE.finditer(line):
-            name = m.group(2).strip()
-            opt = re.search(r"(?:^|,)\s*(?:name|title)\s*=\s*\{?([^,}]+)", m.group(1) or "")
-            theorems.append((name, opt.group(1).strip() if opt else name.capitalize()))
-        m = SECTION_RE.search(line)
-        if m:
-            g = group(line, m.end() - 1)          # a title that runs on: this line's part
-            events.append(("section", n, m.group(1), plain_text(g[0] if g else line[m.end():])))
-        for m in BEGIN_RE.finditer(line):
-            events.append(("begin", n, m.group(1), plain_text(m.group(2) or "")))
-        for m in MACRO_RE.finditer(line):
-            events.append(("macro", n, m.group(1), None))
-        for m in LABEL_RE.finditer(line):
-            events.append(("label", n, m.group(1), None))
-    return {"inputs": inputs, "theorems": theorems, "events": events}
-
-
-def _scan_bib(text: str) -> list[tuple]:
-    """The entries of a .bib file: (key, type, line)."""
-    keys, line, at = [], 1, 0
-    for m in BIBKEY_RE.finditer(text):
-        line += text.count("\n", at, m.start())
-        at = m.start()
-        if m.group(1).lower() not in ("string", "preamble", "comment"):
-            keys.append((m.group(2), m.group(1).lower(), line))
-    return keys
-
-
-# Each file's scan, kept while its size and modification time stay the same: the page asks
-# for the outline after every save, and for the file order every two seconds.
-_SCANS: dict[tuple, tuple] = {}
-
-
-def scan(rel: str, kind: str = "tex"):
-    """_scan_tex (kind "tex") or _scan_bib ("bib") of a project file, read only when it
-    changed since the last scan; None when it cannot be read."""
-    p = PROJECT.root / rel
-    try:
-        st = p.stat()
-        key, stamp = (PROJECT.root, rel, kind), (st.st_mtime_ns, st.st_size)
-        hit = _SCANS.get(key)
-        if hit and hit[0] == stamp:
-            return hit[1]
-        text = p.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None
-    found = _scan_bib(text) if kind == "bib" else _scan_tex(text)
-    if len(_SCANS) > 4 * MAX_FILES:      # files deleted or renamed long ago
-        _SCANS.clear()
-    _SCANS[key] = (stamp, found)
-    return found
-
-
-def document_order(files: list[str] | None = None) -> list[str]:
-    """Project .tex files in the order the main file \\input's them (depth first).
-    `files`: PROJECT.list_files(), when the caller has it already."""
-    order = input_chain(PROJECT.config.main)
-    rest = [f for f in (PROJECT.list_files() if files is None else files) if f.endswith(".tex") and f not in order]
-    return order + rest
-
-
-def theorem_envs(files: list[str]) -> dict[str, str]:
-    """Theorem-like environments and the names they print: {"thm": "Theorem", …}."""
-    envs: dict[str, str] = {}
-    for rel in files:
-        if Path(rel).suffix not in (".tex", ".sty", ".cls"):
-            continue
-        for name, title in (scan(rel) or {"theorems": []})["theorems"]:
-            envs.setdefault(name, title)
-    return envs or {e: e.capitalize() for e in STANDARD_THEOREMS}
-
-
-def symbols() -> dict:
-    labels, outline, macros = [], [], []
-    files = PROJECT.list_files()
-    envs = theorem_envs(files)
-    outline_envs = set(envs)
-    for rel in document_order(files):
-        found = scan(rel)
-        if found is None:
-            continue
-        env = None
-        for what, n, name, title in found["events"]:
-            if what == "section":
-                outline.append({"file": rel, "line": n, "kind": name, "title": title})
-                env = name
-            elif what == "begin":
-                if name in outline_envs:
-                    outline.append({"file": rel, "line": n, "kind": name, "title": title})
-                env = name
-            elif what == "macro":
-                macros.append({"name": name, "file": rel, "line": n})
-            else:
-                labels.append({"label": name, "file": rel, "line": n, "kind": env or ""})
-    keys = [{"key": key, "type": kind, "file": rel, "line": line}
-            for rel in files if rel.endswith(".bib") for key, kind, line in scan(rel, "bib") or []]
-    return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
-            "environments": list(envs), "env_titles": envs}
-
-
 # ---------------------------------------------------------------- build
-
-def resolve_tex_name(name: str) -> str | None:
-    return build.project_file(PROJECT.root, name)
-
 
 # The build in progress (for /api/build/stop), and the PDF it writes with that PDF's mtime
 # from before it began: the engine rewrites the PDF on every run of a build, so while it
@@ -351,81 +209,6 @@ def move_argv(new: Path, moving: bool = True) -> list[str]:
     return argv
 
 
-def stale_document() -> str | None:
-    """A document whose .tex is newer than its PDF (just edited): the one shown if it is,
-    else the most recently edited. None when every PDF is up to date."""
-    stale, cfg = [], PROJECT.config
-    for rel in PROJECT.list_files(editable_only=False):
-        src = PROJECT.root / rel
-        if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
-            continue
-        try:
-            if not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
-                continue
-            pdf = PROJECT.root / cfg.outdir / f"{src.stem}.pdf"
-            # Never built: only when edited after the last build (not an old draft lying there).
-            built = pdf if pdf.exists() else cfg.pdf
-            if mtime(src) > (mtime(built) if built.exists() else 0):
-                stale.append((rel == cfg.main, mtime(src), rel))
-        except OSError:
-            continue
-    return max(stale)[2] if stale else None
-
-
-def input_chain(main: str) -> list[str]:
-    """`main` and the files it \\input's or \\include's, depth first."""
-    order: dict[str, None] = {}
-
-    def visit(rel: str) -> None:
-        if rel in order:
-            return
-        order[rel] = None
-        for name in (scan(rel) or {"inputs": []})["inputs"]:
-            child = resolve_tex_name(name)
-            if child:
-                visit(child)
-    visit(main)
-    return list(order)
-
-
-def document_of(rel: str, cfg: Config) -> str:
-    """The document a build started from `rel` builds: rel when it is a document; else the
-    document shown now if it includes rel (a chapter of it), else prism.json's main if
-    that does, else another document that does, else prism.json's main."""
-    def is_doc(r: str) -> bool:
-        try:
-            return r.endswith(".tex") and build.is_document((PROJECT.root / r).read_text(encoding="utf-8", errors="replace"))
-        except OSError:
-            return False
-    if is_doc(rel):
-        return rel
-    firsts = [m for m in dict.fromkeys((cfg.main, cfg.project_main)) if (PROJECT.root / m).is_file()]
-    others = [f for f in PROJECT.list_files() if f.endswith(".tex") and f not in firsts]
-    for m in firsts + [f for f in others if is_doc(f)]:
-        if rel in input_chain(m):
-            return m
-    return cfg.project_main
-
-
-def show_last_built() -> None:
-    """Show the PDF of the document built last (its PDF is the newest), not always the
-    project's main, so a reopened editor shows the PDF it showed before."""
-    best, cfg = None, PROJECT.config
-    for rel in PROJECT.list_files(editable_only=False):
-        src = PROJECT.root / rel
-        if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
-            continue
-        pdf = PROJECT.root / cfg.outdir / f"{src.stem}.pdf"
-        try:
-            if not pdf.exists() or not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
-                continue
-        except OSError:
-            continue
-        best = max(best or (0.0, ""), (mtime(pdf), rel))
-    if best:
-        PROJECT.show(best[1])
-
-
 def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict:
     """One build (see build.py). Only one runs at a time."""
     shown = PROJECT.config
@@ -438,14 +221,14 @@ def run_build(mode: str, clean: bool = False, active: str | None = None) -> dict
         if active is None:
             # No open file says which (the agent's compile tool, auto-compile after its turn):
             # the document edited since its PDF was built, else the document shown now.
-            main = stale_document() or (shown.main if (PROJECT.root / shown.main).is_file() else shown.project_main)
+            main = PROJECT.stale_document() or (shown.main if (PROJECT.root / shown.main).is_file() else shown.project_main)
         else:
             if not isinstance(active, str):
                 raise ValueError("active must be a project file path")
             source = PROJECT.resolve(active)
             if not source.is_file():
                 raise FileNotFoundError(active)
-            main = document_of(source.relative_to(PROJECT.root).as_posix(), shown)
+            main = PROJECT.document_of(source.relative_to(PROJECT.root).as_posix(), shown)
         # Select outputs in memory. Opening a standalone document does not change prism.json.
         # It is shown once its build has ended: until then the PDF pane keeps what it shows.
         cfg = Config(PROJECT.root, main=main)
@@ -555,7 +338,7 @@ class Handler(httpbase.Handler):
                     pass
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
-                               "order": document_order(editable),
+                               "order": PROJECT.document_order(editable),
                                "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
@@ -592,7 +375,7 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/info":
             return self._json(AGENT.info())
         if path == "/api/symbols":
-            return self._json(symbols())
+            return self._json(PROJECT.symbols())
         if path == "/api/snippets":
             f = snippets_file()
             return self._json({"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None})
@@ -840,7 +623,7 @@ def main():
 
 def serve(a, project, life):
     set_root(project)
-    show_last_built()
+    PROJECT.show_last_built()
     if a.idle_timings:
         f, g, st = (float(x) for x in a.idle_timings.split(","))
         PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st

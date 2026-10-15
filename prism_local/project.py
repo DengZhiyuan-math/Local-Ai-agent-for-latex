@@ -24,11 +24,13 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
+import build
 import desktop
 from errors import Conflict, NotFound, Refused
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,
                     project_path, with_line_ends_of, write_bytes)
 from projectconfig import Config
+from symbols import STANDARD_THEOREMS, _scan_bib, _scan_tex
 
 MAX_FILES = 3000
 SAVE_WAIT = 3           # seconds a save waits for git before the page is told to try again
@@ -51,6 +53,7 @@ class Project:
         self.files_lock = files_lock or threading.RLock()
         self.turn = turn or NoTurn()
         self.on_change = on_change
+        self._scans: dict[tuple, tuple] = {}
 
     # ------------------------------------------------------------ settings
     @property
@@ -186,6 +189,147 @@ class Project:
             except (ValueError, OSError, RuntimeError):
                 pass
         return sorted(safe, key=lambda s: (s != cfg.main, s.count("/") == 0, s))
+
+    # ------------------------------------------------------------ what the sources hold
+    # Each file's scan is kept while its size and modification time stay the same: the
+    # page asks for the outline after every save, and for the file order every two seconds.
+
+    def scan(self, rel: str, kind: str = "tex"):
+        """_scan_tex (kind "tex") or _scan_bib ("bib") of a project file, read only when it
+        changed since the last scan; None when it cannot be read."""
+        p = self.root / rel
+        try:
+            st = p.stat()
+            key, stamp = (self.root, rel, kind), (st.st_mtime_ns, st.st_size)
+            hit = self._scans.get(key)
+            if hit and hit[0] == stamp:
+                return hit[1]
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return None
+        found = _scan_bib(text) if kind == "bib" else _scan_tex(text)
+        if len(self._scans) > 4 * MAX_FILES:      # files deleted or renamed long ago
+            self._scans.clear()
+        self._scans[key] = (stamp, found)
+        return found
+
+    def document_order(self, files: list[str] | None = None) -> list[str]:
+        """Project .tex files in the order the main file \\input's them (depth first).
+        `files`: self.list_files(), when the caller has it already."""
+        order = self.input_chain(self.config.main)
+        rest = [f for f in (self.list_files() if files is None else files) if f.endswith(".tex") and f not in order]
+        return order + rest
+
+    def theorem_envs(self, files: list[str]) -> dict[str, str]:
+        """Theorem-like environments and the names they print: {"thm": "Theorem", …}."""
+        envs: dict[str, str] = {}
+        for rel in files:
+            if Path(rel).suffix not in (".tex", ".sty", ".cls"):
+                continue
+            for name, title in (self.scan(rel) or {"theorems": []})["theorems"]:
+                envs.setdefault(name, title)
+        return envs or {e: e.capitalize() for e in STANDARD_THEOREMS}
+
+    def symbols(self) -> dict:
+        labels, outline, macros = [], [], []
+        files = self.list_files()
+        envs = self.theorem_envs(files)
+        outline_envs = set(envs)
+        for rel in self.document_order(files):
+            found = self.scan(rel)
+            if found is None:
+                continue
+            env = None
+            for what, n, name, title in found["events"]:
+                if what == "section":
+                    outline.append({"file": rel, "line": n, "kind": name, "title": title})
+                    env = name
+                elif what == "begin":
+                    if name in outline_envs:
+                        outline.append({"file": rel, "line": n, "kind": name, "title": title})
+                    env = name
+                elif what == "macro":
+                    macros.append({"name": name, "file": rel, "line": n})
+                else:
+                    labels.append({"label": name, "file": rel, "line": n, "kind": env or ""})
+        keys = [{"key": key, "type": kind, "file": rel, "line": line}
+                for rel in files if rel.endswith(".bib") for key, kind, line in self.scan(rel, "bib") or []]
+        return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
+                "environments": list(envs), "env_titles": envs}
+
+    def resolve_tex_name(self, name: str) -> str | None:
+        return build.project_file(self.root, name)
+
+    def stale_document(self) -> str | None:
+        """A document whose .tex is newer than its PDF (just edited): the one shown if it is,
+        else the most recently edited. None when every PDF is up to date."""
+        stale, cfg = [], self.config
+        for rel in self.list_files(editable_only=False):
+            src = self.root / rel
+            if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
+                continue
+            try:
+                if not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
+                    continue
+                pdf = self.root / cfg.outdir / f"{src.stem}.pdf"
+                # Never built: only when edited after the last build (not an old draft lying there).
+                built = pdf if pdf.exists() else cfg.pdf
+                if mtime(src) > (mtime(built) if built.exists() else 0):
+                    stale.append((rel == cfg.main, mtime(src), rel))
+            except OSError:
+                continue
+        return max(stale)[2] if stale else None
+
+    def input_chain(self, main: str) -> list[str]:
+        """`main` and the files it \\input's or \\include's, depth first."""
+        order: dict[str, None] = {}
+
+        def visit(rel: str) -> None:
+            if rel in order:
+                return
+            order[rel] = None
+            for name in (self.scan(rel) or {"inputs": []})["inputs"]:
+                child = self.resolve_tex_name(name)
+                if child:
+                    visit(child)
+        visit(main)
+        return list(order)
+
+    def document_of(self, rel: str, cfg: Config) -> str:
+        """The document a build started from `rel` builds: rel when it is a document; else the
+        document shown now if it includes rel (a chapter of it), else prism.json's main if
+        that does, else another document that does, else prism.json's main."""
+        def is_doc(r: str) -> bool:
+            try:
+                return r.endswith(".tex") and build.is_document((self.root / r).read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                return False
+        if is_doc(rel):
+            return rel
+        firsts = [m for m in dict.fromkeys((cfg.main, cfg.project_main)) if (self.root / m).is_file()]
+        others = [f for f in self.list_files() if f.endswith(".tex") and f not in firsts]
+        for m in firsts + [f for f in others if is_doc(f)]:
+            if rel in self.input_chain(m):
+                return m
+        return cfg.project_main
+
+    def show_last_built(self) -> None:
+        """Show the PDF of the document built last (its PDF is the newest), not always the
+        project's main, so a reopened editor shows the PDF it showed before."""
+        best, cfg = None, self.config
+        for rel in self.list_files(editable_only=False):
+            src = self.root / rel
+            if src.suffix != ".tex" or rel.split("/")[0] == cfg.outdir:
+                continue
+            pdf = self.root / cfg.outdir / f"{src.stem}.pdf"
+            try:
+                if not pdf.exists() or not build.is_document(src.read_text(encoding="utf-8", errors="replace")):
+                    continue
+            except OSError:
+                continue
+            best = max(best or (0.0, ""), (mtime(pdf), rel))
+        if best:
+            self.show(best[1])
 
     # ------------------------------------------------------------ writing the files
     # Saves, uploads and the Files sidebar's menu: each holds the files (files_lock: git
