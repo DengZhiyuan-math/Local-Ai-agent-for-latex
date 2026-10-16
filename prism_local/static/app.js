@@ -609,7 +609,7 @@ const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
   if (foreignProject) return;
-  const asked = TABS.stamp();
+  const asked = TABS.stamp(), syncAsked = SYNC_TOGGLE.stamp();
   const r = await Q.tree();
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
@@ -631,7 +631,7 @@ async function pollOnce() {
   if (r.updated && $("#btn-restart").hidden) toast("prism-local was updated: click “Update: restart” to use the new version");
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
-  if (r.sync) renderSync(r.sync);
+  if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
 }
 
 /* ------------------------------------------------------------------ GitHub sync */

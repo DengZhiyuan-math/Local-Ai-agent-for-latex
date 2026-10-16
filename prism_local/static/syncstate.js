@@ -26,14 +26,18 @@ const SyncState = (() => {
     return { text: "Saved to GitHub", cls: "ok", detail: `Synced to ${targetText(st.target)}${when ? ", " + ago(when) : ""}.` };
   }
 
+  // The sync switch: writes one at a time, the latest wish winning. A status asked for
+  // before a write ended (stamp() then, fresh(stamp) after) shows the switch as it was:
+  // drawn, it would flip the switch back until the next one.
   function createToggle({ send, onState = () => {}, onError = () => {} }) {
-    let wanted = null, running = null;
+    let wanted = null, running = null, writes = 0;
     function change(value) {
       wanted = !!value;
       if (running) return running;
       running = (async () => {
         while (wanted !== null) {
           const mine = wanted;
+          writes++;
           let r;
           try { r = await send(mine); } catch (e) { r = { _status: 0, error: e.message }; }
           const current = wanted === mine;
@@ -44,7 +48,9 @@ const SyncState = (() => {
       })().finally(() => { running = null; });
       return running;
     }
-    return { change, value: (server) => wanted === null ? !!server : wanted };
+    const stamp = () => running ? -1 : writes;
+    const fresh = (asked) => asked >= 0 && asked === writes && !running;
+    return { change, value: (server) => wanted === null ? !!server : wanted, stamp, fresh };
   }
   return { describeSync, targetText, createToggle };
 })();

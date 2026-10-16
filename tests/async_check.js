@@ -38,6 +38,14 @@ async function syncToggle() {
   assert.deepStrictEqual(calls, [true, false], "writes are serialized");
   replies.shift()({ _status: 200 }); await run;
   assert.strictEqual(toggle.value(false), false);
+  // A status asked for before a write (or during one) is older than it: not drawn.
+  const before = toggle.stamp();
+  assert.ok(toggle.fresh(before), "nothing written since");
+  const again = toggle.change(true);
+  assert.ok(!toggle.fresh(toggle.stamp()), "asked while a write runs");
+  replies.shift()({ _status: 200 }); await again;
+  assert.ok(!toggle.fresh(before), "asked before the write that has ended since");
+  assert.ok(toggle.fresh(toggle.stamp()));
 }
 async function attachments() {
   let calls = 0, aborted = false;
