@@ -791,6 +791,23 @@ class CheckGitHub(TempState):
         (root / "main.tex").write_text("\\title{Second, longer}\n", encoding="utf-8")
         self.assertEqual(hub.title_of(root / "main.tex"), "Second, longer")
 
+    def test_changed_counts_what_autosave_would_record(self):
+        """A folder added without ignore rules has build output and LaTeX's auxiliary files
+        untracked, which are never committed: "N changed" would never clear."""
+        root = self.tmp / "added"
+        root.mkdir()
+        (root / "main.tex").write_text("a\n", encoding="utf-8")
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        (root / "main.tex").write_text("b\n", encoding="utf-8")         # recorded
+        (root / "new.tex").write_text("n\n", encoding="utf-8")           # recorded
+        (root / "main.aux").write_text("x", encoding="utf-8")            # never
+        (root / "main.synctex.gz").write_bytes(b"x")                    # never
+        (root / "build").mkdir()
+        (root / "build" / "main.pdf").write_bytes(b"%PDF")               # the output folder: never
+        self.assertEqual(hub.git_info(root)["changes"], 2)
+
     def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
         """A page that asks then must keep watching, or it never shows what was found."""
         from unittest import mock

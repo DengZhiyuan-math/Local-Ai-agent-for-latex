@@ -220,13 +220,16 @@ def git_info(root: Path) -> dict | None:
         return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
     shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)} if place.kind == "shared" else None
     try:
-        r = git("status", "--porcelain", "-b", "--", ".")
+        r = git("status", "--porcelain", "-z", "-b", "-uall", "--", ".")
     except (OSError, subprocess.SubprocessError):
         return None
     if r.returncode != 0:
         return None
-    lines = r.stdout.splitlines()
-    head = lines[0][3:] if lines and lines[0].startswith("## ") else ""
+    first = r.stdout.split("\0", 1)[0]
+    head = first[3:] if first.startswith("## ") else ""
+    # What autosave would record, as the editor counts it: not build output or LaTeX's
+    # auxiliary files, which a folder added without ignore rules has many of.
+    changed = sources.recordable_changes(r.stdout, toplevel, place.prefix + pdf_path(root)[2].strip("/"))
     head = re.sub(r"^(No commits yet on|Initial commit on) ", "", head)
     branch = re.split(r"\.\.\.| ", head)[0] if head else ""
     ahead = re.search(r"ahead (\d+)", head)
@@ -235,7 +238,7 @@ def git_info(root: Path) -> dict | None:
     web = sync["github"]
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
-    return {"branch": branch, "changes": len(lines) - 1,
+    return {"branch": branch, "changes": len(changed),
             "ahead": int(ahead.group(1)) if ahead else 0,
             "behind": int(behind.group(1)) if behind else 0, "github": web,
             "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"], **(shared or {})}

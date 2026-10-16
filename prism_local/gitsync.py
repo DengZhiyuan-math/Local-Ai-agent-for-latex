@@ -301,8 +301,7 @@ class GitSync:
         """Paths (from the top) with changes worth recording: no build output, no huge files."""
         out = self._ok("status", "--porcelain", "-z", "-uall", "--", self._pathspec(), timeout=30)
         top, outdir = self.top or self.root_fn(), self.prefix + self.outdir_fn().strip("/")
-        return sorted({path for xy, path in sources.parse_status(out)
-                       if sources.recordable(path, xy == "??", top, outdir)})
+        return sources.recordable_changes(out, top, outdir)
 
     def commit(self, paths: list[str], message: str) -> bool:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""

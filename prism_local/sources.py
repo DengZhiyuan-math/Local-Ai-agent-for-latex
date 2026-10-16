@@ -36,6 +36,13 @@ def recordable(path: str, untracked: bool, top: Path, outdir: str) -> bool:
         return False
 
 
+def recordable_changes(out: str, top: Path, outdir: str) -> list[str]:
+    """The paths in `git status --porcelain -z` output (-b's "## branch" line left out)
+    that autosave would record (recordable): what "changed" means everywhere, sorted."""
+    return sorted({path for xy, path in parse_status(out)
+                   if xy != "##" and recordable(path, xy == "??", top, outdir)})
+
+
 def gitignore(outdir: str = "build", shared: bool = False) -> list[str]:
     """The lines of a new repository's .gitignore: build output, LaTeX's auxiliary files,
     a save half-way, macOS's folder files; in a repository shared by several projects also
