@@ -68,9 +68,12 @@ def clipboard_files() -> list[Path]:
 
 
 def trash(paths: list[Path]) -> None:
-    """Move these files and folders to the Recycle Bin or Trash, where they can be restored."""
+    """Move these files and folders to the Recycle Bin or Trash, where they can be restored.
+    With PRISM_TRASH_DIR set (the browser checks set it), they go into that folder instead."""
     paths = [Path(p) for p in paths]
-    if os.name == "nt":
+    if os.environ.get("PRISM_TRASH_DIR"):
+        _move_into(Path(os.environ["PRISM_TRASH_DIR"]), paths)
+    elif os.name == "nt":
         _win_trash(paths)
     elif sys.platform == "darwin":
         _jxa(MAC_TRASH, [str(p) for p in paths])
@@ -80,6 +83,19 @@ def trash(paths: list[Path]) -> None:
             raise OSError(p.stderr.strip() or "could not move it to the Trash")
     else:
         raise Unsupported("no Trash is available here (gio is missing); delete it in your file manager")
+
+
+def _move_into(folder: Path, paths: list[Path]) -> None:
+    """Move each path into `folder`, as "name (2)" and so on when the name is taken there."""
+    folder.mkdir(parents=True, exist_ok=True)
+    for p in paths:
+        if not p.exists() and not p.is_symlink():
+            raise FileNotFoundError(f"not found: {p}")
+        dest, n = folder / p.name, 1
+        while dest.exists() or dest.is_symlink():
+            n += 1
+            dest = folder / f"{p.stem} ({n}){p.suffix}"
+        shutil.move(str(p), str(dest))
 
 
 # ---------------------------------------------------------------- Windows
