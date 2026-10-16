@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-16",
+  "range": "5376989..aa54609",
+  "commits": 24,
+  "pushed": false,
+  "environment": {
+    "os": "Windows 11",
+    "python": "3.14.2",
+    "node": "24.19.0",
+    "chrome": "155.0.8059.80",
+    "git": "2.45.1",
+    "codex_cli": "0.163.0-alpha.10.2"
+  },
+  "full_suite": {
+    "command": "PRISM_SKIP_TEX=1 python -m unittest discover -s tests -v",
+    "ran": 502,
+    "passed": 472,
+    "skipped": 30,
+    "failures": 0,
+    "errors": 0,
+    "seconds": 444.469,
+    "resource_warnings": 0,
+    "record": "full-tests.txt"
+  },
+  "native_codex": {
+    "env": "PRISM_NATIVE_CODEX=1",
+    "test_codex_runtime": 9,
+    "test_backend_contracts": 13,
+    "test_codex_discovery": 14,
+    "failures": 0,
+    "skipped": 0,
+    "record": "native-tests.txt"
+  },
+  "real_tex": {
+    "test_build": {
+      "ran": 34,
+      "skipped": 2
+    },
+    "test_synctex": {
+      "ran": 8,
+      "skipped": 0
+    },
+    "failures": 0,
+    "record": "tex-tests.txt"
+  },
+  "browser": {
+    "runs": 3,
+    "all_passed": true,
+    "checks": {
+      "editor files menu": 16,
+      "turn reload, double send": 6,
+      "turn view": 8,
+      "saving": 7,
+      "home menu": 8,
+      "pages load": 10,
+      "many pages": 6,
+      "trash folder": 1,
+      "clipboard file": 1
+    },
+    "record": "browser.txt"
+  },
+  "stress": {
+    "test": "test_sync_buttons.SyncButtons.test_buttons_while_typing_and_a_coauthor_pushes",
+    "completed": 100,
+    "passed": 100,
+    "workers": 2,
+    "seconds": 696.513,
+    "record": "stress-results.json"
+  },
+  "user_checked": [
+    "a real Codex Edit turn in the editor",
+    "Update: restart"
+  ]
+}

@@ -1,0 +1,56 @@
+test_commented_out_and_body_packages_do_not_count (test_build.Engine.test_commented_out_and_body_packages_do_not_count) ... ok
+test_magic_comment (test_build.Engine.test_magic_comment) ... ok
+test_packages_that_need_another_engine (test_build.Engine.test_packages_that_need_another_engine) ... ok
+test_plain_documents_use_pdflatex (test_build.Engine.test_plain_documents_use_pdflatex) ... ok
+test_prism_json_wins (test_build.Engine.test_prism_json_wins) ... ok
+test_the_projects_own_class_is_read (test_build.Engine.test_the_projects_own_class_is_read) ... ok
+test_broken_aux_is_recognised (test_build.OutputFolder.test_broken_aux_is_recognised) ... ok
+test_clean_removes_only_what_builds_leave (test_build.OutputFolder.test_clean_removes_only_what_builds_leave) ... ok
+test_feedback_ignores_logs_and_the_pdf (test_build.OutputFolder.test_feedback_ignores_logs_and_the_pdf) ... ok
+test_mirror_dirs_for_included_files (test_build.OutputFolder.test_mirror_dirs_for_included_files) ... ok
+test_aux_citations_follow_included_files (test_build.Parsing.test_aux_citations_follow_included_files) ... ok
+test_biber_messages (test_build.Parsing.test_biber_messages) ... ok
+test_bibtex_messages (test_build.Parsing.test_bibtex_messages) ... ok
+test_file_line_errors (test_build.Parsing.test_file_line_errors) ... ok
+test_log_warnings_are_attributed_to_source_files (test_build.Parsing.test_log_warnings_are_attributed_to_source_files) ... ok
+test_a_program_left_behind_does_not_hold_the_build (test_build.Platform.test_a_program_left_behind_does_not_hold_the_build)
+A program the build started outlives the kill (re-parented, so taskkill /T and ... ok
+test_a_program_that_cannot_start_is_explained (test_build.Platform.test_a_program_that_cannot_start_is_explained) ... ok
+test_ascii_alias_for_names_the_code_page_cannot_spell (test_build.Platform.test_ascii_alias_for_names_the_code_page_cannot_spell) ... ok
+test_missing_engine_is_explained (test_build.Platform.test_missing_engine_is_explained) ... ok
+test_shell_commands_never_run_in_wsl (test_build.Platform.test_shell_commands_never_run_in_wsl) ... ok
+test_shell_commands_without_bash (test_build.Platform.test_shell_commands_without_bash) ... skipped 'Linux and macOS'
+test_stopping_ends_the_programs_a_program_started (test_build.Platform.test_stopping_ends_the_programs_a_program_started) ... skipped 'process groups: Linux and macOS'
+test_tex_is_found_where_distributions_install_it (test_build.Platform.test_tex_is_found_where_distributions_install_it)
+A server started from a desktop menu has no TeX on PATH (no ~/.bashrc). ... ok
+test_a_broken_aux_from_an_earlier_build_is_repaired (test_build.RealBuilds.test_a_broken_aux_from_an_earlier_build_is_repaired) ... ok
+test_biber_in_a_chinese_folder (test_build.RealBuilds.test_biber_in_a_chinese_folder) ... ok
+test_biblatex_with_biber (test_build.RealBuilds.test_biblatex_with_biber) ... ok
+test_bibtex_and_cross_references (test_build.RealBuilds.test_bibtex_and_cross_references) ... ok
+test_bibtex_in_a_chinese_folder (test_build.RealBuilds.test_bibtex_in_a_chinese_folder) ... ok
+test_ctex_in_a_chinese_folder (test_build.RealBuilds.test_ctex_in_a_chinese_folder)
+Fails on a TeX distribution whose ctex is newer than its LaTeX kernel ("Support ... ok
+test_errors_draft_goes_on_and_strict_stops (test_build.RealBuilds.test_errors_draft_goes_on_and_strict_stops) ... ok
+test_fontspec_documents_are_built_with_xelatex (test_build.RealBuilds.test_fontspec_documents_are_built_with_xelatex) ... ok
+test_index_glossary_and_nomenclature (test_build.RealBuilds.test_index_glossary_and_nomenclature) ... ok
+test_stop_and_time_limit (test_build.RealBuilds.test_stop_and_time_limit) ... ok
+test_the_projects_own_bst_and_included_subfolders (test_build.RealBuilds.test_the_projects_own_bst_and_included_subfolders) ... ok
+
+----------------------------------------------------------------------
+Ran 34 tests in 25.695s
+
+OK (skipped=2)
+test_bibliography_goes_to_the_bib_entry (test_synctex.GeneratedFiles.test_bibliography_goes_to_the_bib_entry) ... ok
+test_contents_go_to_the_nearest_source_line (test_synctex.GeneratedFiles.test_contents_go_to_the_nearest_source_line) ... ok
+test_a_changed_file_is_read_again_and_an_unchanged_one_is_not (test_synctex.Index.test_a_changed_file_is_read_again_and_an_unchanged_one_is_not) ... ok
+test_damaged_data_says_build_again_and_is_read_once (test_synctex.Index.test_damaged_data_says_build_again_and_is_read_once)
+A click while the engine still writes the file, or after a crash: a truncated or ... ok
+test_no_file_yet_says_build_first (test_synctex.Index.test_no_file_yet_says_build_first) ... ok
+test_switching_documents_even_when_timestamps_match (test_synctex.Index.test_switching_documents_even_when_timestamps_match) ... ok
+test_a_real_build_goes_from_source_to_pdf_and_back (test_synctex.SourceAndBack.test_a_real_build_goes_from_source_to_pdf_and_back) ... ok
+test_forward_and_inverse_on_a_written_file (test_synctex.SourceAndBack.test_forward_and_inverse_on_a_written_file) ... ok
+
+----------------------------------------------------------------------
+Ran 8 tests in 1.922s
+
+OK
