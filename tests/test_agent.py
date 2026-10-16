@@ -611,6 +611,32 @@ class Snapshots(unittest.TestCase):
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
 
+    def test_no_undo_while_another_turn_runs(self):
+        """What Undo wrote would be the running turn's change (its diff, its Undo)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+            release = threading.Event()
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    if job.prompt.startswith("first"):
+                        (job.root / "a.tex").write_bytes(b"ONE\n")
+                    else:
+                        release.wait(10)
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            first = wait_done(m.jobs[m.start("first", None, "edit")["job"]])
+            second = m.jobs[m.start("second", None, "edit")["job"]]
+            r = m.undo(first["turn"])
+            self.assertTrue(r.get("busy"))
+            self.assertIn("once this one has ended", r["error"])
+            self.assertEqual((root / "a.tex").read_bytes(), b"ONE\n", "nothing was undone")
+            release.set()
+            self.assertEqual(wait_done(second)["changed"], [], "the second turn changed nothing")
+            self.assertEqual(m.undo(first["turn"])["restored"], ["a.tex"], "after it, Undo works")
+
     def test_a_past_turn_keeps_only_what_undo_needs(self):
         """A turn's events (a written file streams its whole text) are kept while a page
         may still read them; for Undo, only the files the turn changed, as they were."""

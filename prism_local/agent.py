@@ -368,6 +368,10 @@ class AgentManager:
         past = self.turns.get(turn)
         if not past:
             return {"error": "unknown turn"}
+        # Not while a turn runs: what Undo writes would be taken for that turn's own change
+        # (its diff, its Undo, and a backend that cannot keep to its scope would revert it).
+        if self.busy():
+            return {"busy": True, "error": "The agent is working: undo the earlier turn once this one has ended"}
         rels = snapshot.changed_paths(past.before, past.after)
         if not self.writes.acquire(timeout=UNDO_WAIT):
             return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
