@@ -122,17 +122,41 @@ class Registry(TempState):
         self.assertTrue(root.exists())
         self.assertFalse(new.exists())
 
+    def test_the_list_can_change_while_a_folder_moves_and_the_change_is_kept(self):
+        """The move runs without the list's lock: another window pinning or opening a
+        project meanwhile neither waits for it nor is written over."""
+        root, new, other = self.tmp / "paper", self.tmp / "renamed", self.tmp / "other"
+        root.mkdir()
+        other.mkdir()
+        registry.touch(root)
+        registry.touch(other)
+        rename, during = os.rename, []
+
+        def slow_rename(source, target):
+            t = time.monotonic()
+            registry.update_projects(lambda d: d["projects"][-1].update(pinned=True))   # another window
+            during.append(time.monotonic() - t)
+            return rename(source, target)
+
+        with mock.patch.object(registry.os, "rename", side_effect=slow_rename):
+            registry.move_folder(root, new)
+        self.assertLess(during[0], 2, "the change waited for the move")
+        paths = {e["path"]: e for e in registry.load_projects()["projects"]}
+        self.assertEqual(set(paths), {str(new), str(other)})
+        self.assertTrue(paths[str(other)].get("pinned"), "the other window's change was written over")
+        self.assertEqual(list((registry.state_dir() / "moves").glob("*.json")), [])
+
     def test_metadata_write_failure_rolls_the_folder_back(self):
         root, new = self.tmp / "paper", self.tmp / "renamed"
         root.mkdir()
         (root / "main.tex").write_text("paper")
         registry.touch(root)
-        write = registry.write_json
+        write = registry.write_state
         def fail_list(file, data):
             if file == registry._registry_path():
                 raise PermissionError("fixture: metadata is locked")
             return write(file, data)
-        with mock.patch.object(registry, "write_json", side_effect=fail_list):
+        with mock.patch.object(registry, "write_state", side_effect=fail_list):
             with self.assertRaisesRegex(OSError, "restored"):
                 registry.move_folder(root, new)
         self.assertEqual((root / "main.tex").read_text(), "paper")
@@ -144,7 +168,7 @@ class Registry(TempState):
         root, new = self.tmp / "paper", self.tmp / "renamed"
         root.mkdir()
         registry.touch(root)
-        write, rename = registry.write_json, os.rename
+        write, rename = registry.write_state, os.rename
         def fail_list(file, data):
             if file == registry._registry_path():
                 raise PermissionError("fixture: metadata is locked")
@@ -153,7 +177,7 @@ class Registry(TempState):
             if source == new:
                 raise PermissionError("fixture: rollback is locked")
             return rename(source, target)
-        with mock.patch.object(registry, "write_json", side_effect=fail_list), \
+        with mock.patch.object(registry, "write_state", side_effect=fail_list), \
                 mock.patch.object(registry.os, "rename", side_effect=fail_rollback):
             with self.assertRaises(registry.MoveIncomplete) as raised:
                 registry.move_folder(root, new)
