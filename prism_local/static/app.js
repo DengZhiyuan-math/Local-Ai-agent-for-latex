@@ -98,7 +98,10 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 window.addEventListener("focus", () => loadSnippets());
 
 cm.getWrapperElement().style.display = "none";
-cm.on("change",() => { const t = activeTab(); if (t) { updateTabState(t); scheduleSave(t); } });
+cm.on("change", (ed, ch) => {
+  const t = activeTab(); if (t) { updateTabState(t); scheduleSave(t); }
+  if (ch.origin !== "setValue") stopFollowing();      // you typed (a reload from disk does not count)
+});
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
 
 function modeFor(path) { return path.endsWith(".md") ? "markdown" : "prism-stex"; }
@@ -1513,7 +1516,7 @@ const AV = {
     const v = this.view();
     v.setOption("mode", modeFor(path));
     $("#agent-view-title").textContent = `${name === "Write" ? "Writing" : "Editing"} ${path}`;
-    $("#agent-view").hidden = this.hidden || !C.follow || !Turn.mayFollow({ started: C.followOpened, current: openAsked, focused: cm.hasFocus(), hidden: this.hidden });
+    $("#agent-view").hidden = !Turn.mayFollow({ started: C.followOpened, current: openAsked, touched: !C.follow, hidden: this.hidden });
     v.setValue(""); v.refresh();
     if (name === "Write") { this.base = ""; return; }
     // An edit changes the file as it is on disk.
@@ -1580,15 +1583,19 @@ const AV = {
     $("#agent-view").hidden = true;
     // Show the result where it is, unless you hid the agent's view.
     if (!S.files.some((f) => f.path === path)) return;
-    if (C.job === turnJob && C.follow && Turn.mayFollow({ started: C.followOpened, current: openAsked, focused: cm.hasFocus(), hidden: this.hidden })) {
+    if (C.job === turnJob && Turn.mayFollow({ started: C.followOpened, current: openAsked, touched: !C.follow, hidden: this.hidden })) {
       await openFile(path, line, true); C.followOpened = openAsked;
     } else chatAppend(`<a data-file="${esc(path)}" data-line="${line}">Jump to ${esc(path)}:${line}</a>`, "card");
   },
 };
 
+// Turning to something else while the agent works ends following it: focus moved out of the
+// editor (its own view excepted), or typing in the message box or the editor.
+function stopFollowing() { if (C.job) { C.follow = false; $("#agent-view").hidden = true; } }
 document.addEventListener("focusin", (e) => {
-  if (C.job && !cm.getWrapperElement().contains(e.target)) { C.follow = false; $("#agent-view").hidden = true; }
+  if (!cm.getWrapperElement().contains(e.target) && !$("#agent-view").contains(e.target)) stopFollowing();
 });
+$("#chat-input").addEventListener("input", stopFollowing);
 
 /* Files added to a message: the + button, files dragged onto the panel, an image pasted
    into the box. Each is saved in the project's prism-uploads/ folder (/api/upload),

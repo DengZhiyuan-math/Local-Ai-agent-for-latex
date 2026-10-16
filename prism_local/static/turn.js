@@ -163,7 +163,10 @@ const Turn = (() => {
       : e.error || `${e.subtype || "exit " + e.exit}${e.stderr ? "\n" + e.stderr : ""}`;
     return { outcome, error };
   }
-  const mayFollow = ({ started, current, focused, hidden }) => started === current && focused && !hidden;
+  // The editor goes along with the agent's steps while you have not turned to something else
+  // since the turn began (`touched`: typed, or moved the focus out of the editor) and have
+  // not opened another file.
+  const mayFollow = ({ started, current, touched, hidden }) => started === current && !touched && !hidden;
   return { create, needsCompile, pollFailed, pollDelay, result, mayFollow };
 })();
 

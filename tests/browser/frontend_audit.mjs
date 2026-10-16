@@ -137,6 +137,23 @@ try {
       throw Error(JSON.stringify({ sourceLength: message.dataset.md?.length, replacements }));
     return true;`));
   check("performance changes raise no page errors", p.errors.length === 0);
+  check("a turn you leave alone shows the agent's step and follows it to its file", await p.ev(`
+    await openFile("sec/a.tex"); $("#chat-input").focus();          // where a message is sent from
+    C.job = 9199; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
+    await AV.begin("follow-test", "Write", "main.tex");
+    const shown = !$("#agent-view").hidden;
+    await AV.end("follow-test", true);
+    const followed = shown && S.active === "main.tex";
+    C.job = null; return followed;`));
+  check("typing on in the message box ends following the agent", await p.ev(`
+    await openFile("sec/a.tex"); $("#chat-input").focus();
+    C.job = 9198; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
+    await AV.begin("type-test", "Write", "main.tex");
+    $("#chat-input").value = "next"; $("#chat-input").dispatchEvent(new Event("input"));
+    const hidden = $("#agent-view").hidden;
+    await AV.end("type-test", true);
+    const kept = hidden && S.active === "sec/a.tex" && $("#chat-log").textContent.includes("Jump to main.tex");
+    $("#chat-input").value = ""; C.job = null; return kept;`));
   check("typing in chat keeps the selected file and focus when an agent step ends", await p.ev(`
     await openFile("sec/a.tex"); C.job = 9200; C.follow = true; C.followOpened = openAsked;
     await AV.begin("focus-test", "Write", "main.tex");
