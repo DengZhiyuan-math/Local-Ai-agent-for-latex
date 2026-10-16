@@ -91,5 +91,20 @@ try {
     await followTurn(9003, "slow", "edit"); Q.events = real;
     return $("#chat-log").textContent.includes("result is unknown") && !document.querySelector('[data-undo="9003"]');`));
   check("turn lifecycle raises no page errors", p.errors.length === 0);
+  check("attachments and a draft added while sending remain for the next message", await p.ev(`
+    const realAgent = Q.agent, realEvents = Q.events; let release;
+    ATT.files = [{ id: 100, name: "first.txt", path: "first.txt", size: 1 }];
+    $("#chat-input").value = "first message";
+    Q.agent = () => new Promise(r => { release = r; });
+    Q.events = async () => ({ _status: 200, done: true, events: [{ t: "done", outcome: "ok", exit: 0, changed: [] }] });
+    const sending = sendMessage();
+    for (let i = 0; i < 100 && !release; i++) await new Promise(r => setTimeout(r, 10));
+    if (!release) throw Error("message was not sent");
+    ATT.files.push({ id: 101, name: "next.txt", path: "next.txt", size: 2 });
+    $("#chat-input").value = "next draft";
+    release({ _status: 200, job: 9004 }); await sending;
+    const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && $("#chat-input").value === "next draft";
+    ATT.files = []; ATT.render(); $("#chat-input").value = ""; Q.agent = realAgent; Q.events = realEvents;
+    return kept;`));
 } finally { await p.close(); }
 process.exitCode = failures ? 1 : 0;

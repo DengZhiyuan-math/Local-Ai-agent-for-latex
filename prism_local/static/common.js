@@ -26,7 +26,7 @@ function stopForProject() {
 }
 // Never throws: when the server cannot be reached, the answer is {_status: 0, error}, so
 // every caller handles it like any other failed request (and re-enables its buttons).
-async function api(path, body) {
+async function api(path, body, options = {}) {
   if (foreignProject) return { _status: 409, other_project: true, error: "Reopen this project from Home." };
   if (projectKey && (path.startsWith("/api/agent") || path.startsWith("/api/files/"))) {
     if (body !== undefined) body = { ...body, project_key: projectKey };
@@ -36,6 +36,7 @@ async function api(path, body) {
     method: "POST", headers: { "Content-Type": "application/json", "X-Prism-Local": "1" },
     body: JSON.stringify(body),
   };
+  if (options.signal) opts.signal = options.signal;
   if (projectKey) opts.headers = { ...opts.headers, "X-Prism-Project": projectKey };
   let r;
   try { r = await fetch(path, opts); } catch { return { _status: 0, error: "server not reachable" }; }

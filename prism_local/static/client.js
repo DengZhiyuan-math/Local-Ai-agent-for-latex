@@ -37,7 +37,7 @@ const Client = (() => {
       saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),
       // the Files menu: one of FILE_ACTIONS
       fileAction: (action, body) => post("/api/files/" + action, body),
-      upload: ({ name, data, destination }) => post("/api/upload", { name, data, destination }),
+      upload: ({ name, data, destination, signal }) => api("/api/upload", { name, data, destination }, { signal }),
       uploadSync: (paths) => get("/api/upload/sync", { paths: paths.join("\n") }),
       diff: (path) => get("/api/diff", { path }),
       // the build and the PDF

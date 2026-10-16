@@ -418,15 +418,20 @@ async function trashItems(target) {
 }
 
 const MAX_UPLOAD_SIZE = 25 * 1024 * 1024;
-async function uploadFile(file, destination = "attachment") {
+async function uploadFile(file, destination = "attachment", signal) {
   if (file.size > MAX_UPLOAD_SIZE) throw new Error("File is larger than 25 MB.");
   const data = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
     reader.onerror = () => reject(reader.error);
+    const abort = () => { reader.abort(); reject(new DOMException("Upload cancelled", "AbortError")); };
+    reader.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
+    reader.onloadend = () => signal?.removeEventListener("abort", abort);
+    if (signal?.aborted) return abort();
+    signal?.addEventListener("abort", abort, { once: true });
     reader.readAsDataURL(file);
   });
-  const r = await Q.upload({ name: file.name || "pasted.png", data, destination });
+  const r = await Q.upload({ name: file.name || "pasted.png", data, destination, signal });
   if (r.error || !r.path) throw new Error(r.error || "Upload failed.");
   return r;
 }
@@ -1584,6 +1589,10 @@ const AV = {
    reads them with its file tools (Claude Code reads PDFs and images too). */
 const ATT = {
   files: [],             // {id, name, size, path|null (uploading), error}
+  remove(id) {
+    this.files.find((f) => f.id === id)?.controller?.abort();
+    this.files = this.files.filter((f) => f.id !== id); this.render();
+  },
   seq: 0,
 
   render() {
@@ -1597,7 +1606,7 @@ const ATT = {
   sync: new Map(),       // path -> {state, message}
   polling: false,
   showSync() {
-    const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed" };
+    const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed", unknown: "? sync unknown" };
     document.querySelectorAll(".att[data-path]").forEach((el) => {
       const s = this.sync.get(el.dataset.path); if (!s) return;
       el.dataset.sync = s.state;
@@ -1606,7 +1615,7 @@ const ATT = {
     });
   },
   watch(path, s) {
-    this.sync.set(path, s); this.showSync();
+    this.sync.set(path, { ...s, at: Date.now() }); this.showSync();
     if (!this.polling) this.pollSync();
   },
   // Every 1.5 s (15 s while the tab is hidden), one request at a time, while an upload syncs.
@@ -1614,6 +1623,10 @@ const ATT = {
     this.polling = true;
     try {
       for (;;) {
+        if (foreignProject) return;
+        for (const [path, state] of this.sync) if (state.state === "syncing" && Date.now() - state.at >= 120000)
+          this.sync.set(path, { state: "unknown", message: "Sync status is unknown. Check the GitHub menu." });
+        this.showSync();
         await nap(1500, 15000);
         const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
         if (!open.length) return;
@@ -1621,7 +1634,7 @@ const ATT = {
         if (r._status !== 200) continue;
         for (const p of open) {
           if (!r[p]) continue;
-          this.sync.set(p, r[p]);
+          this.sync.set(p, { ...r[p], at: this.sync.get(p).at });
           if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
         }
         this.showSync();
@@ -1635,9 +1648,11 @@ const ATT = {
     for (const file of fileList) {
       const f = { id: ++this.seq, name: file.name || "pasted.png", size: file.size, path: null, error: null };
       if (file.size > MAX_UPLOAD_SIZE) { toast(`${f.name} is larger than 25 MB.`); continue; }
+      f.controller = new AbortController();
       this.files.push(f); this.render();
       try {
-        const r = await uploadFile(file);
+        const r = await uploadFile(file, "attachment", f.controller.signal);
+        if (!this.files.includes(f)) continue;
         f.path = r.path; f.size = r.size;
         if (r.sync) this.watch(r.path, r.sync);
       } catch (e) { f.error = String(e.message || e); }
@@ -1658,7 +1673,7 @@ $("#chat-add").onclick = () => $("#chat-file").click();
 $("#chat-file").onchange = (e) => { ATT.add([...e.target.files]); e.target.value = ""; };
 $("#chat-files").addEventListener("click", (e) => {
   const b = e.target.closest("[data-att]"); if (!b) return;
-  ATT.files = ATT.files.filter((f) => f.id !== +b.dataset.att); ATT.render();
+  ATT.remove(+b.dataset.att);
 });
 // A pasted image (a screenshot) becomes a file too; pasted text stays text.
 $("#chat-input").addEventListener("paste", (e) => {
@@ -1709,8 +1724,9 @@ async function sendMessage() {
   const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
     project_key: P.projectKey, attachments: sentFiles.map((f) => f.path) });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
-  $("#chat-input").value = ""; updateScope();
-  ATT.files = []; ATT.render();
+  if ($("#chat-input").value.trim() === text) $("#chat-input").value = ""; updateScope();
+  const sentIds = new Set(sentFiles.map((f) => f.id));
+  ATT.files = ATT.files.filter((f) => !sentIds.has(f.id)); ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
   const extra = [provLabel(), r.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
   chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");

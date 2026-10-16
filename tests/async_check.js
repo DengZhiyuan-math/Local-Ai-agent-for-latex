@@ -39,4 +39,17 @@ async function syncToggle() {
   replies.shift()({ _status: 200 }); await run;
   assert.strictEqual(toggle.value(false), false);
 }
-account().then(usageAndCatalog).then(syncToggle).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function attachments() {
+  let calls = 0, aborted = false;
+  const ctx = { document: { querySelectorAll: () => [] }, $: () => ({}), MAX_UPLOAD_SIZE: 25000000,
+    Date: { now: () => 200000 }, nap: async () => {}, toast: () => {}, foreignProject: false,
+    Q: { uploadSync: async () => { if (++calls > 5) throw Error("attachment polling did not stop"); return { _status: 503 }; } } };
+  const att = vm.runInNewContext(section("const ATT = {", '\n$("#chat-add").onclick') + ";ATT", ctx);
+  att.sync.set("a.png", { state: "syncing", at: 0 });
+  await att.pollSync();
+  assert.strictEqual(att.sync.get("a.png").state, "unknown");
+  att.files = [{ id: 1, controller: { abort: () => { aborted = true; } } }];
+  att.render = () => {}; att.remove(1);
+  assert.ok(aborted && att.files.length === 0, "removing a pending upload aborts it");
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
