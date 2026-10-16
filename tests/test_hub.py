@@ -19,6 +19,8 @@ sys.path.insert(0, str(REPO / "prism_local"))
 import hub  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
+import repository  # noqa: E402
+import sharedrepo  # noqa: E402
 import instances  # noqa: E402
 import settings  # noqa: E402
 
@@ -348,7 +350,7 @@ class Create(TempState):
             with mock.patch.object(instances, "inspect", return_value=instances.State("ready",
                     {"url": "http://127.0.0.1:9/", "pid": pid})), \
                     mock.patch.object(instances.HTTP, "open") as asked:
-                hub.tell_editor(self.tmp)
+                publish.tell_editor(self.tmp)
             self.assertEqual(asked.called, told, pid)
 
     def test_git_info_of_some_or_all_projects(self):
@@ -597,7 +599,7 @@ class FolderSync(TempState):
         self.assertEqual(sorted(files), sorted([".gitattributes", ".gitignore", "prism-repo.json", "Answers- all/ex 1 sol/main.tex",
                                                 "练习/ex 1/main.tex", "练习/exam/main.tex"]))
         self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
-        self.assertTrue((repo / "练习" / "exam" / hub.SPLIT_BACKUP).is_dir())
+        self.assertTrue((repo / "练习" / "exam" / sharedrepo.SPLIT_BACKUP).is_dir())
         listed = {p["name"]: p for p in hub.list_projects()["projects"]}
         self.assertEqual(Path(listed["ex 1"]["path"]), repo / "练习" / "ex 1")
         self.assertEqual(listed["ex 1"]["tags"], [])
@@ -615,14 +617,14 @@ class FolderSync(TempState):
             self.assertEqual(hub.repo_kind(root)[0], "own", p["name"])
             self.assertNotIn(".git-prism", self.git(root, "status", "--porcelain"))
         self.assertIn("in one repository", self.git(repo / "练习" / "ex 1", "log", "--format=%s"))
-        self.assertTrue((repo / hub.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
+        self.assertTrue((repo / sharedrepo.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
         self.assertFalse((repo / "prism-repo.json").exists())
 
     def test_back_to_separate_repositories_failing_half_way_leaves_the_shared_one_whole(self):
         r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
         self.assertTrue(r["ok"], r["report"])
         repo = Path(hub.sync_plan(self.top["id"])["repo"])
-        real, fetched = hub.run_git, []
+        real, fetched = sharedrepo.run_git, []
 
         def second_fetch_fails(cwd, *args, **kw):
             if args[:1] == ("fetch",):
@@ -631,14 +633,14 @@ class FolderSync(TempState):
                     raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
             return real(cwd, *args, **kw)
 
-        with mock.patch.object(hub, "run_git", side_effect=second_fetch_fails):
+        with mock.patch.object(sharedrepo, "run_git", side_effect=second_fetch_fails):
             r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
         self.assertFalse(r["ok"])
         self.assertIn("the disk is full", " ".join(r["report"]))
         self.assertIn(f"{fetched[1]}: its own repository could not be made", r["report"], "which project")
         self.assertIn("Nothing was changed", " ".join(r["report"]))
         self.assertTrue((repo / ".git").is_dir(), "the shared repository is in place")
-        self.assertFalse((repo / hub.SHARED_BACKUP).exists())
+        self.assertFalse((repo / sharedrepo.SHARED_BACKUP).exists())
         for p in hub.list_projects()["projects"]:
             self.assertEqual(hub.repo_kind(Path(p["path"]))[0], "shared", p["name"])
             self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
@@ -658,7 +660,7 @@ class FolderSync(TempState):
         repos = {Path(hub.sync_plan(sub["id"])["repo"]) for sub in (self.ex, self.sol)}
         plan = hub.sync_plan(self.top["id"], "separate")
         self.assertEqual({Path(r["repo"]) for r in plan["projects"] if r["action"] == "splits"}, repos, plan)
-        real, last = hub.run_git, {r["path"] for r in plan["projects"] if r["action"] == "splits"
+        real, last = sharedrepo.run_git, {r["path"] for r in plan["projects"] if r["action"] == "splits"
                                     and Path(r["repo"]) == max(repos, key=str)}
 
         def fails_in_the_second(cwd, *args, **kw):
@@ -666,7 +668,7 @@ class FolderSync(TempState):
                 raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
             return real(cwd, *args, **kw)
 
-        with mock.patch.object(hub, "run_git", side_effect=fails_in_the_second):
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fails_in_the_second):
             # The plan orders the repositories; the failing one must come second.
             order = list(dict.fromkeys(r["repo"] for r in plan["projects"] if r["action"] == "splits"))
             self.assertEqual(Path(order[-1]), max(repos, key=str))
@@ -674,7 +676,7 @@ class FolderSync(TempState):
         self.assertFalse(r["ok"])
         for repo in repos:
             self.assertTrue((repo / ".git").is_dir(), f"{repo} is shared again")
-            self.assertFalse((repo / hub.SHARED_BACKUP).exists())
+            self.assertFalse((repo / sharedrepo.SHARED_BACKUP).exists())
         for p in hub.list_projects()["projects"]:
             self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
 
@@ -682,14 +684,14 @@ class FolderSync(TempState):
         r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
         self.assertTrue(r["ok"], r["report"])
 
-        real = hub.run_git
+        real = sharedrepo.run_git
 
         def fetch_fails(cwd, *args, **kw):
             if args[:1] == ("fetch",):
                 raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
             return real(cwd, *args, **kw)
-        with mock.patch.object(hub, "run_git", side_effect=fetch_fails), \
-                mock.patch.object(hub, "_remove", return_value=False):          # a program holds them
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fetch_fails), \
+                mock.patch.object(sharedrepo, "_remove", return_value=False):          # a program holds them
             r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
         self.assertFalse(r["ok"])
         said = " ".join(r["report"])
@@ -797,7 +799,7 @@ class FolderSync(TempState):
         root = self.projects / "ex 1"
         hub.git_init(root)
         (root / "huge.bin").write_bytes(b"x" * 4096)
-        repo = hub.Repository.find(root)
+        repo = repository.Repository.find(root)
         with mock.patch.object(publish.sources, "MAX_FILE", 1024), repo.changing():
             repo.ok("add", "-A")
             self.assertEqual(publish.unstage_big(repo), ["huge.bin"])
@@ -843,13 +845,13 @@ class FolderSync(TempState):
         import threading
         from concurrent.futures import ThreadPoolExecutor
         entered, release = threading.Event(), threading.Event()
-        real_apply = hub._apply_shared
+        real_apply = sharedrepo._apply_shared
         def paused(*args):
             entered.set()
             self.assertTrue(release.wait(5))
             return real_apply(*args)
         body = {"id": self.top["id"], "mode": "shared"}
-        with mock.patch.object(hub, "_apply_shared", side_effect=paused), ThreadPoolExecutor(max_workers=1) as pool:
+        with mock.patch.object(sharedrepo, "_apply_shared", side_effect=paused), ThreadPoolExecutor(max_workers=1) as pool:
             first = pool.submit(hub.apply_sync, body)
             try:
                 self.assertTrue(entered.wait(5))

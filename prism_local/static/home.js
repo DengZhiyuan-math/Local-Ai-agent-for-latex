@@ -156,7 +156,7 @@ function folderOptions(selected, { none = "— Not in a folder —", exclude = n
     .join("");
 }
 const currentFolder = () => (H.view.kind === "folder" ? H.view.id : "");
-// Like hub.disk_name: a folder name usable on disk.
+// Like sharedrepo.disk_name: a folder name usable on disk.
 const diskName = (name) => name.replace(/[<>:"\/\\|?*\x00-\x1f]/g, "-").replace(/^[ .]+|[ .]+$/g, "") || "folder";
 // The shared repository folder `fid` is in ({owner, repo, dir}: its own subdirectory), if any.
 function sharedRepo(fid) {
