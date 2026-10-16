@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
 from fsutil import metadata_paths, project_path
 import registry
+from errors import say
 import snapshot
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
@@ -202,7 +204,12 @@ class AgentManager:
         try:
             res = backend.run(job) or {}
         except Exception as e:  # noqa: BLE001 — report anything to the UI
-            job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
+            # A ValueError or an OSError is the backend saying what is wrong ("The API session
+            # does not belong to this project"), or a timeout: its words; anything else is a
+            # bug, named by its type.
+            said = say(e) if isinstance(e, (ValueError, OSError, subprocess.TimeoutExpired)) \
+                else f"{type(e).__name__}: {e}"
+            job.emit({"t": "error", "message": said})
             res = {"is_error": True}
         try:
             self._finish(job, backend, res, t0)

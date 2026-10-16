@@ -199,6 +199,24 @@ class DeepCode(Backend):
             project = project_path(root, ".deepcode/settings.json")
         except (ValueError, OSError):
             return "Deep Code settings must be inside this project"
+        # What the turn would find wrong only once it had started (turn_settings), said here,
+        # with the file: nothing is started for a turn that cannot run.
+        try:
+            if project.is_symlink():
+                return (f"Deep Code settings {project} must be a regular file of this project, "
+                        "not a link. Replace the link with the file.")
+            if project.is_file() and not isinstance(json.loads(project.read_bytes() or b"{}"), dict):
+                return f"Deep Code settings {project} must hold a JSON object ({{ … }}). Fix the file, or remove it."
+        except ValueError as e:
+            return f"Deep Code settings {project} are not valid JSON ({e}). Fix the file, or remove it."
+        except OSError as e:
+            return f"Deep Code settings {project} cannot be read: {e}"
+        inherited = user_settings().get("mcpServers") or {}
+        if inherited:
+            names = ", ".join(sorted(map(str, inherited))) if isinstance(inherited, dict) else "some"
+            return (f"Deep Code would bring the MCP servers of {Path.home() / '.deepcode' / 'settings.json'} "
+                    f"({names}) into this turn, which the editor cannot restrict. Remove them there, "
+                    "or start Deep Code with a profile that has none.")
         for source in (Path.home() / ".deepcode/settings.json", project):
             env = read_settings(source).get("env") or {}
             bad = sorted(k for k in env if selects_repository(k)) if isinstance(env, dict) else []

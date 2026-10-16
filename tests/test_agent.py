@@ -417,6 +417,25 @@ class DeepCodeBackend(unittest.TestCase):
     def call(self):
         return json.loads((self.home / "call.json").read_text(encoding="utf-8"))
 
+    def test_settings_a_turn_could_not_run_with_are_refused_before_it_starts(self):
+        """Not a bare JSONDecodeError once the turn has started: the file, and what to do."""
+        settings = self.root / ".deepcode" / "settings.json"
+        settings.parent.mkdir()
+        for text, said in (('{"env": ', "are not valid JSON"), ("[1, 2]", "must hold a JSON object")):
+            settings.write_text(text, encoding="utf-8")
+            r = self.m.start("go", None, "edit")
+            self.assertNotIn("job", r)
+            self.assertIn(str(settings), r["error"])
+            self.assertIn(said, r["error"])
+        settings.unlink()
+        user = self.home / ".deepcode" / "settings.json"
+        user.parent.mkdir()
+        user.write_text(json.dumps({"mcpServers": {"search": {"command": "x"}}}), encoding="utf-8")
+        r = self.m.start("go", None, "edit")
+        self.assertIn("MCP servers", r["error"])
+        self.assertIn("search", r["error"])
+        self.assertFalse((self.home / "call.json").exists(), "no turn was started")
+
     def test_project_code_is_deep_codes(self):
         from backend_deepcode import project_code
         # Values from Deep Code's own getProjectCode (cli.js 0.4.3), run in node.
