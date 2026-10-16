@@ -66,6 +66,31 @@ async function attachments() {
   assert.deepStrictEqual(cancelled, ["p-1", "p-2"], "removing a chip takes its upload back");
   assert.strictEqual(att.files.length, 0);
 }
+// What a page asks for outside api() names its project too, so another project that has
+// taken the port refuses it: the PDF (a header), a file opened in a new tab (the URL).
+async function projectBound() {
+  const asked = [];
+  const pv = vm.runInNewContext(fs.readFileSync(require.resolve("../prism_local/static/pdfview.js"), "utf8") + ";PV", {
+    pdfjsLib: { GlobalWorkerOptions: {} }, $: () => ({}), projectKey: "paper-1",
+    fetch: async (url, opts) => { asked.push(opts); return { ok: false }; } });
+  pv.main = "main.tex"; await pv.load(5, "main.tex");
+  assert.strictEqual(asked[0]?.headers?.["X-Prism-Project"], "paper-1", "the PDF names its project");
+  const Client = require("../prism_local/static/client.js");
+  assert.strictEqual(Client.assetUrl("figs/a b.png", "paper-1"), "/api/asset?path=figs%2Fa%20b.png&project_key=paper-1");
+  assert.strictEqual(Client.assetUrl("a.png", null), "/api/asset?path=a.png");
+  // After a restart, only this project's new server counts, not another one on the port;
+  // after a folder rename, the project in the renamed folder.
+  const wait = (answers, folder) => vm.runInNewContext(section("async function waitForNewServer(", "\nfunction reloadPage()") + ";waitForNewServer", {
+    S: { server: 1, watch: { path: "C:\\p\\paper" } }, projectKey: "paper-1",
+    fetch: async () => ({ ok: true, json: async () => answers.shift() }),
+    Util: { waitForRestart: async (probe, isNew) => { for (let i = 0; i < 3; i++) { const a = await probe(); if (a && isNew(a)) return true; } return false; } },
+  })(folder);
+  const other = { server: 2, project_key: "other-2", path: "C:\\p\\other" };
+  assert.notStrictEqual(await wait([other, other, other]), true, "another project's server is not this one's");
+  assert.strictEqual(await wait([other, { server: 3, project_key: "paper-1", path: "C:\\p\\paper" }]), true);
+  assert.strictEqual(await wait([other, { server: 3, project_key: "paper-v2-1", path: "C:\\p\\paper v2" }], "paper v2"), true);
+  assert.notStrictEqual(await wait([other, { server: 3, project_key: "x-3", path: "C:\\q\\paper v2" }, other], "paper v2"), true);
+}
 async function compilePreview() {
   let releasePreview, releaseBuild, calls = 0, shown = 0;
   const S = { active: "a.tex" }, ctx = { S, C: {}, BUILD: { mode: "draft" }, $: () => ({}),
@@ -116,4 +141,4 @@ async function manualSave() {
     $: () => ({ checked: true }), compile: () => builds++, toast: () => {}, Tabs: require("../prism_local/static/tabs.js") });
   await run(); assert.strictEqual(builds, 0, "a failed manual save must not trigger auto-compile");
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(projectBound).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

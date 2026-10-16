@@ -71,7 +71,11 @@ const Client = (() => {
 
   const FILE_ACTIONS = ["reveal", "copy", "paste", "rename", "new", "trash"];
 
-  return { create, query, FILE_ACTIONS };
+  // A project file opened in a new tab, which cannot send the X-Prism-Project header: the
+  // project is named in the URL, so another project that has taken the port refuses it.
+  const assetUrl = (path, projectKey) => "/api/asset" + query({ path, project_key: projectKey });
+
+  return { create, query, assetUrl, FILE_ACTIONS };
 })();
 
 // On a page (after common.js): its requests, Q.file(path) …

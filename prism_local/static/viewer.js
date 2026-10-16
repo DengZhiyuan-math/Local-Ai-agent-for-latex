@@ -1,6 +1,9 @@
 /* Pop-out PDF viewer: reloads on every build, SyncTeX both ways via pdfChannel. */
 "use strict";
 
+// The editor names its project in this tab's URL: this tab's requests then name it too,
+// and another project that has taken the port refuses them (common.js).
+bindProject(new URLSearchParams(location.search).get("project_key"));
 PV.init({ scaleKey: "scale.popout", standalone: true });   // ⌘F searches the PDF here
 
 function note(msg, warn) {
@@ -59,7 +62,9 @@ if (pdfChannel) {
   pdfChannel.onmessage = async (ev) => {
     const m = ev.data || {};
     if (m.type === "jumped") jumped(m);
-    else if (m.type === "reload") location.reload();      // the editor restarted with new code
+    // The editor restarted (new code, or a renamed folder, which names the project anew):
+    // loaded again without the old name, this tab learns it from its first poll.
+    else if (m.type === "reload") location.replace(location.pathname);
     else if (m.type === "close") window.close();          // "Show here" in the editor
     else if (m.type === "pdf") await loadPdf(m.mtime, m.main);
     else if (m.type === "forward") {

@@ -137,7 +137,7 @@ async function openFile(path, line, following = false) {
   if (foreignProject) return;
   if (C.job && !following) { C.follow = false; $("#agent-view").hidden = true; }
   if (S.files.some((f) => f.path === path && f.editable === false)) {
-    window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
+    window.open(Client.assetUrl(path, projectKey), "_blank", "noopener");
     return;
   }
   const asked = ++openAsked;
@@ -577,7 +577,7 @@ function renameProject() {
       if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
       r = await Q.renameProject(name);
       if (r._status === 200) {
-        if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(); }
+        if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(r.folder); }
         return reloadPage();
       }
     }
@@ -585,7 +585,7 @@ function renameProject() {
     if (r.moving) {
       // The folder is renamed too: the server stops, and starts again in it on this port.
       toast(`Renaming the folder to “${r.folder}”…`);
-      const ok = await waitForNewServer();
+      const ok = await waitForNewServer(r.folder);
       if (ok === true) return reloadPage();
       return toast("Could not rename the folder: " + ok);
     }
@@ -834,10 +834,15 @@ async function restartServer() {
   if (r.error) return r.error;
   return waitForNewServer();
 }
-// The server stopped to start again (restart, folder rename): wait until the new one answers.
-async function waitForNewServer() {
+// The server stopped to start again (restart, folder rename): wait until the new one answers,
+// and is this project's, not another that took the port meanwhile. After a folder rename
+// (`folder`, its new name) it is the project in the renamed folder, or in the old one if
+// renaming did not work.
+async function waitForNewServer(folder) {
   const tree = () => fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json());
-  return await Util.waitForRestart(tree, (t) => t.server !== S.server)
+  const moved = folder && S.watch?.path ? S.watch.path.replace(/[^\\/]+$/, () => folder) : null;
+  const ours = (t) => t.project_key === projectKey || (moved !== null && t.path === moved);
+  return await Util.waitForRestart(tree, (t) => t.server !== S.server && ours(t))
     || "The server did not come back. Reopen the project from the Home page.";
 }
 function reloadPage() {
@@ -1071,7 +1076,7 @@ $("#btn-pdf-here").onclick = () => {
 };
 function popOut() {
   POP.here = false;
-  popWin = window.open("/viewer", "prism-pdf");
+  popWin = window.open("/viewer" + Client.query({ project_key: projectKey }), "prism-pdf");
   if (popWin) popWin.focus();
 }
 $("#pdf-popout").onclick = (e) => { e.preventDefault(); popOut(); };

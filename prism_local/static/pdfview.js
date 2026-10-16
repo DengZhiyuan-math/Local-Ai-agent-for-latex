@@ -294,7 +294,9 @@ const PV = {
     if (!mtime) return true;
     let data;
     try {
-      const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""));
+      // Named for this page's project, as api() does: another project on the port refuses it.
+      const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""),
+        { headers: projectKey ? { "X-Prism-Project": projectKey } : {} });
       if (!res.ok) return seq !== this.seq;
       data = new Uint8Array(await res.arrayBuffer());
     } catch { return seq !== this.seq; }

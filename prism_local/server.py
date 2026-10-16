@@ -334,14 +334,16 @@ class Handler(httpbase.Handler):
         return self._get(path, q)      # errors: httpbase._answer
 
     def _get(self, path, q):
-        if self._foreign_project():
+        if self._foreign_project(q):
             return
         if path == "/api/ping":
             return self._json({"app": "prism-local", "root": str(PROJECT.root), "project_key": registry.project_key(PROJECT.root), "pid": os.getpid(),
                                "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
         if path == "/api/pdfstat":
             cfg = PROJECT.config
-            return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg)})
+            # project_key: the pop-out PDF polls only this, and so learns whose PDF it shows.
+            return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg),
+                               "project_key": registry.project_key(PROJECT.root)})
         if path == "/pdf":
             cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
@@ -484,8 +486,10 @@ class Handler(httpbase.Handler):
     def post(self, path, body):
         return self._post(path, body)      # errors: httpbase._answer
 
-    def _foreign_project(self):
-        key = self.headers.get("X-Prism-Project")
+    def _foreign_project(self, q=None):
+        """A page of another project (the port was reused) is refused. It names its project
+        in a header, or in the query where it cannot add one (a tab it opens, the pop-out PDF)."""
+        key = self.headers.get("X-Prism-Project") or (q.get("project_key") if q is not None else None)
         if key and key != registry.project_key(PROJECT.root):
             self._json({"error": "This port now belongs to another project. Reopen it from Home.",
                         "other_project": True}, 409)

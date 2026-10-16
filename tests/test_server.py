@@ -534,6 +534,25 @@ class Routes(unittest.TestCase):
         self.assertEqual((server.PROJECT.root / "main.tex").read_text(), "original\n")
         self.assertEqual(self.ask("/api/tree", headers={"X-Prism-Project": key})[0], 200)
 
+    def test_a_pdf_or_asset_of_another_project_is_refused(self):
+        """A pop-out PDF or a figure opened in a new tab names its project too (the query,
+        where a page cannot add a header): another project on the port refuses them."""
+        root = project({"main.tex": "x\n", "figure.png": "png"})
+        key = server.registry.project_key(root)
+        server.PROJECT.config.pdf.parent.mkdir(parents=True, exist_ok=True)
+        server.PROJECT.config.pdf.write_bytes(b"%PDF-1.4 mine")
+        # The pop-out PDF's poll says whose PDF it is (a reloaded pop-out learns it there).
+        self.assertEqual(self.ask("/api/pdfstat")[1]["project_key"], key)
+        for path in ("/pdf", "/api/asset?path=figure.png"):
+            sep = "&" if "?" in path else "?"
+            with self.subTest(path=path):
+                status, r = self.ask(f"{path}{sep}project_key=another-project")
+                self.assertEqual(status, 409)
+                self.assertTrue(r["other_project"])
+                self.assertEqual(self.ask(path, headers={"X-Prism-Project": "another-project"})[0], 409)
+                with HTTP.open(f"{self.url}{path}{sep}project_key={key}", timeout=5) as response:
+                    self.assertIn(response.read(), (b"%PDF-1.4 mine", b"png"))
+
     def test_compile_active_document_and_follow_its_pdf(self):
         root = copy_example()
         # A deterministic custom builder checks routing independently of installed TeX.
@@ -580,7 +599,8 @@ class Routes(unittest.TestCase):
         status, result = compile("broken.tex")
         self.assertEqual((status, result["exit"], result["main"], result["pdf_mtime"]),
                          (200, 1, "broken.tex", None))
-        self.assertEqual(request(url, "/api/pdfstat")[1], {"main": "broken.tex", "mtime": None})
+        self.assertEqual(request(url, "/api/pdfstat")[1], {"main": "broken.tex", "mtime": None,
+                                                           "project_key": server.registry.project_key(root)})
         self.assertEqual(request(url, "/pdf")[0], 404)
         for bad in ("../outside.tex", "/tmp/outside.tex", "build/main.tex", 123):
             self.assertEqual(compile(bad)[0], 400, bad)
