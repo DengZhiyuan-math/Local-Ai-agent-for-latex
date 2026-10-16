@@ -29,14 +29,14 @@ assert.deepStrictEqual(drawn, [["reply", 999]]);
 const elements = new Map();
 const dollar = (key) => {
   if (!elements.has(key)) elements.set(key, { _html: "", writes: 0, removeAttribute() {},
-    get innerHTML() { return this._html; }, set innerHTML(v) { this._html = v; this.writes++; } });
+    get innerHTML() { return this._html; }, set innerHTML(v) { this._html = v.replace(/&#39;/g, "'"); this.writes++; } });
   return elements.get(key);
 };
 const syncStart = source.indexOf("function htmlIfChanged(") >= 0 ? source.indexOf("function htmlIfChanged(") : source.indexOf("function renderSync(");
 const sync = vm.runInNewContext(source.slice(syncStart, source.indexOf("\nfunction syncMenu", syncStart)) + ";renderSync", {
   $: dollar, S: {}, SYNC_TOGGLE: { value: Boolean }, SYNC_NOTICE: {}, document: { querySelectorAll: () => [] },
-  esc: String, ago: () => "now", toast: () => {}, SyncState: require("../prism_local/static/syncstate.js") });
-const state = { own: true, remote: true, enabled: true, kept: [{ path: "a.tex", line: 1, who: "A" }], clash: [] };
+  esc: Util.escapeHtml, ago: () => "now", toast: () => {}, SyncState: require("../prism_local/static/syncstate.js") });
+const state = { own: true, remote: true, enabled: true, kept: [{ path: "a'b.tex", line: 1, who: "A" }], clash: [] };
 sync(state); sync(state);
 assert.strictEqual(dollar("#sync-kept").writes, 1, "unchanged sync menus preserve their buttons");
 const pdfSource = fs.readFileSync(require.resolve("../prism_local/static/pdfview.js"), "utf8");

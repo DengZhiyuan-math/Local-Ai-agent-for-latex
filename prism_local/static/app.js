@@ -635,7 +635,12 @@ const SYNC_TOGGLE = SyncState.createToggle({
   onError: (r) => toast("Could not change sync: " + (r.error || r._status)),
 });
 const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
-function htmlIfChanged(selector, html) { const el = $(selector); if (el.innerHTML !== html) el.innerHTML = html; }
+function htmlIfChanged(selector, html) {
+  const el = $(selector), previous = el._prismMarkup;
+  if (!previous || previous.source !== html || previous.rendered !== el.innerHTML) {
+    el.innerHTML = html; el._prismMarkup = { source: html, rendered: el.innerHTML };
+  }
+}
 function renderSync(st) {
   S.sync = st;
   $("#sync-box").hidden = false;
