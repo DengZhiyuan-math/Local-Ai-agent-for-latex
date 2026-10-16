@@ -154,14 +154,24 @@ class Tail:
     thread that reads it: not the whole of it, which a chatty CLI makes megabytes of."""
 
     def __init__(self, limit: int = 8000):
-        self.limit, self.parts, self.size, self.lock = limit, collections.deque(), 0, threading.Lock()
+        self.limit = max(0, limit)
+        self.parts, self.size, self.lock = collections.deque(), 0, threading.Lock()
 
     def add(self, text: str) -> None:
+        if not text or not self.limit:
+            return
         with self.lock:
+            text = text[-self.limit:]
             self.parts.append(text)
             self.size += len(text)
-            while self.size > self.limit and len(self.parts) > 1:
-                self.size -= len(self.parts.popleft())
+            while self.parts and self.size > self.limit:
+                first = self.parts.popleft()
+                excess = self.size - self.limit
+                if len(first) > excess:
+                    self.parts.appendleft(first[excess:])
+                    self.size = self.limit
+                else:
+                    self.size -= len(first)
 
     def __iter__(self):
         with self.lock:
@@ -450,8 +460,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     job.proc = proc
     def drain_err():
         try:
-            for line in proc.stderr:
-                err.add(line)
+            while chunk := proc.stderr.read(4096):
+                err.add(chunk)
         except (OSError, ValueError):
             pass
         finally:

@@ -315,6 +315,31 @@ class DeepCodeContract(unittest.TestCase):
 
 
 class VisualAttachments(unittest.TestCase):
+    def test_follow_up_keeps_one_copy_of_the_original_image(self):
+        api = FakeAPI([[{"choices": [{"delta": {"content": reply}}]}]
+                       for reply in ("image received", "the same image")])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00fixture")
+            backend = OpenAICompat("api", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                "default_model": "vision-fixture", "input_types": ["text", "image"]})
+            m = manager(root, api=backend)
+            first = wait_done(m.jobs[m.start("describe", None, "ask", attachments=["figure.png"])["job"]])
+            second = wait_done(m.jobs[m.start("explain that image", first["session_id"], "ask")["job"]])
+            self.assertEqual((first["exit"], second["exit"]), (0, 0))
+            self.assertEqual(first["session_id"], second["session_id"])
+            images = []
+            for request in api.requests:
+                images.append([part["image_url"]["url"]
+                               for message in request["body"]["messages"]
+                               if isinstance(message.get("content"), list)
+                               for part in message["content"] if part.get("type") == "image_url"])
+            self.assertEqual(len(images), 2)
+            self.assertEqual(len(images[0]), 1)
+            self.assertEqual(images[1], images[0], "the follow-up still sees the original image once")
+
     def test_api_receives_image_content_and_unsupported_inputs_are_rejected(self):
         api = FakeAPI([[{"choices": [{"delta": {"content": "image received"}}]}]])
         self.addCleanup(api.server_close)

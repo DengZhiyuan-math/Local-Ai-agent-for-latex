@@ -612,6 +612,15 @@ class RevertOutsideScope(unittest.TestCase):
 
 
 class Snapshots(unittest.TestCase):
+    def test_stderr_tail_keeps_the_exact_end_of_an_oversized_chunk(self):
+        tail = backends.Tail(limit=100)
+        tail.add("old\n")
+        tail.add("x" * 10000 + "last error")
+        self.assertEqual("".join(tail), "x" * 90 + "last error")
+        tail.add("\nnext")
+        self.assertEqual("".join(tail), "x" * 85 + "last error\nnext")
+        self.assertEqual(tail.size, 100)
+
     def test_undo_puts_back_the_exact_bytes(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -938,6 +947,22 @@ class Snapshots(unittest.TestCase):
         st = backend.run(job)
         self.assertEqual(st["exit"], 3)
         self.assertIn("not logged in", st["stderr"])
+
+    def test_stderr_without_newlines_is_drained_in_bounded_chunks(self):
+        backend, d = self.cli("import sys\nsys.stderr.write('x' * 100000 + 'last error')\nsys.exit(3)\n")
+        lengths = []
+        add = backends.Tail.add
+
+        def record(tail, text):
+            lengths.append(len(text))
+            add(tail, text)
+
+        with mock.patch.object(backends.Tail, "add", record):
+            st = backend.run(job_for(root=d, prompt="go"))
+        self.assertEqual(st["exit"], 3)
+        self.assertTrue(st["stderr"].endswith("last error"))
+        self.assertTrue(lengths)
+        self.assertLessEqual(max(lengths), 8000)
 
     def test_tool_events_have_one_form_whatever_the_cli_printed(self):
         """A CLI's output of a shape not expected (a result that is text, not an object; a
