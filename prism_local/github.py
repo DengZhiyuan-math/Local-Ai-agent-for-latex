@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 
 from gitenv import git_env
-from proc import NO_WINDOW
+import proc
 
 STATUS_TTL = 120         # seconds gh's login is not asked again
 
@@ -81,9 +81,9 @@ class GhCli:
     def _gh(exe, *args, cwd=None, timeout=60, env=None, input=None) -> subprocess.CompletedProcess:
         if not exe:
             raise OSError("GitHub CLI not found")
-        return subprocess.run([exe, *args], cwd=cwd, input=input, capture_output=True, text=True,
-                              encoding="utf-8", errors="replace", timeout=timeout,
-                              env={**(env or os.environ), "GH_PROMPT_DISABLED": "1"}, **NO_WINDOW)
+        return proc.run([exe, *args], cwd=cwd, input=input, text=True, encoding="utf-8",
+                        errors="replace", timeout=timeout,
+                        env={**(env or os.environ), "GH_PROMPT_DISABLED": "1"})
 
 
 GITHUB = GhCli()

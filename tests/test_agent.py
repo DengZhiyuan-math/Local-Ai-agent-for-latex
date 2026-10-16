@@ -1100,7 +1100,7 @@ class ClaudeRemembers(unittest.TestCase):
     def test_the_login_is_asked_again_when_a_login_file_changes(self):
         from unittest import mock
         status = subprocess_done('{"loggedIn": true, "email": "me@uni.example"}')
-        with mock.patch.object(backend_claude.subprocess, "run", return_value=status) as run:
+        with mock.patch.object(backend_claude, "run_bounded", return_value=status) as run:
             for _ in range(2):
                 self.assertEqual(self.claude.account(self.root)["account"]["email"], "me@uni.example")
             self.assertEqual(run.call_count, 1)

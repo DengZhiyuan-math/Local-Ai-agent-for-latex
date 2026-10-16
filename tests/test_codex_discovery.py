@@ -79,7 +79,7 @@ class CodexCompatibility(unittest.TestCase):
             text = "codex-cli 0.162.0" if args[1:] == ["--version"] else \
                 resume_help if "resume" in args else exec_help
             return subprocess.CompletedProcess(args, 0, text, "")
-        with mock.patch("backend_codex.subprocess.run", side_effect=run):
+        with mock.patch("backend_codex.run_bounded", side_effect=run):
             return runtime_support("fixture", 1)
 
     def test_requires_both_isolation_flags_for_new_and_resumed_turns(self):

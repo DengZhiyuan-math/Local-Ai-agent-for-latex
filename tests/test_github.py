@@ -23,7 +23,7 @@ class GitHubCLI(unittest.TestCase):
         self.addCleanup(patch.stop)
 
     def test_login_is_cached_and_can_be_refreshed(self):
-        with mock.patch.object(github.subprocess, "run", side_effect=[
+        with mock.patch.object(github.proc, "run", side_effect=[
                 result(stderr="Logged in to github.com account owner (keyring)"),
                 result(1, stderr="not logged in")]) as run:
             self.assertEqual(self.gh.status()["account"], "owner")
@@ -34,7 +34,7 @@ class GitHubCLI(unittest.TestCase):
 
     def test_login_cache_expires(self):
         with mock.patch.object(github.time, "time", return_value=100) as clock, \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(stdout="Logged in to github.com as owner"),
                     result(stdout="Logged in to github.com as other")]) as run:
             self.assertEqual(self.gh.status()["account"], "owner")
@@ -44,7 +44,7 @@ class GitHubCLI(unittest.TestCase):
 
     def test_missing_cli_is_reported_without_starting_a_process(self):
         with mock.patch.object(github.shutil, "which", return_value=None), \
-                mock.patch.object(github.subprocess, "run") as run:
+                mock.patch.object(github.proc, "run") as run:
             self.assertIn("not found", self.gh.status()["error"])
             self.assertIn("not found", self.gh.create(Path("."), "owner/paper"))
         run.assert_not_called()
@@ -54,7 +54,7 @@ class GitHubCLI(unittest.TestCase):
                 mock.patch.dict(os.environ, {"GIT_DIR": "foreign", "GIT_WORK_TREE": "foreign",
                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
                     "GIT_CONFIG_VALUE_0": "foreign"}), \
-                mock.patch.object(github.subprocess, "run", return_value=result()) as run:
+                mock.patch.object(github.proc, "run", return_value=result()) as run:
             root = Path("paper")
             self.assertIsNone(self.gh.create(root, "owner/paper"))
         args, options = run.call_args
@@ -67,14 +67,14 @@ class GitHubCLI(unittest.TestCase):
 
     def test_create_reports_cli_failure_and_timeout(self):
         with mock.patch.object(self.gh, "status", return_value={"gh": "fixture-gh"}), \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(1, stderr="no network"), subprocess.TimeoutExpired("gh", 180)]):
             self.assertEqual(self.gh.create(Path("."), "owner/paper"), "no network")
             self.assertIn("timed out", self.gh.create(Path("."), "owner/paper"))
 
     def test_branch_protection_and_unavailable_plan(self):
         with mock.patch.object(self.gh, "status", return_value={"gh": "fixture-gh"}), \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(), result(1, stderr="Upgrade to GitHub Pro")]) as run:
             self.assertTrue(self.gh.protect("owner/paper", "main").startswith("on:"))
             args, options = run.call_args
@@ -85,7 +85,7 @@ class GitHubCLI(unittest.TestCase):
             self.assertIn("free plan", self.gh.protect("owner/paper", "main"))
 
     def test_auth_and_protection_process_errors_are_reported(self):
-        with mock.patch.object(github.subprocess, "run", side_effect=OSError("fixture cannot start gh")):
+        with mock.patch.object(github.proc, "run", side_effect=OSError("fixture cannot start gh")):
             self.assertIn("cannot start gh", self.gh.status()["error"])
             self.assertIn("cannot start gh", self.gh.protect("owner/paper", "main"))
 

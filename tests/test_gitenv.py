@@ -69,7 +69,7 @@ class Git(unittest.TestCase):
         login = {"GIT_ASKPASS": str(ask), "SSH_ASKPASS": str(ask), "GCM_INTERACTIVE": "auto",
                  "NO_PROXY": "127.0.0.1"}
         with mock.patch.dict(os.environ, login), \
-                mock.patch.object(gitenv.subprocess, "run", wraps=subprocess.run) as run:
+                mock.patch.object(gitenv.proc, "run", wraps=gitenv.proc.run) as run:
             self.assertNotEqual(gitenv.git(self.repo, *question, timeout=30).returncode, 0)
             self.assertFalse(marker.exists(), "in the background nobody is asked")
             self.assertEqual(run.call_args.kwargs["env"]["GCM_INTERACTIVE"], "never")

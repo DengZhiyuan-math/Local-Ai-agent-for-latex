@@ -25,7 +25,8 @@ from pathlib import Path
 import registry
 import settings
 import sessionmeta
-from backends import NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, executable, find_bin, kill_tree, start
+from backends import SYSTEM_APPEND, CliBackend, Job, executable, find_bin, kill_tree, start
+from proc import run as run_bounded
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
@@ -153,9 +154,8 @@ def claude_account(exe: str | None, root: Path | None = None, max_age: float = 3
         info["error"] = "Claude Code CLI not found"
     else:
         try:
-            r = subprocess.run([exe, "auth", "status"], cwd=str(root) if root else None,
-                               capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=20, **NO_WINDOW)
+            r = run_bounded([exe, "auth", "status"], cwd=str(root) if root else None,
+                            text=True, encoding="utf-8", errors="replace", timeout=20)
             m = re.search(r"\{.*\}", r.stdout, re.S)
             d = json.loads(m.group(0)) if m else {}
             info = {"logged_in": bool(d.get("loggedIn")), "email": d.get("email"),
@@ -675,9 +675,8 @@ class ClaudeCode(CliBackend):
                    "--no-session-persistence", "--strict-mcp-config",
                    "--disable-slash-commands", "--output-format", "stream-json", "--verbose"]
             try:
-                out = subprocess.run(cmd, input="ok", capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", timeout=90,
-                                     cwd=tempfile.gettempdir(), **NO_WINDOW).stdout
+                out = run_bounded(cmd, input="ok", text=True, encoding="utf-8", errors="replace",
+                                  timeout=90, cwd=tempfile.gettempdir()).stdout
             except subprocess.TimeoutExpired:
                 return {"error": "usage check timed out", "rate": self.rate}
             except OSError as e:

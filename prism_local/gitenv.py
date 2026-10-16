@@ -13,7 +13,7 @@ import os
 import subprocess
 from pathlib import Path
 
-from proc import NO_WINDOW
+import proc
 
 SELECTORS = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                       "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -51,6 +51,5 @@ def git(cwd: str | Path, *args: str, timeout: float = 60, binary: bool = False,
     credential helper ask you to log in."""
     text = {} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}
     env = git_env() if interactive else {**git_env(), **NO_PROMPTS}
-    return subprocess.run(["git", "--no-optional-locks", *args], cwd=cwd, capture_output=True,
-                          stdin=subprocess.DEVNULL, timeout=timeout, check=check, env=env,
-                          **text, **NO_WINDOW)
+    return proc.run(["git", "--no-optional-locks", *args], cwd=cwd, stdin=subprocess.DEVNULL,
+                    timeout=timeout, check=check, env=env, **text)

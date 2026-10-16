@@ -307,7 +307,7 @@ class Create(TempState):
         g, plain = (hub.registry.project_key((self.tmp / n).resolve()) for n in ("g", "plain"))
         if any((p / ".git").exists() for p in self.tmp.resolve().parents) or not (self.tmp / "g" / ".git").exists():
             self.skipTest("git not available, or the temp folder is inside a repository")
-        with mock.patch.object(hub.subprocess, "run", wraps=hub.subprocess.run) as run:
+        with mock.patch.object(hub.gitenv.proc, "run", wraps=hub.gitenv.proc.run) as run:
             self.assertIsNone(hub.git_info(self.tmp / "plain"))
             run.assert_not_called()                 # no .git anywhere: no git is run
         self.assertEqual(set(hub.all_git_info()), {g, plain})

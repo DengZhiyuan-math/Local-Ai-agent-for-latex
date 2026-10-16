@@ -23,7 +23,8 @@ import shutil
 import subprocess
 from functools import lru_cache
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, NO_WINDOW, CliBackend, Job, executable, find_bin
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, CliBackend, Job, executable, find_bin
+from proc import run as run_bounded
 from fsutil import METADATA, is_metadata, metadata_paths, project_path
 import mcp_compile
 import sessionmeta
@@ -34,14 +35,12 @@ PROFILE = "prism-editor"
 @lru_cache(maxsize=8)
 def runtime_support(bin_path: str, stamp: int) -> str | None:
     try:
-        version = subprocess.run([bin_path, "--version"], capture_output=True, text=True,
-                                 timeout=10, **NO_WINDOW)
+        version = run_bounded([bin_path, "--version"], text=True, timeout=10)
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
         if version.returncode or not match or tuple(map(int, match.groups())) < (0, 138, 0):
             return "This Codex CLI version lacks the required named permission profiles. Update Codex CLI."
         for subcommand in (["exec"], ["exec", "resume"]):
-            p = subprocess.run([bin_path, *subcommand, "--help"], capture_output=True, text=True,
-                               timeout=10, **NO_WINDOW)
+            p = run_bounded([bin_path, *subcommand, "--help"], text=True, timeout=10)
             if p.returncode or any(flag not in p.stdout for flag in
                                    ("--ignore-user-config", "--ignore-rules")):
                 return "This Codex CLI version lacks isolated per-turn configuration. Update Codex CLI."
@@ -159,8 +158,7 @@ class Codex(CliBackend):
         if why:
             return why
         try:
-            p = subprocess.run([binary, "login", "status"], capture_output=True, text=True,
-                               timeout=10, **NO_WINDOW)
+            p = run_bounded([binary, "login", "status"], text=True, timeout=10)
             if p.returncode:
                 detail = (p.stdout + p.stderr).strip()
                 if "not logged in" in detail.lower():

@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 import weakref
 
 # When the server runs without a console (started by the launcher), every console
@@ -45,6 +46,55 @@ def start(cmd, **popen) -> subprocess.Popen:
         else:
             k32.CloseHandle(job)
     return proc
+
+
+# After a time limit, how long run() still waits for what holds the output pipes (a
+# program the command started that outlived the kill) before it gives that output up.
+RUN_GRACE = 2.0
+
+
+def run(cmd, *, timeout: float, input=None, check: bool = False, **popen) -> subprocess.CompletedProcess:
+    """subprocess.run(cmd, capture_output=True, timeout=timeout) whose time limit holds.
+
+    subprocess.run kills only the program at its limit and then waits, with no limit, for
+    the pipes to close; a program it started (git's https helper or ssh, the node behind
+    an npm .cmd shim on Windows) keeps them open, so a hung network call would hang its
+    caller, and every lock it holds, for good. Here the program runs as start() runs it,
+    and at the limit its whole tree is ended; RUN_GRACE seconds later whatever output is
+    still pending is given up. Raises subprocess.TimeoutExpired then, OSError when the
+    program cannot start, and subprocess.CalledProcessError on failure with check=True.
+    A program that exited but left a program of its own holding the pipes is done: what it
+    left is ended (end_group) and its own result returned.
+    Without `input`, stdin is empty (popen may say otherwise); popen is Popen's (text,
+    encoding, cwd, env …)."""
+    popen.setdefault("stdout", subprocess.PIPE)
+    popen.setdefault("stderr", subprocess.PIPE)
+    popen["stdin"] = subprocess.PIPE if input is not None else popen.get("stdin", subprocess.DEVNULL)
+    proc = start(cmd, **popen)
+    deadline, given_up_at, pending = time.monotonic() + timeout, None, input
+    exited_at = None
+    while True:
+        try:
+            out, err = proc.communicate(pending, timeout=0.25)
+            break
+        except subprocess.TimeoutExpired:
+            pending = None                  # given once: communicate keeps what is left of it
+        now = time.monotonic()
+        if given_up_at is None and proc.poll() is not None:
+            exited_at = exited_at or now
+            if now - exited_at >= 0.5:      # it is done; what it left holds the pipes
+                end_group(proc)
+        if given_up_at is None and now >= deadline:
+            kill_tree(proc)
+            given_up_at = now + RUN_GRACE
+        elif given_up_at is not None and now >= given_up_at:
+            kill_tree(proc)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+    if given_up_at is not None:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    if check and proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, out, err)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
 
 
 def kill_tree(proc: subprocess.Popen) -> None:
