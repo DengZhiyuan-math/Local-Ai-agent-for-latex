@@ -60,6 +60,13 @@ async function staleTrees() {
   const before = store.stamp();
   const fresh = store.add("new.tex", doc, 5);
   assert.deepStrictEqual(Watch.reconcile(tree(2), tree(2), [{ ...fresh, dirty: true }], before).gone, []);
+  // A deleted file that comes back as it was (the Recycle Bin) can be saved again.
+  store.diskSeen(t, null);
+  assert.strictEqual(t.conflict, "gone");
+  assert.deepStrictEqual(Watch.reconcile(tree(2), tree(2), [{ ...t, dirty: true }], store.stamp()).conflicts, ["a.tex"]);
+  assert.strictEqual(store.diskSeen(t, 2), "same");
+  assert.strictEqual(t.conflict, null);
+  assert.ok((await store.save(t)).ok, "its edits are saved");
 }
 
 saves().then(staleTrees).then(() => console.log("ok")).catch((e) => { console.error(e); process.exitCode = 1; });

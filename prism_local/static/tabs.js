@@ -127,6 +127,10 @@ const Tabs = (() => {
         if (t.conflict !== "gone") { t.conflict = "gone"; onChange(t, "gone"); }
         return "gone";
       }
+      if (t.conflict === "gone" && Math.abs(mtime - t.mtime) < 1e-6) {
+        t.conflict = null; onChange(t, "back");          // the same file is back (the Recycle Bin)
+        return "same";
+      }
       if (Math.abs(mtime - t.mtime) < 1e-6 || t.inFlight) return "same";
       if (!dirty(t)) return "reload";
       if (t.conflict !== "disk") { t.conflict = "disk"; onChange(t, "conflict"); }

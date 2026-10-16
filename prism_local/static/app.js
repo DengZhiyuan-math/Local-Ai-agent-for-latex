@@ -11,7 +11,11 @@ const S = {
 // The open files and how each is saved (tabs.js); S.tabs is its list.
 const TABS = Tabs.createTabStore({
   saveFile: Q.saveFile, isStopped: () => foreignProject, isHeld: () => C.editTurn, notify: (m) => toast(m),
-  onChange: (t, what) => { updateTabState(t); showBanner(t); if (what === "saved") scheduleSymbols(); },
+  onChange: (t, what) => {
+    updateTabState(t); showBanner(t);
+    if (what === "saved") scheduleSymbols();
+    if (what === "back") scheduleSave(t);              // its file is there again: your edits go in
+  },
 });
 S.tabs = TABS.tabs;
 
