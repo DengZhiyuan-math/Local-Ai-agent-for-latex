@@ -11,7 +11,7 @@ const S = {
 // The open files and how each is saved (tabs.js); S.tabs is its list.
 const TABS = Tabs.createTabStore({
   saveFile: Q.saveFile, isStopped: () => foreignProject, isHeld: () => C.editTurn, notify: (m) => toast(m),
-  onChange: (t, what) => { renderTabs(); showBanner(t); if (what === "saved") scheduleSymbols(); },
+  onChange: (t, what) => { updateTabState(t); showBanner(t); if (what === "saved") scheduleSymbols(); },
 });
 S.tabs = TABS.tabs;
 
@@ -98,7 +98,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 window.addEventListener("focus", () => loadSnippets());
 
 cm.getWrapperElement().style.display = "none";
-cm.on("change",() => { const t = activeTab(); if (t) { renderTabs(); scheduleSave(t); } });
+cm.on("change",() => { const t = activeTab(); if (t) { updateTabState(t); scheduleSave(t); } });
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
 
 function modeFor(path) { return path.endsWith(".md") ? "markdown" : "prism-stex"; }
@@ -171,7 +171,17 @@ async function closeTab(path) {
   renderTabs(); renderTree(); persistSession();
 }
 
+function updateTabState(t) {
+  const state = JSON.stringify([isDirty(t), t.saveError]);
+  if (state === t._tabState) return;
+  t._tabState = state;
+  const el = [...$("#tabs").children].find((el) => el.dataset.path === t.path);
+  if (!el) return;
+  el.classList.toggle("dirty", isDirty(t)); el.classList.toggle("save-failed", !!t.saveError);
+  el.title = t.saveError || t.path;
+}
 function renderTabs() {
+  for (const t of S.tabs) t._tabState = JSON.stringify([isDirty(t), t.saveError]);
   $("#tabs").innerHTML = S.tabs.map((t) => `
     <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""} ${t.saveError ? "save-failed" : ""}" data-path="${esc(t.path)}" title="${esc(t.saveError || t.path)}">
       <span class="name">${esc(t.path.split("/").pop())}</span><span class="close" data-close="${esc(t.path)}">×</span>
