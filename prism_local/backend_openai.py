@@ -133,10 +133,8 @@ class OpenAICompat(Backend):
     # ------------------------------------------------------------ the loop
     def run(self, job: Job) -> dict:
         import registry
-        if job.session_id and self.check_session(job.root, job.session_id):
-            raise ValueError("The API session does not belong to this project. Start a new chat.")
         model = job.model or self.default_model
-        saved = self.sessions.get(job.session_id or "")
+        saved = self.sessions.get(job.session_id or "")   # checked by AgentManager.start (check_session)
         if saved is None:
             sid = uuid.uuid4().hex
             msgs = [{"role": "system", "content": self.system_prompt(job.root)}]

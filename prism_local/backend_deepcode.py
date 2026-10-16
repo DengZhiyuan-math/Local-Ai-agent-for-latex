@@ -125,6 +125,15 @@ def user_settings() -> dict:
     return read_settings(Path.home() / ".deepcode" / "settings.json")
 
 
+def injected_git(source: Path, settings: dict) -> str | None:
+    """Why the settings read from `source` may not be used: their env sets Git's
+    repository variables (GIT_DIR …), which would point the agent at another repository."""
+    env = settings.get("env") or {}
+    bad = sorted(k for k in env if selects_repository(k)) if isinstance(env, dict) else []
+    return (f"Deep Code settings {source} inject Git repository variables: {', '.join(bad)}. "
+            "Remove these variables before starting a turn.") if bad else None
+
+
 def overlay_record(path: Path) -> Path:
     """Where a turn notes what it put in place of a project's Deep Code settings."""
     name = hashlib.sha256(str(path).encode()).hexdigest()[:20] + ".json"
@@ -262,10 +271,9 @@ class DeepCode(Backend):
                     f"({names}) into this turn, which the editor cannot restrict. Remove them there, "
                     "or start Deep Code with a profile that has none.")
         for source in (Path.home() / ".deepcode/settings.json", project):
-            env = read_settings(source).get("env") or {}
-            bad = sorted(k for k in env if selects_repository(k)) if isinstance(env, dict) else []
+            bad = injected_git(source, read_settings(source))
             if bad:
-                return f"Deep Code settings {source} inject Git repository variables: {', '.join(bad)}. Remove these variables before starting a turn."
+                return bad
         if not self.has_key(root):
             return ("Deep Code has no DeepSeek API key: set DEEPSEEK_API_KEY, or API_KEY in "
                     "~/.deepcode/settings.json or .deepcode/settings.json.")
@@ -325,7 +333,12 @@ class DeepCode(Backend):
         settings = json.loads(original) if original is not None else {}
         if not isinstance(settings, dict):
             raise ValueError("Deep Code settings must hold a JSON object")
-        deny = ["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
+        # AgentManager.start ran preflight, but the file may have changed since (a sync, the
+        # author): the copy this turn passes on is checked again.
+        bad = injected_git(path, settings)
+        if bad:
+            raise ValueError(bad)
+        deny =["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
         if job.mode != "edit":
             deny += ["write-in-cwd", "delete-in-cwd", "mcp"]
         previous = settings.get("permissions") or {}
@@ -370,9 +383,8 @@ class DeepCode(Backend):
                 pass
 
     def run(self, job: Job) -> dict:
-        bad = self.preflight(job.root) or (self.check_session(job.root, job.session_id) if job.session_id else None)
-        if bad:
-            raise ValueError(bad)
+        # AgentManager.start has run preflight and check_session; turn_settings checks
+        # again what may have changed since (the settings it passes on).
         with self.turn_settings(job):
             return self._run_cli(job)
 

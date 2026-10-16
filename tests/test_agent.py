@@ -573,6 +573,28 @@ class DeepCodeBackend(unittest.TestCase):
         self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
         self.assertLess(sum(read), size + 100_000, "the earlier turns are read once")
 
+    def test_a_turn_checks_its_request_once(self):
+        """AgentManager.start checks the settings and the session; run checked them again."""
+        from backend_deepcode import DeepCode
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        real = DeepCode.preflight
+        with mock.patch.object(DeepCode, "preflight", autospec=True, side_effect=real) as preflight:
+            done = wait_done(self.m.jobs[self.m.start("second", sid, "ask")["job"]])
+        self.assertEqual(done["outcome"], "ok")
+        self.assertEqual(preflight.call_count, 1)
+
+    def test_settings_changed_after_the_check_cannot_bring_in_a_repository(self):
+        """What start checked may have changed when the turn writes its settings overlay:
+        that copy is checked again."""
+        from backend_deepcode import DeepCode
+        settings = self.root / ".deepcode" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"env": {"GIT_DIR": "elsewhere"}}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "GIT_DIR"):
+            with DeepCode("deepcode").turn_settings(job_for(root=self.root, mode="edit")):
+                pass
+        self.assertEqual(json.loads(settings.read_text(encoding="utf-8")), {"env": {"GIT_DIR": "elsewhere"}})
+
     def test_a_session_file_rewritten_is_read_again_from_the_start(self):
         from backend_deepcode import SessionLog
         path = self.home / "session.jsonl"
@@ -1415,6 +1437,15 @@ class OpenAICompatible(unittest.TestCase):
         msgs = api2.requests[0]["body"]["messages"]
         self.assertEqual(msgs[-1]["content"][:6], "thanks")
         self.assertEqual(len(msgs), 8)   # system, user, 2×(assistant, tool), assistant, user
+
+    def test_a_resumed_turn_checks_its_session_once(self):
+        """AgentManager.start checks the session; run checked it again."""
+        done, _, _, be = self.run_turn([[{"choices": [{"delta": {"content": "hi"}}]}]])
+        with mock.patch.object(be, "check_session", wraps=be.check_session) as check:
+            done, _, _, _ = self.run_turn([[{"choices": [{"delta": {"content": "ok"}}]}]],
+                                          prompt="again", session=done["session_id"], backend=be)
+        self.assertEqual(done["outcome"], "ok")
+        self.assertEqual(check.call_count, 1)
 
     def test_scope_and_ask_mode_block_writes(self):
         done, events, _, _ = self.run_turn(
