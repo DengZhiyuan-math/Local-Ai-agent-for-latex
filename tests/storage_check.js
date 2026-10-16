@@ -11,6 +11,12 @@ store.get("chat.recent.p.log", null); pressure = true;
 assert.strictEqual(store.set("theme", "dark"), true);
 assert.deepStrictEqual(removed, ["prism.chat.old.p.log"]);
 assert.ok(values.has("prism.chat.paper.p.log"));
+// A page that does not know its project (the PDF window, an editor before its first
+// tree) cannot tell its own chat from others': it removes none.
+values.set("prism.chat.old.p.log", '"old"'); removed.length = 0; let full = 0;
+const unbound = Util.createStore(() => storage, { project: () => null, now: () => clock++, onError: () => full++ });
+assert.strictEqual(unbound.set("pdf.zoom", 2), false);
+assert.deepStrictEqual([removed, full], [[], 1]);
 let warned = 0;
 const blocked = Util.createStore(() => { throw Error("blocked"); }, { onError: () => warned++ });
 assert.strictEqual(blocked.set("theme", "light"), false);

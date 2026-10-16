@@ -74,6 +74,9 @@ const Util = (() => {
           try { storage.setItem(full, text); }
           catch (e) {
             if (!(e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)) throw e;
+            // Not knowing its project (the PDF window, an editor before its first tree), a
+            // page cannot tell its own chat from other projects': it removes none.
+            if (!project()) throw e;
             const candidates = Array.from({ length: storage.length }, (_, i) => storage.key(i))
               .filter((k) => { const m = /^prism\.chat\.([^.]+)\..+\.log$/.exec(k); return m && m[1] !== project() && k !== full; })
               .sort((a, b) => (used[a] || 0) - (used[b] || 0));
