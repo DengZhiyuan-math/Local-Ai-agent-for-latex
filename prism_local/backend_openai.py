@@ -179,6 +179,13 @@ class OpenAICompat(Backend):
                 break
             usage["in"] += u.get("prompt_tokens") or 0
             usage["out"] += u.get("completion_tokens") or 0
+            if job.cancel.is_set():
+                # Stopped while it streamed: what it said is kept, the tools it asked for
+                # do not run (the next message must not see a call left unanswered).
+                if text:
+                    msgs.append({"role": "assistant", "content": text})
+                res.update(is_error=True, subtype="stopped")
+                break
             msg: dict = {"role": "assistant", "content": text if text or not calls else None}
             if calls:
                 msg["tool_calls"] = [{"id": c["id"], "type": "function",
@@ -193,7 +200,8 @@ class OpenAICompat(Backend):
                 break
             for c in calls:
                 msgs.append({"role": "tool", "tool_call_id": c["id"],
-                             "content": self._call(job, c, denials)})
+                             "content": "Not run: the user stopped the turn." if job.cancel.is_set()
+                             else self._call(job, c, denials)})
         else:
             res.update(is_error=True, subtype=f"stopped after {self.max_steps} steps")
         for m in msgs:

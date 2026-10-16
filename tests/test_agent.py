@@ -1239,6 +1239,36 @@ class OpenAICompatible(unittest.TestCase):
         self.assertEqual(done2["outcome"], "ok")
         self.assertIn("write a lot", json.dumps(api2.requests[0]["body"]["messages"]))
 
+    def test_stop_while_a_reply_streams_runs_none_of_its_tools(self):
+        """A stopped stream handed its tool calls back as a finished reply, and they ran:
+        a file was written after Stop."""
+        args = json.dumps({"path": "other.tex", "content": "after stop\n"})
+        api = FakeAPI([[{"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function":
+                                                               {"name": "write_file", "arguments": args}}]}}]},
+                        {"choices": [{"delta": {"content": "Writing it."}}]}, 20]])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        be = OpenAICompat("ds", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                 "api_key_env": "PRISM_TEST_KEY", "models": ["deepseek-chat"]})
+        m = manager(self.root, lambda: ["main.tex", "other.tex"], ds=be)
+        m.writable_fn = lambda rel: None
+        job = m.jobs[m.start("rewrite other", None, "edit")["job"]]
+        end = time.time() + 10
+        while not any(e["t"] == "delta" for e in job.events) and time.time() < end:
+            time.sleep(0.05)
+        m.stop(job.id)
+        done = wait_done(job, 15)
+        self.assertEqual(done["outcome"], "stopped")
+        self.assertEqual((self.root / "other.tex").read_text(encoding="utf-8"), "x\n")
+        self.assertEqual(done["changed"], [])
+        self.assertFalse([e for e in job.events if e["t"] == "tool"])
+        # What it said is kept; the next message continues without a call left unanswered.
+        done2, _, api2, _ = self.run_turn([[{"choices": [{"delta": {"content": "ok"}}]}]],
+                                          prompt="go on", session=done["session_id"], backend=be)
+        self.assertEqual(done2["outcome"], "ok")
+        msgs = api2.requests[0]["body"]["messages"]
+        self.assertEqual(msgs[-2], {"role": "assistant", "content": "Writing it."})
+
     def test_a_tool_that_raises_is_an_error_for_the_model_not_the_end_of_the_turn(self):
         (self.root / "latin1.tex").write_bytes("caf\xe9\n".encode("latin-1"))   # not UTF-8
         done, events, _, _ = self.run_turn([
