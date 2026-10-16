@@ -91,15 +91,24 @@ def with_line_ends_of(text: str, path: Path) -> str:
     return text.replace("\n", "\r\n") if uses_crlf(head) else text
 
 
-def replace_file(path: Path, data: bytes, tries: int = 40) -> None:
+def replace_file(path: Path, data: bytes, tries: int = 40, durable: bool = False) -> None:
     """Write a file so that a reader never sees half of it: the data goes to a temporary
     file beside it, which then replaces `path`. Windows refuses the replace while another
     process has the file open (a server reading it, a TeX engine during a build), so it is
-    tried every 0.05 seconds, `tries` times in all, before PermissionError is raised."""
+    tried every 0.05 seconds, `tries` times in all, before PermissionError is raised.
+    `durable`: the data is on the disk before it replaces the file (and, outside Windows,
+    the replacement too), so that a power cut leaves the old file or the new one, never an
+    empty one; for the state files, whose loss loses the project list or the settings."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.{threading.get_ident()}{TEMP_SUFFIX}")
     try:
-        tmp.write_bytes(data)
+        if durable:
+            with open(tmp, "wb") as f:
+                f.write(data)
+                f.flush()
+                os.fsync(f.fileno())
+        else:
+            tmp.write_bytes(data)
         try:
             shutil.copymode(path, tmp)      # the new file keeps the old one's permissions
         except OSError:
@@ -107,6 +116,8 @@ def replace_file(path: Path, data: bytes, tries: int = 40) -> None:
         for attempt in range(tries):
             try:
                 os.replace(tmp, path)
+                if durable and os.name != "nt":
+                    _sync_folder(path.parent)
                 return
             except PermissionError:
                 if attempt == tries - 1:
@@ -117,6 +128,19 @@ def replace_file(path: Path, data: bytes, tries: int = 40) -> None:
             tmp.unlink()
         except OSError:
             pass
+
+
+def _sync_folder(folder: Path) -> None:
+    try:
+        fd = os.open(folder, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
 
 
 def write_bytes(path: Path, data: bytes) -> None:

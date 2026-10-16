@@ -94,6 +94,20 @@ class Registry(TempState):
         problem = backend_claude.ClaudeCode("claude").preflight(PROJECT)
         self.assertIn("Nothing was sent", problem or "")
 
+    def test_a_state_file_keeps_its_previous_version_and_a_damaged_one_names_it(self):
+        """After a power cut the disk may hold an empty projects.json or settings.json
+        (written but not yet on the disk): the version before stays as .bak."""
+        state = Path(os.environ["PRISM_STATE_DIR"])
+        settings.save({"git_init": False})
+        settings.save({"github_repo": True})
+        bak = state / "settings.json.bak"
+        self.assertFalse(json.loads(bak.read_text(encoding="utf-8"))["github_repo"], "the one before")
+        (state / "settings.json").write_bytes(b"")              # what a power cut can leave
+        with self.assertRaises(registry.StateUnreadable) as e:
+            settings.load()
+        self.assertIn(str(bak), str(e.exception))
+        self.assertEqual((state / "settings.json").read_bytes(), b"", "left as it was")
+
     def test_project_key_is_stable(self):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 

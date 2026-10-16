@@ -53,7 +53,7 @@ def save(changes: dict) -> dict:
             if owner and not OWNER_RE.fullmatch(owner):
                 raise ValueError("not a GitHub user or organization name")
             cur["github_owner"] = owner
-        registry.write_json(path(), cur)
+        registry.write_state(path(), cur)
         return cur
 
 

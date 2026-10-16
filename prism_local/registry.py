@@ -81,13 +81,34 @@ def read_state(path: Path, tries: int = 10) -> dict:
     except ValueError as e:
         data = e
     if not isinstance(data, dict):
+        bak = backup_of(path)
         raise StateUnreadable(f"{path} is damaged; nothing was changed. Fix it, or rename it "
-                              "to start afresh.")
+                              "to start afresh" + (f" (the version before its last change is {bak})."
+                                                   if bak.is_file() else "."))
     return data
+
+
+def backup_of(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
 
 
 def write_json(path: Path, data) -> None:
     replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"))
+
+
+def write_state(path: Path, data) -> None:
+    """projects.json or settings.json: on the disk before it replaces the old one, and
+    the old one kept as `<name>.bak`, for when the disk loses what it was told it had."""
+    try:
+        old = path.read_bytes()
+    except OSError:
+        old = None
+    if old and old.strip():
+        try:
+            replace_file(backup_of(path), old)
+        except OSError:
+            pass                            # no copy this time: the write itself matters
+    replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"), durable=True)
 
 
 class FileLock:
@@ -145,7 +166,7 @@ def update_projects(fn):
     with FileLock(path.with_suffix(".lock"), timeout=10):
         data = load_projects()
         result = fn(data)
-        write_json(path, data)
+        write_state(path, data)
     return result
 
 
