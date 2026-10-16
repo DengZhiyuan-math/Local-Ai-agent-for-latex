@@ -63,6 +63,24 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_a_rejected_push_is_not_failed_by_an_earlier_error(self):
+        """GitHub has new commits; the pull brings nothing in now (the agent is working):
+        the push must say that, not an hour-old "Could not reach GitHub"."""
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Saved")
+        self.g.error = "Could not reach GitHub: Could not resolve host: github.com"
+        real = self.g.git
+
+        def rejected(*args, **kw):
+            if args[0] == "push":
+                return subprocess.CompletedProcess(args, 1, "", " ! [rejected] main -> main (fetch first)")
+            return real(*args, **kw)
+        with mock.patch.object(self.g, "git", side_effect=rejected), \
+                mock.patch.object(self.g, "pull", side_effect=lambda manual=False: None):
+            out = self.g.push(manual=True)
+        self.assertNotIn("resolve host", out.message or "")
+        self.assertIn("pull first", out.message)
+
     def test_a_push_that_timed_out_says_what_to_do(self):
         """Not "Command '['git', '--no-optional-locks', 'push', …]' timed out after 180 seconds"."""
         def stalled():

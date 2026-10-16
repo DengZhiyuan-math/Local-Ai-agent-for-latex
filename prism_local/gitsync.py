@@ -456,6 +456,10 @@ class GitSync:
             behind = any(s in msg for s in ("rejected", "fetch first", "non-fast-forward",
                                             "refusing a push that would drop commits"))
             if behind and attempt < attempts - 1:
+                # Only what this pull says counts: an earlier error ("Could not reach GitHub",
+                # an hour ago) left in `error` would make this push "failed" for it.
+                with self.lock:
+                    self.error = None
                 self.pull(manual=manual)
                 if self.error:
                     return Outcome("failed", self.error)        # pull said what is wrong
