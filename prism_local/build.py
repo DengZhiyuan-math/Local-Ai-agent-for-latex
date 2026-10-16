@@ -622,6 +622,14 @@ class Build:
             self.diags.append(_diag("error", str(e)))
         except Stopped:
             rc = -1
+        except OSError as e:      # a file held open (OneDrive, an antivirus, a PDF viewer), a full disk
+            rc = 126
+            what = f"{e.strerror or e}: {e.filename}" if e.filename else str(e)
+            msg = (f"A file the build needs could not be written or removed ({what}). Another program "
+                   "may hold it open (OneDrive, an antivirus, a PDF viewer): close it or wait, then "
+                   "compile again.")
+            self.parts.append(msg)
+            self.diags.append(_diag("error", msg))
         stopped = self.runner.stopped.is_set()
         if stopped:
             self.notes.append(f"The build took longer than {int(self.runner.timeout)} seconds and "
@@ -750,7 +758,10 @@ class Build:
             bbl = out / f"{target}.bbl"
             if not cites:              # nothing cited: no bibliography rather than an empty one
                 if bbl.exists() and out != root:
-                    bbl.unlink()
+                    try:
+                        bbl.unlink()
+                    except OSError:    # held open: a stale bibliography until the next build
+                        pass
                 continue
             bibs = [_file_sha(root / (d if d.endswith(".bib") else d + ".bib")) for d in data]
             bsts = [_file_sha(root / (s + ".bst")) for s in style]
