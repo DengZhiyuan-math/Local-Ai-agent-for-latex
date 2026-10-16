@@ -338,7 +338,7 @@ class DeepCode(Backend):
         bad = injected_git(path, settings)
         if bad:
             raise ValueError(bad)
-        deny =["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
+        deny = ["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
         if job.mode != "edit":
             deny += ["write-in-cwd", "delete-in-cwd", "mcp"]
         previous = settings.get("permissions") or {}
