@@ -54,6 +54,19 @@ def update(repo: Path = APP_DIR) -> str | None:
     return msg
 
 
+def last() -> dict | None:
+    """The last check: {"at": seconds, "result": what happened, None when nothing new}, or
+    None when there was none (switched off, not a git clone). For Home → Settings: a
+    "not updated: …" otherwise stays in a log nobody reads, and the old code runs on."""
+    if os.environ.get("PRISM_AUTO_UPDATE", "").strip() == "0" or not (APP_DIR / ".git").exists():
+        return None
+    try:
+        data = registry.read_json(registry.state_dir() / "self-update.json") or {}
+    except (OSError, ValueError):
+        return None
+    return {"at": data.get("at"), "result": data.get("result")} if data.get("at") else None
+
+
 def _update(repo: Path) -> str | None:
     top = _git(repo, "rev-parse", "--absolute-git-dir")
     if top.returncode != 0:

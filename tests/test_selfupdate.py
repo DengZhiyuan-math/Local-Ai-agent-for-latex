@@ -33,6 +33,20 @@ class SelfUpdate(unittest.TestCase):
         patcher.start()
         self.addCleanup(patcher.stop)
 
+    def test_the_last_check_is_there_for_home_settings(self):
+        """A "not updated: …" otherwise stays in a log nobody reads."""
+        self.commit(self.dev, "a.py", "two\n")
+        git(self.dev, "push", "-q")
+        (self.app / "local.py").write_text("mine\n", encoding="utf-8")
+        git(self.app, "add", "local.py")                        # uncommitted work of yours
+        with mock.patch.object(selfupdate, "APP_DIR", self.app):
+            self.assertIn("uncommitted changes", selfupdate.update(self.app))
+            last = selfupdate.last()
+            self.assertIn("uncommitted changes", last["result"])
+            self.assertIsInstance(last["at"], float)
+            with mock.patch.dict(os.environ, {"PRISM_AUTO_UPDATE": "0"}):
+                self.assertIsNone(selfupdate.last(), "switched off: nothing to show")
+
     def commit(self, repo: Path, name: str, text: str) -> None:
         (repo / name).write_text(text, encoding="utf-8")
         git(repo, "add", name)

@@ -1144,7 +1144,8 @@ class Handler(httpbase.Handler):
         if path == "/api/settings":
             return self._json({"settings": settings.load(),
                                "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
-                               "claude": claude_status(q.get("refresh") == "1")})
+                               "claude": claude_status(q.get("refresh") == "1"),
+                               "update": selfupdate.last()})
         if path == "/api/folders/sync":
             return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
         if path == "/api/projects/publish":

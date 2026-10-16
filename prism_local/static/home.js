@@ -1299,8 +1299,16 @@ $("#btn-new").onclick = openNew;
 /* ------------------------------------------------------------------ settings */
 async function loadSettings(refresh = false) {
   const r = await api("/api/settings" + (refresh ? "?refresh=1" : "")).catch(() => null);
-  if (r && r._status === 200) { H.settings = r.settings; H.github = r.github; H.claude = r.claude; }
+  if (r && r._status === 200) { H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.update = r.update; }
   return r;
+}
+// The last self-update (selfupdate.py): a "not updated: …" otherwise stays in the server log.
+function renderUpdateStatus() {
+  const el = $("#update-status"), u = H.update;
+  el.hidden = !u;
+  if (!u) return;
+  el.classList.toggle("warn", /^not updated/.test(u.result || ""));
+  el.textContent = `prism-local: ${u.result || "up to date"}${u.at ? ` (checked ${ago(u.at)})` : ""}.`;
 }
 function renderGhStatus() {
   const el = $("#gh-status"), gh = H.github || {};
@@ -1343,7 +1351,7 @@ async function openSettings() {
     f.elements.github_owner.value = st.github_owner || "";
     f.elements.claude_account.value = st.claude_account || "";
     f.elements.claude_config_dir.value = st.claude_config_dir || "";
-    renderGhStatus();
+    renderGhStatus(); renderUpdateStatus();
   };
   fill(); dlg.showModal();
   await loadSettings(true); fill();          // re-check gh: you may have just logged in
