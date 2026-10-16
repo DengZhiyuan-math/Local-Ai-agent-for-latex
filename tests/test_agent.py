@@ -611,6 +611,31 @@ class RevertOutsideScope(unittest.TestCase):
             self.assertEqual(wait_done(m.jobs[m.start("go", None, "ask")["job"]])["new_metadata"], [])
 
 
+class EventBatches(unittest.TestCase):
+    def test_a_waiting_page_receives_the_next_small_batch_together(self):
+        job = job_for()
+        job.events = [{"t": "delta", "text": "first"}]
+        waits = []
+
+        class Arriving:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                waits.append(timeout)
+                job.events.append({"t": "delta", "text": "second"})
+                job.done = True
+
+        job.cond = Arriving()
+        events, done = job.wait_events(0, 1)
+        self.assertEqual([e["text"] for e in events], ["first", "second"])
+        self.assertTrue(done)
+        self.assertGreater(waits[0], 0)
+        self.assertLessEqual(waits[0], .040001)  # monotonic clock subtraction rounds at sub-microsecond scale
+        waits.clear()
+        job.wait_events(0, 0)
+        self.assertEqual(waits, [], "a hidden page's non-waiting poll is immediate")
+
+
 class Snapshots(unittest.TestCase):
     def test_stderr_tail_keeps_the_exact_end_of_an_oversized_chunk(self):
         tail = backends.Tail(limit=100)

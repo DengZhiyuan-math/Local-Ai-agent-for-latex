@@ -287,8 +287,20 @@ class Job:
 
     def wait_events(self, after: int, timeout: float) -> tuple[list[dict], bool]:
         with self.cond:
-            if len(self.events) <= after and not self.done:
-                self.cond.wait(timeout)
+            deadline = time.monotonic() + max(0, timeout)
+            while len(self.events) <= after and not self.done:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.cond.wait(remaining)
+            # A short fixed window combines nearby tokens without postponing a batch
+            # indefinitely. Completed turns and non-waiting polls return immediately.
+            batch_until = min(deadline, time.monotonic() + .04)
+            while len(self.events) > after and not self.done:
+                remaining = batch_until - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.cond.wait(remaining)
             return self.events[after:], self.done
 
 
