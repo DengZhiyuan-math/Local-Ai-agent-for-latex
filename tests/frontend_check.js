@@ -402,6 +402,64 @@ check("needsCompile: a changed file newer than the PDF, or not listed yet", () =
   assert.strictEqual(Turn.needsCompile(["a.tex"], files, null), true, "no PDF yet");
 });
 
+// ---------------------------------------------------------------- mathtext.js
+const MathText = require("../prism_local/static/mathtext.js");
+const katex = require("../prism_local/static/vendor/katex/katex.min.js");
+const marked = require("../prism_local/static/vendor/marked.min.js");
+// As the page has it: the reply's HTML, each formula as [display: tex] or [inline: tex].
+const MDJS = new marked.Marked({ gfm: true, breaks: true });
+const fakeKatex = { renderToString: (tex, o) => `[${o.displayMode ? "display" : "inline"}: ${tex.trim()}]` };
+const reply = (text, macros) => MathText.render(text, { markdown: (s) => MDJS.parse(s), katex: fakeKatex, macros });
+
+check("math: what LaTeX writes, Markdown does not touch", () => {
+  const cases = [
+    ["Let $x_1 * y_2$ and $a^*$, $b^*$.", ["[inline: x_1 * y_2]", "[inline: a^*]", "[inline: b^*]"]],
+    ["spaces $ x^2 $ inside", ["[inline: x^2]"]],
+    ["over a\nline $a +\n b$ break", ["[inline: a +\n b]"]],
+    ["\\(x\\) and \\[y\\]", ["[inline: x]", "[display: y]"]],
+    ["$$\n\\begin{aligned} a &= b \\\\ c \\end{aligned}\n$$", ["[display: \\begin{aligned} a &= b \\\\ c \\end{aligned}]"]],
+    ["\\begin{align}\na &= b \\\\\nc\n\\end{align}", ["[display: \\begin{align}\na &= b \\\\\nc\n\\end{align}]"]],
+    ["| a | b |\n|---|---|\n| $|x|$ | $\\|y\\|$ |", ["[inline: |x|]", "[inline: \\|y\\|]"]],
+    ["the $n$th and $x$2", ["[inline: n]", "[inline: x]"]],
+    ["由于$x>0$，所以$\\sqrt{x}$有定义。", ["[inline: x>0]", "[inline: \\sqrt{x}]"]],
+    ["1. one\n   \\[\n   a = b\n   \\]\n2. two", ["[display: a = b]"]],
+  ];
+  for (const [text, want] of cases) {
+    const html = reply(text);
+    for (const w of want) assert.ok(html.includes(w), `${JSON.stringify(text)} → ${html}`);
+    assert.ok(!/\$|\\\(|\\\[/.test(html.replace(/\[(inline|display): [\s\S]*?\]/g, "")), `nothing left as source: ${html}`);
+  }
+  assert.ok(reply("| a | b |\n|---|---|\n| $|x|$ | c |").includes("<td>c</td>"), "the | in math is not a cell");
+});
+
+check("math: what is not math", () => {
+  const plain = (text) => MathText.split(text).math.length;
+  assert.strictEqual(plain("costs $5 and $6"), 0, "money");
+  assert.strictEqual(plain("price \\$5 and \\$6"), 0, "escaped");
+  assert.strictEqual(plain("`$x$` and ``a $y$ b``"), 0, "code spans");
+  assert.strictEqual(plain("```latex\n$x$ \\[y\\]\n```\n"), 0, "a fence");
+  assert.strictEqual(plain("~~~\n$x$\n"), 0, "a fence not closed yet");
+  assert.strictEqual(plain("a $x\n\ny$ b"), 0, "not over a blank line");
+  assert.strictEqual(plain("still coming: $x^2 + "), 0, "not closed (streaming)");
+  assert.strictEqual(plain("$$ $$ and $ $"), 0, "empty");
+  assert.strictEqual(plain("\\begin{theorem} $x$ \\end{theorem}"), 1, "a theorem is text, its math is math");
+  assert.ok(reply("`$x$`").includes("<code>$x$</code>"));
+  assert.ok(reply("    $x$ indented code").includes("<pre><code>$x$ indented code"), "in a code block it goes back as source");
+  assert.ok(!MathText.split("a \uE000 b").text.includes("\uE000"), "a reply's own placeholder characters go");
+});
+
+check("math: KaTeX gets the project's macros and what it lacks, mapped", () => {
+  const html = MathText.render("$\\norm{x}$ $\\eqref{eq:a}$\n\\begin{equation}\\label{eq:a} a \\end{equation}\n"
+    + "\\begin{multline} a \\\\ b \\end{multline}\n\\begin{eqnarray} a &=& b \\end{eqnarray}",
+  { markdown: (s) => MDJS.parse(s), katex, macros: { "\\norm": "\\left\\|#1\\right\\|" } });
+  assert.ok(!html.includes("katex-error") && !html.includes("#cc0000"), html.slice(0, 600));
+  assert.ok(html.includes("eq:a"), "\\eqref shows its key");
+  assert.strictEqual(MathText.prepare("\\begin{eqnarray*} a \\end{eqnarray*}"), "\\begin{array}{rcl} a \\end{array}");
+  // An unknown macro is marked, and the rest of the formula is still drawn.
+  const unknown = MathText.render("$\\nosuch + x$", { markdown: (s) => s, katex });
+  assert.ok(unknown.includes('class="katex"') && unknown.includes("#cc0000"), unknown.slice(0, 300));
+});
+
 Promise.all(pending).then(() => {
   if (failures.length) {
     console.error(failures.join("\n"));

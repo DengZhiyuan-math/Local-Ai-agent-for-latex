@@ -159,7 +159,7 @@ cm.getWrapperElement().style.display = "none";
 cm.on("change",() => { const t = activeTab(); if (t) { renderTabs(); scheduleSave(t); } });
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
 
-function modeFor(path) { return path.endsWith(".md") ? "markdown" : "stex"; }
+function modeFor(path) { return path.endsWith(".md") ? "markdown" : "prism-stex"; }
 function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }
 const isDirty = (t) => TABS.dirty(t);
 
@@ -540,7 +540,17 @@ let symbolsSeq = 0;
 async function loadSymbols() {
   const seq = ++symbolsSeq;
   const r = await Q.symbols();
-  if (seq === symbolsSeq && r._status === 200) { S.symbols = r; renderOutline(); }
+  if (seq === symbolsSeq && r._status === 200) { S.symbols = r; renderOutline(); redrawReplies(); }
+}
+// The replies are drawn again when the project's macros change: the first time they are
+// known (a restored log was drawn before them, and before the files its links point to)
+// and after you edit a \newcommand.
+let repliesMacros = null;
+function redrawReplies() {
+  const now = JSON.stringify(S.symbols.katex_macros || {});
+  if (now === repliesMacros) return;
+  repliesMacros = now;
+  for (const el of $("#chat-log").querySelectorAll(".msg.assistant[data-md]")) el.innerHTML = renderMd(el.dataset.md);
 }
 // Labels, outline and macros follow your own edits too, a moment after they are saved
 // (a new \label is offered by \cref{ right away).
@@ -1289,14 +1299,11 @@ $("#btn-chat").onclick = () => chatHidden(!$("#chat").classList.contains("hidden
 $("#chat-mode").value = store.get("chat.mode", "edit");
 $("#chat-mode").onchange = (e) => store.set("chat.mode", e.target.value);
 
-// The agent's replies: Markdown (marked: tables, lists, headings, links) with TeX math
-// (KaTeX: $…$, \(…\), $$…$$, \[…\]). Raw HTML in a reply is shown as text, links open only
-// http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
+// The agent's replies: Markdown (marked: tables, lists, headings, links) with TeX math as
+// KaTeX, the project's macros included. The math is found before Markdown reads the reply
+// (mathtext.js), so _ * \\ | in it stay TeX. Raw HTML in a reply is shown as text, links
+// open only http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
 const FILE_REF = /((?:[\w.-]+\/)*[\w.-]+\.(?:tex|bib|md))(?::(\d+))?/g;
-function texHtml(tex, display) {
-  try { return katex.renderToString(tex, { displayMode: display, throwOnError: false }); }
-  catch { return esc(tex); }
-}
 const MD = typeof marked === "undefined" || typeof katex === "undefined" ? null
   : new marked.Marked({ gfm: true, breaks: true }).use({
     renderer: {
@@ -1306,26 +1313,6 @@ const MD = typeof marked === "undefined" || typeof katex === "undefined" ? null
         ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ""}>${text}</a>` : text,
       image: (href, title, text) => esc(text || ""),
     },
-    extensions: [{
-      name: "mathBlock", level: "block",
-      start(src) { const m = src.match(/^ {0,3}(?:\$\$|\\\[)/m); return m ? m.index : undefined; },
-      tokenizer(src) {
-        const m = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/.exec(src);
-        if (m) return { type: "mathBlock", raw: m[0], text: (m[1] ?? m[2]).trim() };
-      },
-      renderer: (t) => texHtml(t.text, true),
-    }, {
-      name: "mathInline", level: "inline",
-      start(src) { const i = src.search(/\$|\\\(|\\\[/); return i < 0 ? undefined : i; },
-      tokenizer(src) {
-        let m = /^\$\$([\s\S]+?)\$\$/.exec(src) || /^\\\[([\s\S]+?)\\\]/.exec(src);
-        if (m) return { type: "mathInline", raw: m[0], text: m[1].trim(), display: true };
-        // $x$, but not "$5 and $6": no space just inside, no digit right after.
-        m = /^\\\(([\s\S]+?)\\\)/.exec(src) || /^\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/.exec(src);
-        if (m) return { type: "mathInline", raw: m[0], text: m[1], display: false };
-      },
-      renderer: (t) => texHtml(t.text, t.display),
-    }],
   });
 function linkFiles(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -1344,7 +1331,7 @@ function linkFiles(root) {
 function renderMd(text) {
   if (!MD) return renderPlain(text);
   const box = document.createElement("div");
-  box.innerHTML = MD.parse(String(text));
+  box.innerHTML = MathText.render(String(text), { markdown: (s) => MD.parse(s), katex, macros: S.symbols.katex_macros });
   linkFiles(box);
   return box.innerHTML;
 }
@@ -1400,6 +1387,8 @@ function restoreChatLog(html) {
       if (/^on/i.test(a.name) || (url && !/^(https?:|mailto:)/i.test(a.value.trim()))) el.removeAttribute(a.name);
     }
   }
+  // A reply whose text was kept is drawn from it again, as replies are drawn now.
+  for (const el of t.content.querySelectorAll(".msg.assistant[data-md]")) el.innerHTML = renderMd(el.dataset.md);
   $("#chat-log").replaceChildren(t.content);
 }
 function chatIntro() {
@@ -1509,6 +1498,7 @@ const AH = {
   apply(path) {
     for (const [doc, line, cls] of this.handles.get(path) || []) {
       doc.removeLineClass(line, "background", cls); doc.removeLineClass(line, "gutter", cls + "-g");
+      doc.removeLineClass(line, "wrap", cls + "-w");
     }
     const t = S.tabs.find((x) => x.path === path), out = [];
     if (t) {
@@ -1518,6 +1508,7 @@ const AH = {
         for (let l = m.from; l <= Math.min(m.to, last, m.from + 3000); l++) {
           const h = t.doc.addLineClass(l, "background", cls);
           t.doc.addLineClass(h, "gutter", cls + "-g");
+          t.doc.addLineClass(h, "wrap", cls + "-w");      // the line's text: its colours (app.css)
           out.push([t.doc, h, cls]);
         }
       }
@@ -1539,8 +1530,8 @@ const AH = {
 };
 
 /* The file the agent is writing, live, over the editor. A read-only view: your tabs, their
-   saving and their undo history are not touched. For an Edit, the text it replaces is struck
-   through and the new text appears after it; for a Write, the file appears from the top.
+   saving and their undo history are not touched. For an Edit, the text it replaces has a red
+   background and the new text appears after it in green; for a Write, the file appears from the top.
    When the step ends the view closes and the editor shows the changed lines. */
 const AV = {
   cm: null, id: null, path: null, name: null, hidden: false,
@@ -1548,7 +1539,7 @@ const AV = {
 
   view() {
     if (!this.cm) {
-      this.cm = CodeMirror($("#agent-view-cm"), { readOnly: true, lineNumbers: true, lineWrapping: true, mode: "stex" });
+      this.cm = CodeMirror($("#agent-view-cm"), { readOnly: true, lineNumbers: true, lineWrapping: true });   // begin() sets the mode
       $("#agent-view-hide").onclick = () => { this.hidden = true; $("#agent-view").hidden = true; };
     }
     return this.cm;
@@ -1834,6 +1825,7 @@ async function followTurn(job, provider, mode) {
         let el = messages.get(s.id);
         if (!el) messages.set(s.id, el = chatAppend("", "msg assistant"));
         el.innerHTML = renderMd(s.text);
+        el.dataset.md = s.text;          // kept with the log: drawn again when it is restored
         if (stick) log.scrollTop = log.scrollHeight;
       } else if (s.draw === "tool") {
         // Claude Code announced this call already (tool_start): fill in its summary.

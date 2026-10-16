@@ -422,6 +422,34 @@ class Symbols(unittest.TestCase):
         self.assertEqual({l["label"]: l["kind"] for l in s["labels"]},
                          {"sec:intro": "section", "lem:a": "lem"})
 
+    def test_macros_for_the_agents_replies(self):
+        project({"macros.sty": "\\newcommand{\\R}{\\mathbb{R}}\n\\DeclareMathOperator*{\\argmax}{arg\\,max}\n",
+                 "main.tex": r"""\documentclass{article}
+\usepackage{macros}
+\newcommand{\norm}[1]{\left\| #1 \right\|}
+\newcommand\abs[1]{%
+  \lvert #1 \rvert}
+\renewcommand{\R}{\mathbf{R}}
+\def\E{\mathbb{E}}
+\def\pair#1#2{(#1, #2)}
+\DeclareMathOperator{\Tr}{Tr}
+\DeclarePairedDelimiter{\ip}{\langle}{\rangle}
+\newcommand{\opt}[2][1]{#1 + #2}
+% \newcommand{\gone}{x}
+\newcommand{\broken}{\x
+\begin{document}\end{document}
+"""})
+        self.assertEqual(server.PROJECT.symbols()["katex_macros"], {
+            "\\R": "\\mathbf{R}",                         # the .tex file's \renewcommand wins
+            "\\argmax": "\\operatorname*{arg\\,max}",
+            "\\norm": "\\left\\| #1 \\right\\|",
+            "\\abs": "\\lvert #1 \\rvert",
+            "\\E": "\\mathbb{E}",
+            "\\pair": "(#1, #2)",
+            "\\Tr": "\\operatorname{Tr}",
+            "\\ip": "\\left\\langle #1 \\right\\rangle",
+        })
+
     def test_standard_names_without_newtheorem(self):
         project({"main.tex": "\\documentclass{article}\\begin{document}\\end{document}\n"})
         self.assertEqual(server.PROJECT.symbols()["env_titles"]["lemma"], "Lemma")

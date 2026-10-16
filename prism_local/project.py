@@ -262,7 +262,17 @@ class Project:
         keys = [{"key": key, "type": kind, "file": rel, "line": line}
                 for rel in files if rel.endswith(".bib") for key, kind, line in self.scan(rel, "bib") or []]
         return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
-                "environments": list(envs), "env_titles": envs}
+                "environments": list(envs), "env_titles": envs, "katex_macros": self.katex_macros(files)}
+
+    def katex_macros(self, files: list[str]) -> dict[str, str]:
+        """The project's macros for the agent's replies (KaTeX): {"\\R": "\\mathbb{R}", …},
+        from its .sty files and then its .tex files in document order; a later
+        definition wins, as \\renewcommand does."""
+        out: dict[str, str] = {}
+        for rel in [f for f in files if f.endswith(".sty")] + self.document_order(files):
+            for name, body in (self.scan(rel) or {}).get("definitions", []):
+                out["\\" + name] = body
+        return out
 
     def resolve_tex_name(self, name: str) -> str | None:
         return build.project_file(self.root, name)
