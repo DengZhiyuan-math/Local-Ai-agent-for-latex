@@ -12,4 +12,12 @@ vm.runInNewContext(update + "\n" + line, { cm: { on: (_, fn) => { change = fn; }
 for (let i = 0; i < 1000; i++) change();
 assert.strictEqual(rebuilds, 0, "typing must preserve the tab DOM");
 assert.ok(toggles <= 2, "dirty state changes only once");
+const MathText = require("../prism_local/static/mathtext.js");
+let formulas = 0;
+const katex = { renderToString: () => { formulas++; return "<span>formula</span>"; } };
+const render = (macros) => MathText.render("$x$ and $x$", { markdown: s => s, katex, macros });
+render(); render();
+assert.strictEqual(formulas, 1, "the same formula is typeset once across streamed redraws");
+render({ "\\R": "R" });
+assert.strictEqual(formulas, 2, "a changed project macro invalidates the formula");
 console.log("ok");

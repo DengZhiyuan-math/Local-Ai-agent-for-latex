@@ -132,12 +132,27 @@ const MathText = (() => {
         be === "begin" ? `\\begin{${ENV_MAP[env]}}` : `\\end{${ENV_MAP[env].split("}")[0]}}`);
   }
 
+  const caches = new WeakMap();
   function texHtml(katex, f, macros) {
+    let cache = caches.get(katex);
+    if (!cache) { cache = { entries: new Map(), size: 0 }; caches.set(katex, cache); }
+    const key = JSON.stringify([f.tex, f.display, Object.entries(macros || {}).sort()]);
+    if (cache.entries.has(key)) {
+      const html = cache.entries.get(key); cache.entries.delete(key); cache.entries.set(key, html); return html;
+    }
     try {
-      return katex.renderToString(prepare(f.tex), {
+      const html = katex.renderToString(prepare(f.tex), {
         displayMode: f.display, throwOnError: false, strict: "ignore",
         macros: { ...BASE_MACROS, ...(macros || {}) },
       });
+      if (key.length + html.length <= 100000) {
+        cache.entries.set(key, html); cache.size += key.length + html.length;
+        while (cache.entries.size > 256 || cache.size > 2000000) {
+          const oldest = cache.entries.keys().next().value;
+          cache.size -= oldest.length + cache.entries.get(oldest).length; cache.entries.delete(oldest);
+        }
+      }
+      return html;
     } catch {                                    // not a parse error: the source, as code
       return `<code class="tex-src">${esc(f.raw)}</code>`;
     }
