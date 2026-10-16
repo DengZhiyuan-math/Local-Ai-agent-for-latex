@@ -75,6 +75,18 @@ class Targets(unittest.TestCase):
         self.assertEqual(self.g.settings.read()["sync_target"]["branch_ref"], "refs/heads/main")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
+    def test_status_binds_nothing_the_worker_does(self):
+        """The page asks status() every two seconds: it shows the target an unbound project
+        would bind, and writes nothing; the worker's first step binds it."""
+        settings = self.root / ".git" / "prism-local.json"
+        st = self.g.status()
+        self.assertIsNone(st["blocked_reason"])
+        self.assertEqual(st["target"]["branch_ref"], "refs/heads/main")
+        self.assertIsNone(st["bound_target"])
+        self.assertFalse(settings.exists(), "a look writes nothing")
+        self.g._start()                                 # what the worker does first
+        self.assertEqual(self.g.status()["bound_target"]["branch_ref"], "refs/heads/main")
+
     def test_status_runs_no_git_for_the_target_until_the_config_changes(self):
         self.g.bind_target()
         self.g.status()

@@ -173,9 +173,11 @@ def sync_facts(root: Path, git_dir: Path) -> dict:
     hit = _SYNC_FACTS.get(str(git_dir))
     if hit and stamp is not None and hit[0] == key:
         return hit[1]
-    status = project_sync(root).status()
+    sync = project_sync(root)
+    sync.validate_target()          # a target not bound yet is bound, as the editor's worker does
+    status = sync.status()          # which binds nothing itself
     facts = {k: status[k] for k in ("github", "blocked_reason", "target")}
-    # Asked again: the status may have bound the target, changing prism-local.json.
+    # Asked again: validate_target may have bound the target, changing prism-local.json.
     _SYNC_FACTS[str(git_dir)] = ((refs_stamp(git_dir), _stat(git_dir / "prism-local.json"),
                                   synctarget.config_key(git_dir)), facts)
     return facts

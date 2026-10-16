@@ -76,7 +76,8 @@ class GitSyncTest(unittest.TestCase):
                 return subprocess.CompletedProcess(args, 1, "", " ! [rejected] main -> main (fetch first)")
             return real(*args, **kw)
         with mock.patch.object(self.g, "git", side_effect=rejected), \
-                mock.patch.object(self.g, "pull", side_effect=lambda manual=False: None):
+                mock.patch.object(self.g, "pull", side_effect=lambda manual=False: gitsync.Outcome(
+                    "local", "The agent is working: merged once its turn ends.")):
             out = self.g.push(manual=True)
         self.assertNotIn("resolve host", out.message or "")
         self.assertIn("pull first", out.message)
@@ -430,10 +431,31 @@ class GitSyncTest(unittest.TestCase):
         (other / "sec.tex").write_text("from the other computer\n", encoding="utf-8")
         git(other, "commit", "-q", "-am", "elsewhere")
         git(other, "push", "-q")
-        self.g.pull()
+        done = self.g.pull()
+        self.assertEqual((done.state, done.error), ("synced", None))
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "from the other computer\n")
         self.assertEqual(self.g.behind, 0)
         self.assertIn("Pulled 1 commit", self.g.notice)
+
+    def test_a_pull_and_a_button_say_what_they_did(self):
+        """What a pull or a button met is returned to whoever asked; status() keeps it too,
+        until a step succeeds (the worker's commit, say)."""
+        away = self.remote.with_name(self.remote.name + "-away")      # GitHub cannot be reached
+        self.remote.rename(away)
+        self.addCleanup(away.rename, self.remote)                      # removed with the tmpdirs
+        done = self.g.pull()
+        self.assertEqual(done.state, "failed")
+        self.assertIn("Could not reach GitHub", done.error)
+        self.assertEqual(self.g.status()["error"], done.error)
+        clicked = self.g.now("pull")
+        self.assertIn("Could not reach GitHub", clicked.error)
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Autosave")
+        self.assertIsNone(self.g.status()["error"])
+        self.assertIn("Could not reach GitHub", clicked.error, "the click's answer stays its own")
+        self.assertIn("Could not reach GitHub", self.g.now("resolve").error)
+        with mock.patch.object(self.g, "busy_fn", return_value=True):
+            self.assertEqual(self.g.now("commit").state, "local")
 
     def test_only_a_button_may_ask_for_a_login(self):
         seen, real = [], gitsync.gitenv.git

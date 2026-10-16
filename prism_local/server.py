@@ -525,6 +525,7 @@ class Handler(httpbase.Handler):
                                             bool(body.get("force"))))
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
+            done = None
             if action == "bind":
                 if not isinstance(body.get("target"), dict):
                     return self._err(400, "Open the Git menu and confirm the displayed target")
@@ -534,10 +535,13 @@ class Handler(httpbase.Handler):
             elif action in ("commit", "pull", "resolve"):
                 if action == "resolve" and PROJECT.busy():
                     return self._err(409, "wait until the build or the agent's turn has finished")
-                GITSYNC.now(action)
+                done = GITSYNC.now(action)
             else:
                 return self._err(400, "unknown action")
-            return self._json({**GITSYNC.status(), "github": github_url()})
+            st = GITSYNC.status()
+            if done is not None and done.error:
+                st["error"] = done.error        # this click's, whatever the worker met meanwhile
+            return self._json({**st, "github": github_url()})
         if path == "/api/agent":
             scope = body.get("scope") or None
             if scope is not None:
