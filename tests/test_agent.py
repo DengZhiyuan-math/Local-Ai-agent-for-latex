@@ -51,6 +51,37 @@ def job_for(**kw):
     return j
 
 
+class CountedReads:
+    """A file whose reads add up, in `total`, how much they returned."""
+
+    def __init__(self, stream, total: list):
+        self.stream, self.total = stream, total
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stream.close()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def __iter__(self):
+        for line in self.stream:
+            self.total.append(len(line))
+            yield line
+
+    def read(self, *args):
+        data = self.stream.read(*args)
+        self.total.append(len(data))
+        return data
+
+    def readline(self, *args):
+        data = self.stream.readline(*args)
+        self.total.append(len(data))
+        return data
+
+
 def no_account_lock(test):
     """Ignore the allowed Claude account in the user's own settings, which would make a
     test run the real `claude auth status`."""
@@ -510,6 +541,57 @@ class DeepCodeBackend(unittest.TestCase):
                 release.write_text("go")
                 wait_done(job)
         self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1, "its own tool is shown once")
+
+    def test_a_long_session_is_read_once_then_only_what_is_appended(self):
+        """Each probe while the session file changed, and the end of the turn, read and
+        parsed the whole file again: a long chat was read three times a turn and more."""
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        from backend_deepcode import sessions_dir
+        session = sessions_dir(self.root) / f"{sid}.jsonl"
+        with open(session, "a", encoding="utf-8") as f:
+            for i in range(2000):
+                f.write(json.dumps({"role": "assistant", "content": f"reply {i} " + "x" * 400}) + "\n")
+        size = session.stat().st_size
+        read: list[int] = []
+        real_open = Path.open
+
+        def counting(path, *args, **kw):
+            stream = real_open(path, *args, **kw)
+            return CountedReads(stream, read) if Path(path).name == session.name else stream
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release)}), \
+                mock.patch.object(Path, "open", counting):
+            job = self.m.jobs[self.m.start("second", sid, "ask")["job"]]
+            try:
+                deadline = time.monotonic() + 3
+                while not any(e["t"] == "tool" for e in job.events) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertFalse(job.done, "a probe saw the tool while the CLI ran")
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+        self.assertLess(sum(read), size + 100_000, "the earlier turns are read once")
+
+    def test_a_session_file_rewritten_is_read_again_from_the_start(self):
+        from backend_deepcode import SessionLog
+        path = self.home / "session.jsonl"
+
+        def line(n):
+            return json.dumps({"role": "user", "content": n}) + "\n"
+        path.write_text(line(1) + line(2) + '{"role": "assist', encoding="utf-8")
+        log = SessionLog(path)
+        self.assertEqual([m["content"] for m in log.read()], [1, 2], "a half-written line waits")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('ant", "content": 3}\n')
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 3])
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 3], "nothing new, nothing repeated")
+        path.write_text(line(1) + line(2) + line(6) + line(4), encoding="utf-8")
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 6, 4], "changed before where it was read")
+        path.write_text(line(9), encoding="utf-8")
+        self.assertEqual([m["content"] for m in log.read()], [9], "shorter")
+        path.unlink()
+        self.assertEqual(log.read(), [])
 
     def test_ask_is_read_only(self):
         done = wait_done(self.m.jobs[self.m.start("EDIT nothing, just explain", None, "ask")["job"]])
