@@ -908,6 +908,18 @@ class Snapshots(unittest.TestCase):
         self.assertTrue(all(isinstance(e["preview"], str) and len(e["preview"]) <= 300 for e in results))
         self.assertEqual([e["error"] for e in results], [False, False, False, True])
 
+    def test_codex_reasoning_is_shown_as_thinking(self):
+        """Long reasoning showed only a static "working…": it is the thinking box now."""
+        job, st, codex = job_for(root=Path(".")), {}, Codex("codex")
+        codex.handle({"type": "item.started", "item": {"type": "reasoning", "id": "r1"}}, job, st)
+        codex.handle({"type": "item.completed", "item": {"type": "reasoning", "id": "r1",
+                                                          "text": "First, read main.tex."}}, job, st)
+        codex.handle({"type": "item.completed", "item": {"type": "reasoning", "id": "r2",
+                                                          "text": "Then the proof."}}, job, st)
+        self.assertEqual([(e["t"], e.get("text")) for e in job.events],
+                         [("thinking_start", None), ("thinking", "First, read main.tex."),
+                          ("thinking_start", None), ("thinking", "Then the proof.")])
+
     def test_undo_while_git_holds_the_files_says_busy(self):
         """git holding the files long (a repository's slow hook): Undo says so after a moment,
         changes nothing, and works when tried again."""

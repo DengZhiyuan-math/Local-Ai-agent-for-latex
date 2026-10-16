@@ -285,5 +285,13 @@ class Codex(CliBackend):
             tool("WebSearch", item.get("query") or "")
             if completed:
                 job.tool_result(iid, False)
+        elif kind == "reasoning":
+            # Its reasoning, as the panel shows a model's thinking (a static "working…" before).
+            thought: set = st.setdefault("reasoning", set())
+            if iid not in thought:
+                thought.add(iid)
+                job.emit({"t": "thinking_start"})
+            if completed and item.get("text"):
+                job.emit({"t": "thinking", "text": str(item["text"])})
         elif kind == "error" and completed:
             job.emit({"t": "error", "message": item.get("message") or "Codex error"})
