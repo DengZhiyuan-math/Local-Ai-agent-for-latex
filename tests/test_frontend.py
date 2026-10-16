@@ -24,6 +24,9 @@ class Frontend(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
 
     def test_plain_modules(self):
+        r = subprocess.run([shutil.which("node"), str(HERE / "async_check.js")], capture_output=True,
+                           text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
         r = subprocess.run([shutil.which("node"), str(HERE / "frontend_check.js")], capture_output=True,
                            text=True, encoding="utf-8", timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr or r.stdout)

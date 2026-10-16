@@ -1188,9 +1188,12 @@ const provGet = (k) => { const key = conversationKey(k); return key ? store.get(
 const provSet = (k, v) => { const key = conversationKey(k); if (key) store.set(key, v); };
 // The account the provider runs under (Claude Code: `claude auth status`), and whether
 // it is the one allowed in Home → Settings. A mismatch stops every turn on the server.
+const providerSeq = { account: 0, usage: 0, catalog: 0 };
 async function loadAccount() {
+  const provider = C.provider, seq = ++providerSeq.account;
   const el = $("#agent-account");
-  const r = await Q.account(C.provider).catch(() => null);
+  const r = await Q.account(provider).catch(() => null);
+  if (provider !== C.provider || seq !== providerSeq.account) return;
   const a = r && r._status === 200 && r.account;
   if (!a) { el.hidden = true; return; }
   el.hidden = false;
@@ -1906,9 +1909,11 @@ function renderQuota(rate) {
 
 // `auto`: the check on page load, which stays quiet when refused (the account line says why).
 async function checkUsage(auto = false) {
+  const provider = C.provider, seq = ++providerSeq.usage;
   const b = $("#quota-refresh");
   if (b) { b.disabled = true; b.textContent = "…"; }
-  const r = await Q.usage(C.provider).catch(() => ({}));
+  const r = await Q.usage(provider).catch(() => ({}));
+  if (provider !== C.provider || seq !== providerSeq.usage) return;
   renderQuota(r.rate || store.get("chat.rate", null));
   if (r.error && !auto) toast(r.error);
 }
@@ -2023,7 +2028,9 @@ let catalog = null;          // {skills, commands, terminal_only} from /api/agen
 
 async function loadCatalog(refresh = false) {
   if (catalog && !refresh) return catalog;
-  const r = await Q.commands(C.provider, refresh).catch(() => ({}));
+  const provider = C.provider, seq = ++providerSeq.catalog;
+  const r = await Q.commands(provider, refresh).catch(() => ({}));
+  if (provider !== C.provider || seq !== providerSeq.catalog) return null;
   if (r._status === 200) catalog = r;
   return catalog;
 }
