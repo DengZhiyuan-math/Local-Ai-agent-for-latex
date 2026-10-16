@@ -757,6 +757,28 @@ class CheckGitHub(TempState):
         self.assertEqual((g["behind"], g["fetch_error"]), (1, None))
         self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
 
+    def test_home_works_a_project_out_again_only_when_it_changed(self):
+        """The page asks every ten seconds: the title and the sync facts (some seven git
+        commands) are reused while their files and the repository are the same."""
+        import proc
+        from unittest import mock
+        root = self.tmp / "paper"
+        root.mkdir()
+        (root / "main.tex").write_text("\\title{First}\n", encoding="utf-8")
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        self.assertEqual(hub.title_of(root / "main.tex"), "First")
+        hub.git_info(root)
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            hub.git_info(root)
+        self.assertEqual(run.call_count, 1, "only the status of the files, which nothing caches")
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/me/paper.git"], cwd=root,
+                       check=True, capture_output=True)
+        self.assertEqual(hub.git_info(root)["github"], "https://github.com/me/paper", "a new remote is seen")
+        (root / "main.tex").write_text("\\title{Second, longer}\n", encoding="utf-8")
+        self.assertEqual(hub.title_of(root / "main.tex"), "Second, longer")
+
     def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
         """A page that asks then must keep watching, or it never shows what was found."""
         from unittest import mock

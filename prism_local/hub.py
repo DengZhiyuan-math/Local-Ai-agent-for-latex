@@ -40,7 +40,7 @@ import sources  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from publish import (create_github_repo, ensure_ignore, git_init, github_of, project_sync, publish_info,  # noqa: E402
                      publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
-from repository import RepoBusy, Repository, locate  # noqa: E402
+from repository import RepoBusy, Repository, locate, refs_stamp  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound  # noqa: E402
@@ -85,6 +85,61 @@ def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
     return count, newest
 
 
+def _stat(p: Path):
+    try:
+        st = p.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
+# The Home page asks for every project's facts every ten seconds, and most are the same as
+# the last time: each is worked out again only when what it is made of changed.
+_TITLES: dict[str, tuple] = {}       # main file -> (its stat, its title)
+_PLACES: dict[str, object] = {}      # project folder -> its Place, while its git dir is there
+_SYNC_FACTS: dict[str, tuple] = {}   # git dir -> (what they depend on, the sync facts)
+
+
+def title_of(path: Path) -> str | None:
+    """tex_title, read again only when the file changed (it is read whole for it)."""
+    st = _stat(path)
+    hit = _TITLES.get(str(path))
+    if hit and st is not None and hit[0] == st:
+        return hit[1]
+    title = tex_title(path)
+    _TITLES[str(path)] = (st, title)
+    return title
+
+
+def place_of(root: Path):
+    """locate(root), looked up again only when its repository's git dir went (the project
+    joined a shared repository, or left one) or it had none (one may have been made)."""
+    hit = _PLACES.get(str(root))
+    if hit is not None and hit.repo is not None and hit.repo.git_dir.is_dir():
+        return hit
+    place = locate(root, timeout=8)
+    _PLACES[str(root)] = place
+    return place
+
+
+def sync_facts(root: Path, git_dir: Path) -> dict:
+    """What git_info shows of the project's sync (its GitHub page, why it is paused, its
+    target): a GitSync's status, some seven git commands, worked out again only when the
+    repository's refs or configuration (refs_stamp), its prism-local.json (the binding)
+    or your ~/.gitconfig (URL rewrites) changed."""
+    stamp = refs_stamp(git_dir)
+    key = (stamp, _stat(git_dir / "prism-local.json"), _stat(Path.home() / ".gitconfig"))
+    hit = _SYNC_FACTS.get(str(git_dir))
+    if hit and stamp is not None and hit[0] == key:
+        return hit[1]
+    status = project_sync(root).status()
+    facts = {k: status[k] for k in ("github", "blocked_reason", "target")}
+    # Asked again: the status may have bound the target, changing prism-local.json.
+    _SYNC_FACTS[str(git_dir)] = ((refs_stamp(git_dir), _stat(git_dir / "prism-local.json"),
+                                  _stat(Path.home() / ".gitconfig")), facts)
+    return facts
+
+
 def pdf_path(root: Path) -> tuple[Path | None, str | None, str]:
     """The project's PDF, its document and its output folder, as the editor names them."""
     cfg = Config(root)
@@ -103,7 +158,7 @@ def project_info(entry: dict) -> dict:
         return d
     pdf, main, outdir = pdf_path(root)
     files, edited = scan_sources(root, outdir)
-    d.update(main=main, title=tex_title(root / main) if main else None,
+    d.update(main=main, title=title_of(root / main) if main else None,
              files=files, edited=edited,
              pdf_mtime=pdf.stat().st_mtime if pdf and pdf.is_file() else None)
     # Only a look: a server that is slow to answer right now keeps its instance file.
@@ -156,7 +211,7 @@ def git_info(root: Path) -> dict | None:
     repository (such as prism-local's) has none to sync with: report which one."""
     def git(*args):
         return gitenv.git(root, *args, timeout=8)
-    place = locate(root, timeout=8)
+    place = place_of(root)
     if place.kind == "none":
         return None
     toplevel = place.repo.top
@@ -175,7 +230,7 @@ def git_info(root: Path) -> dict | None:
     branch = re.split(r"\.\.\.| ", head)[0] if head else ""
     ahead = re.search(r"ahead (\d+)", head)
     behind = re.search(r"behind (\d+)", head)
-    sync = project_sync(root).status()
+    sync = sync_facts(root, place.repo.git_dir)
     web = sync["github"]
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
