@@ -169,7 +169,8 @@ function jumpToLine(line) {
 
 async function closeTab(path) {
   const t = S.tabs.find((x) => x.path === path);
-  if (t && isDirty(t) && C.editTurn) return toast(Tabs.unsavedWhy({ reason: "held" }) + " Keep this tab open until then.");
+  // Held for the turn, saved at its end (not a deleted or conflicting file: that is never saved by itself).
+  if (t && isDirty(t) && C.editTurn && !t.conflict) return toast(Tabs.unsavedWhy({ reason: "held" }) + " Keep this tab open until then.");
   if (t && isDirty(t) && !t.conflict) await TABS.save(t);      // autosave may still be pending
   if (t && isDirty(t) && !confirm(`${path} has unsaved changes. Close anyway?`)) return;
   TABS.remove((x) => x.path === path);

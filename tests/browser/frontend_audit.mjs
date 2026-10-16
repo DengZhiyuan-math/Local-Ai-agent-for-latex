@@ -170,6 +170,12 @@ try {
     const t = activeTab(), text = t.doc.getValue(); t.doc.replaceRange("draft", { line: 0, ch: 0 });
     C.editTurn = true; await closeTab(t.path);
     const kept = TABS.get(t.path) === t; C.editTurn = false; t.doc.setValue(text); TABS.synced(t, t.mtime); return kept;`));
+  check("closing a deleted file's tab during an Edit turn asks first, promising no save", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(), ask = window.confirm; let asked = false;
+    t.doc.replaceRange("draft", { line: 0, ch: 0 }); t.conflict = "gone";
+    window.confirm = () => { asked = true; return false; };
+    C.editTurn = true; await closeTab(t.path); C.editTurn = false; window.confirm = ask;
+    const ok = asked && TABS.get(t.path) === t; t.doc.setValue(text); TABS.synced(t, t.mtime); return ok;`));
   check("an error the server words is kept until dismissed", await p.ev(`
     const real = Q.fileAction; Q.fileAction = async () => ({ _status: 500, error: "GitHub did not answer within 30 seconds" });
     await fileAction("rename", {}); Q.fileAction = real;
