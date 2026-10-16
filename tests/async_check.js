@@ -26,4 +26,17 @@ async function usageAndCatalog() {
     assert.strictEqual(kind === "usage" ? drawn.at(-1).id : ctx.catalog.skills[0], "new", "late " + kind);
   }
 }
-account().then(usageAndCatalog).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function syncToggle() {
+  const SyncState = require("../prism_local/static/syncstate.js");
+  const calls = [], replies = [];
+  const toggle = SyncState.createToggle({ send: (value) => { calls.push(value); return new Promise(r => replies.push(r)); } });
+  const run = toggle.change(true);
+  assert.strictEqual(toggle.value(false), true);
+  toggle.change(false);
+  assert.strictEqual(toggle.value(true), false, "polls cannot override the latest intention");
+  replies.shift()({ _status: 200 }); await new Promise(r => setImmediate(r));
+  assert.deepStrictEqual(calls, [true, false], "writes are serialized");
+  replies.shift()({ _status: 200 }); await run;
+  assert.strictEqual(toggle.value(false), false);
+}
+account().then(usageAndCatalog).then(syncToggle).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

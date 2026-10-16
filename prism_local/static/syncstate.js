@@ -26,7 +26,27 @@ const SyncState = (() => {
     return { text: "Saved to GitHub", cls: "ok", detail: `Synced to ${targetText(st.target)}${when ? ", " + ago(when) : ""}.` };
   }
 
-  return { describeSync, targetText };
+  function createToggle({ send, onState = () => {}, onError = () => {} }) {
+    let wanted = null, running = null;
+    function change(value) {
+      wanted = !!value;
+      if (running) return running;
+      running = (async () => {
+        while (wanted !== null) {
+          const mine = wanted;
+          let r;
+          try { r = await send(mine); } catch (e) { r = { _status: 0, error: e.message }; }
+          const current = wanted === mine;
+          if (current) wanted = null;
+          if (r._status === 200) onState(r);
+          else if (current) { onError(r); onState(null); }
+        }
+      })().finally(() => { running = null; });
+      return running;
+    }
+    return { change, value: (server) => wanted === null ? !!server : wanted };
+  }
+  return { describeSync, targetText, createToggle };
 })();
 
 if (typeof module !== "undefined") module.exports = SyncState;

@@ -612,6 +612,11 @@ async function pollOnce() {
 /* ------------------------------------------------------------------ GitHub sync */
 // The project's changes are committed to its repository and pushed (gitsync.py): after you
 // stop editing, after each agent turn, and from this menu. The button says how far that is.
+const SYNC_TOGGLE = SyncState.createToggle({
+  send: (on) => Q.sync(on ? "on" : "off"),
+  onState: (r) => { if (r || S.sync) renderSync(r || S.sync); },
+  onError: (r) => toast("Could not change sync: " + (r.error || r._status)),
+});
 const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
 function renderSync(st) {
   S.sync = st;
@@ -631,7 +636,7 @@ function renderSync(st) {
   b.title = detail.replace(/<[^>]+>/g, "");
   const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
   $("#sync-detail").innerHTML = esc(detail) + last;
-  $("#sync-auto").checked = !!st.enabled;
+  $("#sync-auto").checked = SYNC_TOGGLE.value(st.enabled);
   // Where you and a co-author changed the same lines, both versions were kept: list them.
   const kept = (st.own && st.kept) || [];
   $("#sync-kept").hidden = !kept.length;
@@ -744,11 +749,7 @@ $("#sync-clash").addEventListener("click", async (e) => {
   $("#diff").innerHTML = diffHtml([head, "", r.diff || "(the same)"].join("\n"));
   openPanel("diff");
 });
-$("#sync-auto").onchange = async (e) => {
-  const r = await Q.sync(e.target.checked ? "on" : "off");
-  if (r._status === 200) renderSync(r);
-  else { e.target.checked = !e.target.checked; toast("Could not change sync: " + (r.error || "HTTP " + r._status)); }
-};
+$("#sync-auto").onchange = (e) => SYNC_TOGGLE.change(e.target.checked);
 document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) syncMenu(false); });
 
 // History: the commits that changed the open file; one of them shows what it changed and
