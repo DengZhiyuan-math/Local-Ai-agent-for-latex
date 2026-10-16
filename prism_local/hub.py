@@ -44,6 +44,7 @@ from repository import RepoBusy, Repository, locate, refs_stamp  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound, say  # noqa: E402
+from proc import NO_WINDOW  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -1108,9 +1109,10 @@ def pick_folder(start: str, title: str) -> dict:
             p = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
             return {"path": str(Path(p).resolve()) if p else None}
     try:
+        # No console window of its own on Windows (Home runs without one): only the dialog.
         r = subprocess.run([sys.executable, "-c", PICK_FOLDER, start or "", title or "Choose a folder"],
                            capture_output=True, timeout=900,
-                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"folder dialog unavailable: {e}"}
     if r.returncode != 0:

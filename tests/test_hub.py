@@ -217,6 +217,18 @@ class FolderDialog(unittest.TestCase):
         self.assertIn("--filename=/home/me/papers/", cmds[0])
 
 
+class TkinterDialog(unittest.TestCase):
+    def test_the_tkinter_dialog_opens_no_console_window(self):
+        """Home runs without a console on Windows: the dialog's python opens none either."""
+        from unittest import mock
+        import proc
+        done = subprocess.CompletedProcess([], 0, b"", b"")
+        with mock.patch.object(hub, "native_folder_dialogs", return_value=[]), \
+                mock.patch.object(hub.subprocess, "run", return_value=done) as run:
+            hub.pick_folder("", "Location")
+        self.assertEqual(run.call_args.kwargs.get("creationflags"), proc.NO_WINDOW.get("creationflags"))
+
+
 class Instances(TempState):
     """Read-only instance inspection and process identity checks."""
 
