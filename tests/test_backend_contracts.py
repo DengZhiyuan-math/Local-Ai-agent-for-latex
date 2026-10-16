@@ -174,6 +174,40 @@ console.log(JSON.stringify(steps.filter((s) => s.mark)));""",
                                                    {"mark": "read", "path": "sec/a.tex", "from": 1, "to": 2}])
 
 
+class SystemText(unittest.TestCase):
+    """The editor's instructions are built in one place (Backend.system_text); each backend
+    only names its line on file tools. The text is what each adapter built for itself."""
+
+    def test_each_backend_gets_the_text_it_had(self):
+        from backends import FILE_TOOL_RULE, SYSTEM_APPEND
+        from backend_claude import ClaudeCode
+        from backend_codex import CODEX_FILE_TOOL_RULE
+        from backend_deepcode import DEEPCODE_FILE_TOOL_RULE
+        cases = ((ClaudeCode("claude"), SYSTEM_APPEND),
+                 (Codex("codex"), SYSTEM_APPEND.replace(FILE_TOOL_RULE, CODEX_FILE_TOOL_RULE)),
+                 (DeepCode("deepcode"), SYSTEM_APPEND.replace(FILE_TOOL_RULE, DEEPCODE_FILE_TOOL_RULE)),
+                 (OpenAICompat("api", {"base_url": "http://unused"}), SYSTEM_APPEND.replace(FILE_TOOL_RULE, "")))
+        for backend, text in cases:
+            with self.subTest(backend.kind):
+                self.assertEqual(backend.system_text(), text)
+        self.assertEqual(len({text for _, text in cases}), 4)
+
+    def test_the_adapters_send_it(self):
+        from backend_claude import ClaudeCode
+        with tempfile.TemporaryDirectory() as tmp:
+            job = job_for(root=Path(tmp), prompt="go", mode="edit")
+            claude = ClaudeCode("claude", {"bin": sys.executable})
+            with mock.patch("backend_claude.use_config_dir"):
+                cmd, _ = claude.command(job)
+            self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], claude.system_text())
+            codex = Codex("codex", {"bin": sys.executable})
+            self.assertIn("\n" + codex.system_text() + "\n[Message]\ngo", codex.command(job)[1])
+            deepcode = DeepCode("deepcode")
+            self.assertIn("\n" + deepcode.system_text() + "\n[Message]\ngo", deepcode.message(job))
+            api = OpenAICompat("api", {"base_url": "http://unused"})
+            self.assertTrue(api.system_prompt(Path(tmp)).startswith(api.system_text() + "\n"))
+
+
 class DefaultModel(unittest.TestCase):
     def test_missing_executable_cannot_start_a_turn(self):
         with tempfile.TemporaryDirectory() as tmp:

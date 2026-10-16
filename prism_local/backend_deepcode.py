@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from contextlib import contextmanager
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, agent_env, cli_process, executable, file_place, find_bin
+from backends import Backend, Job, agent_env, cli_process, executable, file_place, find_bin
 from fsutil import project_path, write_bytes
 from gitenv import selects_repository
 import mcp_compile
@@ -221,6 +221,7 @@ class DeepCode(Backend):
     efforts = ("low", "high", "max")
     enforces_scope = False
     read_only_ask = False           # category checks are not an OS sandbox; also restore writes
+    file_tool_rule = DEEPCODE_FILE_TOOL_RULE
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -315,9 +316,8 @@ class DeepCode(Backend):
         text = job.prompt
         if job.mode != "edit":
             text = f"{text}\n\n{ASK_NOTE}"
-        rules = SYSTEM_APPEND.replace(FILE_TOOL_RULE, DEEPCODE_FILE_TOOL_RULE)
         return (f"[Instructions from the editor]\nThese instructions replace earlier editor instructions.\n"
-                f"{rules}\n[Message]\n{text}")
+                f"{self.system_text()}\n[Message]\n{text}")
 
     @contextmanager
     def turn_settings(self, job: Job):

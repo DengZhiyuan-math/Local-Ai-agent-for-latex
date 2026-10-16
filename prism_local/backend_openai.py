@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 
 import mcp_compile
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, attachment_type, file_place
+from backends import Backend, Job, attachment_type, file_place
 from fsutil import project_path, with_line_ends_of, write_bytes
 
 MAX_READ = 200_000        # characters of one read_file result
@@ -93,6 +93,7 @@ class ApiError(Exception):
 class OpenAICompat(Backend):
     kind = "openai"
     label = "OpenAI-compatible API"
+    file_tool_rule = ""             # its file tools are the only tools it has (TOOL_PROMPT)
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -215,7 +216,7 @@ class OpenAICompat(Backend):
         return res
 
     def system_prompt(self, root: Path) -> str:
-        parts = [SYSTEM_APPEND.replace(FILE_TOOL_RULE, ""), TOOL_PROMPT]
+        parts = [self.system_text(), TOOL_PROMPT]
         for name in PROJECT_RULES:
             try:
                 p = project_path(root, name)

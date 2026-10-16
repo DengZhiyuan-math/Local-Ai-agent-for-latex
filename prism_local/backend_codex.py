@@ -23,7 +23,7 @@ import shutil
 import subprocess
 from functools import lru_cache
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, CliBackend, Job, executable, find_bin
+from backends import CliBackend, Job, executable, find_bin
 from proc import run as run_bounded
 from fsutil import METADATA, is_metadata, metadata_paths, project_path
 import mcp_compile
@@ -134,6 +134,7 @@ class Codex(CliBackend):
     efforts = ("minimal", "low", "medium", "high", "xhigh")
     enforces_scope = True
     input_types = ("text", "image")
+    file_tool_rule = CODEX_FILE_TOOL_RULE
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -223,10 +224,9 @@ class Codex(CliBackend):
                 cmd += ["--image", str(path)]
         # Codex has no append-system-prompt flag. Refresh the editor instructions on
         # every turn so resumed chats also replace an earlier Claude-only tool rule.
-        instructions = SYSTEM_APPEND.replace(FILE_TOOL_RULE, CODEX_FILE_TOOL_RULE)
         prompt = ("[Instructions from the editor for this turn]\n"
                   "These instructions replace earlier editor instructions.\n"
-                  f"{instructions}\n[Message]\n{job.prompt}")
+                  f"{self.system_text()}\n[Message]\n{job.prompt}")
         return cmd + ["-"], prompt
 
     def handle(self, d: dict, job: Job, st: dict) -> None:

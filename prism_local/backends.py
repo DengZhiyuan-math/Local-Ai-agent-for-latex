@@ -69,7 +69,9 @@ FILE_TOOL_RULE = """\
   Write), not shell commands such as cat, sed, python or rm.
 """
 
-SYSTEM_APPEND = """\
+# The editor's instructions, around the line on file tools that each backend words for its
+# own tools (Backend.file_tool_rule; Backend.system_text puts them together).
+SYSTEM_BEFORE_TOOLS = """\
 You are being driven from prism-local, a local LaTeX web editor, not the
 terminal. The author sees your text in a chat panel next to the LaTeX source
 and the compiled PDF.
@@ -84,7 +86,9 @@ and the compiled PDF.
   \\end{equation} (or equation*, align, align*, gather, multline), never the
   shortcuts \\[ ... \\] or $$ ... $$. Use \\begin{...} environments rather than
   shortcuts elsewhere too.
-""" + FILE_TOOL_RULE + """\
+"""
+
+SYSTEM_AFTER_TOOLS = """\
 - To compile, use the compile tool when you have it: it runs the editor's own
   build (the author's Compile button) and returns the errors with file:line.
   It builds the document you edited, a standalone .tex as well as the main file.
@@ -98,6 +102,8 @@ and the compiled PDF.
 - Keep replies concise. If the project has a CLAUDE.md or AGENTS.md, follow it exactly.
 - Do not claim an argument is correct, or a step proved, unless you checked it.
 """
+
+SYSTEM_APPEND = SYSTEM_BEFORE_TOOLS + FILE_TOOL_RULE + SYSTEM_AFTER_TOOLS   # Claude Code's
 
 
 def agent_env(base: dict | None = None) -> dict:
@@ -328,6 +334,7 @@ class Backend:
     usage_limits = False              # reports subscription usage limits (/api/agent/usage)
     input_types = ("text",)
     rate: dict | None = None          # the usage limits last seen (usage_limits)
+    file_tool_rule = FILE_TOOL_RULE   # the instructions' line on file tools, for its own tools
 
     def __init__(self, pid: str, spec: dict | None = None):
         spec = spec or {}
@@ -347,6 +354,10 @@ class Backend:
     def unavailable(self) -> str | None:
         """None when the backend can run, else why not (shown to the author)."""
         return None
+
+    def system_text(self) -> str:
+        """The editor's instructions to the agent, with this backend's line on file tools."""
+        return SYSTEM_BEFORE_TOOLS + self.file_tool_rule + SYSTEM_AFTER_TOOLS
 
     def check(self, model: str | None, effort: str | None) -> str | None:
         if effort and effort not in self.efforts:

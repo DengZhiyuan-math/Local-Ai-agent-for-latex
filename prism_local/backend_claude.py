@@ -25,7 +25,7 @@ from pathlib import Path
 import registry
 import settings
 import sessionmeta
-from backends import SYSTEM_APPEND, CliBackend, Job, executable, find_bin, kill_tree, start
+from backends import CliBackend, Job, executable, find_bin, kill_tree, start
 from proc import run as run_bounded
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
@@ -432,7 +432,7 @@ class ClaudeCode(CliBackend):
             perm = "default"
         cmd = [self.bin(), "-p", "--output-format", "stream-json", "--verbose",
                "--include-partial-messages", "--permission-mode", perm,
-               "--append-system-prompt", SYSTEM_APPEND]
+               "--append-system-prompt", self.system_text()]
         allowed = self.scope_rules(job.scope) if job.scope else []
         cmd += ["--strict-mcp-config"]
         if job.may_compile:
