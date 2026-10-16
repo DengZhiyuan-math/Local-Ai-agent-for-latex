@@ -26,4 +26,29 @@ for (let i = 0; i < 1000; i++) batch.set("reply", i);
 assert.strictEqual(frames.length, 1);
 frames.shift()();
 assert.deepStrictEqual(drawn, [["reply", 999]]);
-console.log("ok");
+const elements = new Map();
+const dollar = (key) => {
+  if (!elements.has(key)) elements.set(key, { _html: "", writes: 0, removeAttribute() {},
+    get innerHTML() { return this._html; }, set innerHTML(v) { this._html = v; this.writes++; } });
+  return elements.get(key);
+};
+const syncStart = source.indexOf("function htmlIfChanged(") >= 0 ? source.indexOf("function htmlIfChanged(") : source.indexOf("function renderSync(");
+const sync = vm.runInNewContext(source.slice(syncStart, source.indexOf("\nfunction syncMenu", syncStart)) + ";renderSync", {
+  $: dollar, S: {}, SYNC_TOGGLE: { value: Boolean }, SYNC_NOTICE: {}, document: { querySelectorAll: () => [] },
+  esc: String, ago: () => "now", toast: () => {}, SyncState: require("../prism_local/static/syncstate.js") });
+const state = { own: true, remote: true, enabled: true, kept: [{ path: "a.tex", line: 1, who: "A" }], clash: [] };
+sync(state); sync(state);
+assert.strictEqual(dollar("#sync-kept").writes, 1, "unchanged sync menus preserve their buttons");
+const pdfSource = fs.readFileSync(require.resolve("../prism_local/static/pdfview.js"), "utf8");
+let offsets = 0, globalClears = 0, pageClears = 0;
+const label = {}, pdf = vm.runInNewContext(pdfSource + ";PV", { pdfjsLib: { GlobalWorkerOptions: {} },
+  $: (key) => key === "#pdf-scroll" ? { scrollTop: 74250, clientHeight: 300 } : label,
+  document: { querySelectorAll: () => { globalClears++; return []; } } });
+pdf.views = Array.from({ length: 1000 }, (_, i) => ({ div: { get offsetTop() { offsets++; return i * 100; }, dataset: { page: i + 1 } } }));
+pdf.updatePageLabel();
+assert.strictEqual(label.textContent, "744 / 1000");
+assert.ok(offsets <= 12, "page labels use logarithmic offset reads");
+pdf.drawHits({ div: { querySelectorAll: () => { pageClears++; return []; } } }).then(() => {
+  assert.strictEqual(globalClears, 0, "one rendered page cannot erase every page's hits");
+  assert.ok(pageClears > 0); console.log("ok");
+}).catch(e => { console.error(e); process.exitCode = 1; });

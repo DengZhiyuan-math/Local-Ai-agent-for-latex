@@ -633,6 +633,7 @@ const SYNC_TOGGLE = SyncState.createToggle({
   onError: (r) => toast("Could not change sync: " + (r.error || r._status)),
 });
 const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
+function htmlIfChanged(selector, html) { const el = $(selector); if (el.innerHTML !== html) el.innerHTML = html; }
 function renderSync(st) {
   S.sync = st;
   $("#sync-box").hidden = false;
@@ -650,21 +651,21 @@ function renderSync(st) {
   b.className = "ghost sync-" + cls;
   b.title = detail.replace(/<[^>]+>/g, "");
   const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
-  $("#sync-detail").innerHTML = esc(detail) + last;
+  htmlIfChanged("#sync-detail", esc(detail) + last);
   $("#sync-auto").checked = SYNC_TOGGLE.value(st.enabled);
   // Where you and a co-author changed the same lines, both versions were kept: list them.
   const kept = (st.own && st.kept) || [];
   $("#sync-kept").hidden = !kept.length;
-  $("#sync-kept").innerHTML = kept.length ? `<div class="dd-note">Both versions kept where you and a co-author changed the same lines.
+  htmlIfChanged("#sync-kept", kept.length ? `<div class="dd-note">Both versions kept where you and a co-author changed the same lines.
       Keep what you want and delete the <code>% [prism-local]</code> lines:</div>` + kept.map((k) =>
     `<button type="button" class="dd-item" data-kept="${esc(k.path)}" data-line="${k.line || 1}">${esc(k.path)}${k.line ? ":" + k.line : ""}
-       <small>${k.side ? "GitHub's version saved as " + esc(k.side) : "with " + esc(k.who)}</small></button>`).join("") + "<hr>" : "";
+       <small>${k.side ? "GitHub's version saved as " + esc(k.side) : "with " + esc(k.who)}</small></button>`).join("") + "<hr>" : "");
   // The automatic merge could not be done: compare, combine, then keep the combination.
   const clash = (st.own && st.clash) || [];
   $("#sync-clash").hidden = !clash.length;
-  $("#sync-clash").innerHTML = clash.map((f) =>
+  htmlIfChanged("#sync-clash", clash.map((f) =>
     `<button type="button" class="dd-item" data-theirs="${esc(f)}">Compare with GitHub's version: ${esc(f)}</button>`).join("")
-    + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : "");
+    + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : ""));
   // Each notice once, by its number (several requests return it), and only a recent one:
   // a page opened later does not repeat what happened before it.
   if (st.notice && st.notice_id !== SYNC_NOTICE.seen && st.notice_age < 60)
@@ -1756,7 +1757,7 @@ async function followTurn(job, provider, mode) {
   const log = $("#chat-log");
   const status = (s) => { $("#chat-status").textContent = C.stopping ? "Stopping…" : s; };
   const messages = new Map();    // message id -> element
-  const replies = Util.frameBatch((el, text) => { el.innerHTML = renderMd(text); });
+  const replies = Util.frameBatch((el, text) => { const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60; el.innerHTML = renderMd(text); if (stick) log.scrollTop = log.scrollHeight; });
   const tools = new Map();       // tool id -> its row
   // Thinking and the text of a file being written stream into their own boxes, which close
   // when that step ends (click to open them again). Their text is drawn once per batch of
