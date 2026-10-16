@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from errors import Params, Refused
+from errors import LockBusy, Params, Refused
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -50,7 +50,8 @@ class Server(ThreadingHTTPServer):
     def handle_error(self, request, client_address):
         # A page that goes away in the middle of an answer (a reload, a closed tab) is
         # not worth a traceback in the log.
-        if isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
+        e = sys.exc_info()[1]
+        if isinstance(e, (ConnectionError, TimeoutError)) and not isinstance(e, LockBusy):
             return
         super().handle_error(request, client_address)
 
@@ -164,6 +165,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             return handle(path, Params(arg))
         except Exception as e:
+            if isinstance(e, LockBusy) and not self._answered:
+                return self._err(e.status, str(e))      # another window holds a lock: say so
             if self._answered or isinstance(e, (ConnectionError, TimeoutError)):
                 raise                       # the page went away, or the answer was started
             if isinstance(e, Refused):

@@ -7,6 +7,7 @@ import threading
 import tempfile
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 from unittest import mock
@@ -15,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import errors  # noqa: E402
 import httpbase  # noqa: E402
+import registry  # noqa: E402
 from presence import Presence  # noqa: E402
 
 
@@ -37,6 +39,9 @@ class Failing(httpbase.Handler):
             return self._json({}[path])                     # a bug's KeyError
         if path == "/value":
             raise ValueError("not a name")
+        if path == "/locked":
+            with registry.FileLock(Path(q["lock"]), timeout=0.2):
+                return self._json({"ok": True})
         return self._json({"ok": True})
 
     def post(self, path, body):
@@ -71,6 +76,15 @@ class Answers(unittest.TestCase):
         status, r = self.ask("/slow")
         self.assertEqual(status, 504)
         self.assertIn("git did not finish in 10 seconds", r["error"])
+
+    def test_a_lock_another_window_holds_is_a_409_that_says_so(self):
+        """Not a dropped connection, which the page reads as "server not reachable"."""
+        lock = Path(tempfile.mkdtemp()) / "projects.lock"
+        with registry.FileLock(lock, timeout=1):
+            status, r = self.ask("/locked?lock=" + urllib.parse.quote(str(lock)))
+        self.assertEqual(status, 409)
+        self.assertIn("busy with projects.lock; try again", r["error"])
+        self.assertEqual(self.ask("/locked?lock=" + urllib.parse.quote(str(lock))), (200, {"ok": True}))
 
     def test_an_answer_already_sent_is_not_followed_by_another(self):
         self.assertEqual(self.ask("/half"), (200, {}))

@@ -19,6 +19,7 @@ import shutil
 import time
 import zlib
 from pathlib import Path
+from errors import LockBusy
 from fsutil import replace_file
 
 WIN = os.name == "nt"
@@ -106,7 +107,7 @@ class FileLock:
             except OSError:
                 if time.monotonic() > deadline:
                     self.fh.close()
-                    raise TimeoutError(f"another Prism process holds {self.path}")
+                    raise LockBusy(f"Another Prism window is busy with {self.path.name}; try again in a moment")
                 time.sleep(0.1)
 
     def __exit__(self, *exc):

@@ -28,6 +28,14 @@ class Conflict(Refused):
     status = 409
 
 
+class LockBusy(TimeoutError):
+    """A lock between Prism processes (registry.FileLock) was not had in time: another
+    window is saving the same state. A TimeoutError, as callers have always caught it;
+    a request it reaches is answered 409 with this message (httpbase), not dropped as
+    though the page had gone."""
+    status = 409
+
+
 class Params(dict):
     """A request's query or JSON body."""
 

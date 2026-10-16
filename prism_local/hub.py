@@ -43,7 +43,7 @@ from publish import (create_github_repo, ensure_ignore, git_init, github_of, pro
 from repository import RepoBusy, Repository, locate  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
-from errors import Conflict, NotFound  # noqa: E402
+from errors import NotFound  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -1041,104 +1041,98 @@ class Handler(httpbase.Handler):
     pages = {"/": "home.html", "/index.html": "home.html"}
 
     def get(self, path, q):
-        try:
-            if path == "/api/ping":
-                return self._json({"app": "prism-home", "pid": os.getpid(),
-                                   "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
-            if path == "/api/projects":
-                return self._json({**list_projects(),
-                                   "updated": httpbase.code_stamp() > STARTED_CODE + 1})
-            if path == "/api/settings":
-                return self._json({"settings": settings.load(),
-                                   "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
-                                   "claude": claude_status(q.get("refresh") == "1")})
-            if path == "/api/folders/sync":
-                return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
-            if path == "/api/projects/publish":
-                return self._json(publish_info(Path(entry_for(q["id"])["path"])))
-            if path == "/api/fetch":
-                return self._json({k: v for k, v in FETCH.items()})
-            if path == "/api/git":
-                return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
-            if path == "/api/git/all":
-                ids = set(filter(None, q["ids"].split(","))) if "ids" in q else None
-                return self._json({"git": all_git_info(ids)})
-            if path == "/api/pdf":
-                pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
-                if not pdf or not pdf.is_file():
-                    return self._err(404, "no PDF yet")
-                return self._send(200, pdf.read_bytes(), "application/pdf")
-            return self._err(404, "not found")
-        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
-            raise Conflict(f"{e}; try again") from e
+        if path == "/api/ping":
+            return self._json({"app": "prism-home", "pid": os.getpid(),
+                               "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
+        if path == "/api/projects":
+            return self._json({**list_projects(),
+                               "updated": httpbase.code_stamp() > STARTED_CODE + 1})
+        if path == "/api/settings":
+            return self._json({"settings": settings.load(),
+                               "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
+                               "claude": claude_status(q.get("refresh") == "1")})
+        if path == "/api/folders/sync":
+            return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
+        if path == "/api/projects/publish":
+            return self._json(publish_info(Path(entry_for(q["id"])["path"])))
+        if path == "/api/fetch":
+            return self._json({k: v for k, v in FETCH.items()})
+        if path == "/api/git":
+            return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
+        if path == "/api/git/all":
+            ids = set(filter(None, q["ids"].split(","))) if "ids" in q else None
+            return self._json({"git": all_git_info(ids)})
+        if path == "/api/pdf":
+            pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
+            if not pdf or not pdf.is_file():
+                return self._err(404, "no PDF yet")
+            return self._send(200, pdf.read_bytes(), "application/pdf")
+        return self._err(404, "not found")
 
     def post(self, path, body):
-        try:
-            if path == "/api/settings":
-                return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
-                                   "claude": claude_status()})
-            if path == "/api/projects/add":
-                return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
-            if path == "/api/projects/create":
-                return self._json(create_project(body))
-            if path == "/api/projects/update":
-                return self._json(change_project(body["id"], body))
-            if path == "/api/projects/rename":
-                return self._json(rename_project(body["id"], str(body.get("name") or ""),
-                                                 bool(body.get("folder"))))
-            if path == "/api/projects/publish":
-                r = publish_project(Path(entry_for(body["id"])["path"]), str(body.get("name") or ""),
-                                    str(body.get("owner") or ""), list(body.get("leave_out") or []))
-                return self._json(r, 502 if "error" in r else 200)
-            if path == "/api/projects/remove":
-                return self._json(remove_project(body["id"]))
-            if path == "/api/projects/trash":
-                return self._json(trash_project(body["id"]))
-            if path == "/api/projects/copy":
-                return self._json(copy_project(body["id"]))
-            if path == "/api/projects/paste":
-                return self._json(paste_projects(str(body.get("folder_id") or "")))
-            if path == "/api/fetch":
-                return self._json(start_fetch_all())
-            if path == "/api/folders/create":
-                return self._json(create_folder(body))
-            if path == "/api/folders/update":
-                return self._json(change_folder(body))
-            if path == "/api/folders/sync":
-                return self._json(apply_sync(body))
-            if path == "/api/folders/remove":
-                return self._json(remove_folder(str(body["id"])))
-            if path == "/api/tags/update":
-                return self._json(change_tag(body))
-            if path == "/api/tags/remove":
-                return self._json(remove_tag(str(body["name"])))
-            if path == "/api/restart":
-                if RESTART["server"] is None:
-                    return self._err(409, "not ready to restart")
-                if LIFETIME is None:
-                    return self._err(409, "not ready to restart")
-                try:
-                    LIFETIME.transition()
-                except (instances.Busy, TimeoutError, OSError) as exc:
-                    return self._err(409, str(exc))
-                RESTART["again"] = True
-                threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
-                return self._json({"ok": True})
-            if path == "/api/projects/open":
-                r = open_project(body["id"])
-                return self._json(r, 502 if "error" in r else 200)
-            if path == "/api/projects/reveal":
-                p = Path(entry_for(body["id"])["path"])
-                if not p.is_dir():
-                    raise ValueError(f"folder not found: {p}")
-                desktop.open_folder(p)
-                return self._json({"ok": True})
-            if path == "/api/pick-folder":
-                return self._json(pick_folder(str(body.get("start") or ""),
-                                              str(body.get("title") or "")))
-            return self._err(404, "not found")
-        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
-            raise Conflict(f"{e}; try again") from e
+        if path == "/api/settings":
+            return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
+                               "claude": claude_status()})
+        if path == "/api/projects/add":
+            return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
+        if path == "/api/projects/create":
+            return self._json(create_project(body))
+        if path == "/api/projects/update":
+            return self._json(change_project(body["id"], body))
+        if path == "/api/projects/rename":
+            return self._json(rename_project(body["id"], str(body.get("name") or ""),
+                                             bool(body.get("folder"))))
+        if path == "/api/projects/publish":
+            r = publish_project(Path(entry_for(body["id"])["path"]), str(body.get("name") or ""),
+                                str(body.get("owner") or ""), list(body.get("leave_out") or []))
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/projects/remove":
+            return self._json(remove_project(body["id"]))
+        if path == "/api/projects/trash":
+            return self._json(trash_project(body["id"]))
+        if path == "/api/projects/copy":
+            return self._json(copy_project(body["id"]))
+        if path == "/api/projects/paste":
+            return self._json(paste_projects(str(body.get("folder_id") or "")))
+        if path == "/api/fetch":
+            return self._json(start_fetch_all())
+        if path == "/api/folders/create":
+            return self._json(create_folder(body))
+        if path == "/api/folders/update":
+            return self._json(change_folder(body))
+        if path == "/api/folders/sync":
+            return self._json(apply_sync(body))
+        if path == "/api/folders/remove":
+            return self._json(remove_folder(str(body["id"])))
+        if path == "/api/tags/update":
+            return self._json(change_tag(body))
+        if path == "/api/tags/remove":
+            return self._json(remove_tag(str(body["name"])))
+        if path == "/api/restart":
+            if RESTART["server"] is None:
+                return self._err(409, "not ready to restart")
+            if LIFETIME is None:
+                return self._err(409, "not ready to restart")
+            try:
+                LIFETIME.transition()
+            except (instances.Busy, TimeoutError, OSError) as exc:
+                return self._err(409, str(exc))
+            RESTART["again"] = True
+            threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+            return self._json({"ok": True})
+        if path == "/api/projects/open":
+            r = open_project(body["id"])
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/projects/reveal":
+            p = Path(entry_for(body["id"])["path"])
+            if not p.is_dir():
+                raise ValueError(f"folder not found: {p}")
+            desktop.open_folder(p)
+            return self._json({"ok": True})
+        if path == "/api/pick-folder":
+            return self._json(pick_folder(str(body.get("start") or ""),
+                                          str(body.get("title") or "")))
+        return self._err(404, "not found")
 
 
 def main():
