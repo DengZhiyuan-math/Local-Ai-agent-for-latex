@@ -11,4 +11,9 @@ assert.strictEqual(Turn.result({ outcome: "failed", error: null }).error, null, 
 assert.strictEqual(Turn.mayFollow({ started: 1, current: 1, focused: true, hidden: false }), true);
 for (const state of [{ current: 2 }, { focused: false }, { hidden: true }])
   assert.strictEqual(Turn.mayFollow({ started: 1, current: 1, focused: true, hidden: false, ...state }), false);
+let clock = 0;
+const quiet = Turn.create({ now: () => clock });
+quiet.feed([{ t: "tool", id: "one", name: "compile", summary: "a.tex" }]);
+clock = 11000;
+assert.ok(quiet.status.includes("last event 11s ago"));
 console.log("ok");

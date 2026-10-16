@@ -1790,8 +1790,7 @@ async function followTurn(job, provider, mode) {
   const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
   // Newer models (Opus) think without sending the text: the box then counts the seconds.
   const tick = () => {
-    if (!think || t.thinking() === null) return;
-    think.box.querySelector("summary").textContent = `Thinking… ${t.thinking()}s`;
+    if (think && t.thinking() !== null) think.box.querySelector("summary").textContent = `Thinking… ${t.thinking()}s`;
     status(t.status);
   };
   const timer = setInterval(tick, 1000);

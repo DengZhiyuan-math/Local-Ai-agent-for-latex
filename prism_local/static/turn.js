@@ -37,11 +37,13 @@ const Turn = (() => {
     let msg = null;                 // {id, text} of the reply being streamed
     let msgs = 0, streamed = false, pending = false;
     let status = "working…";
+    let lastEvent = now();
     const names = new Map();        // tool id -> name
     const live = new Map();         // tool id -> {name, path, lines}
     const turn = { session: null, changed: [], feed, end, thinking };
     Object.defineProperty(turn, "status", {
-      get: () => (think ? `thinking… ${thinking()}s` : status),
+      get: () => think ? `thinking… ${thinking()}s` : status
+        + (now() - lastEvent >= 5000 ? ` (last event ${Math.floor((now() - lastEvent) / 1000)}s ago)` : ""),
     });
 
     function thinking() {
@@ -65,6 +67,7 @@ const Turn = (() => {
     const newMessage = (text) => (msg = { id: ++msgs, text });
 
     function feed(events) {
+      if (events.length) lastEvent = now();
       const out = [];
       for (const e of events) {
         if (e.t !== "delta") flush(out);
