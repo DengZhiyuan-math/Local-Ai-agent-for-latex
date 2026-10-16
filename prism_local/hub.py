@@ -237,8 +237,12 @@ def fetch_all() -> None:
     if not _fetch_lock.acquire(blocking=False):
         return
     try:
+        # Running from now: working out the targets (each project's repository and GitHub
+        # link) takes a while with many projects, and a page that saw "not running" then
+        # would stop watching and never show what the fetch found.
+        FETCH.update(running=True, done=0, total=0, errors={})
         targets = fetch_targets()
-        FETCH.update(running=True, done=0, total=len(targets), errors={})
+        FETCH["total"] = len(targets)
         with ThreadPoolExecutor(max_workers=4) as ex:
             for top, err in zip(targets, ex.map(fetch_one, targets)):
                 FETCH["done"] += 1
@@ -253,6 +257,8 @@ def fetch_all() -> None:
 
 
 def start_fetch_all() -> dict:
+    if not _fetch_lock.locked():
+        FETCH["running"] = True         # before the thread: the page's next look sees it
     threading.Thread(target=fetch_all, daemon=True).start()
     return {"ok": True}
 

@@ -376,7 +376,7 @@ function renderBars(n) {
   $("#btn-preview").classList.toggle("on", H.preview);
   const running = H.projects.filter((p) => p.running).length;
   const behind = H.projects.filter((p) => H.git[p.id] && H.git[p.id].behind).length;
-  const fetchNote = H.fetch && H.fetch.running ? `Checking GitHub (${H.fetch.done}/${H.fetch.total})…`
+  const fetchNote = H.fetch && H.fetch.running ? `Checking GitHub${H.fetch.total ? ` (${H.fetch.done}/${H.fetch.total})` : ""}…`
     : behind ? `${plural(behind, "project")} with new changes on GitHub` : "";
   $("#status-left").textContent = plural(n, "item") + (sel.length ? `   ·   ${sel.length} selected` : "");
   $("#status-right").textContent = [running && `${running} open in an editor`, fetchNote].filter(Boolean).join("   ·   ");

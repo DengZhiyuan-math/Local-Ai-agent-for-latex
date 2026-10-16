@@ -704,6 +704,15 @@ class CheckGitHub(TempState):
         self.assertEqual((g["behind"], g["fetch_error"]), (1, None))
         self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
 
+    def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
+        """A page that asks then must keep watching, or it never shows what was found."""
+        from unittest import mock
+        seen = []
+        with mock.patch.object(hub, "fetch_targets", side_effect=lambda: seen.append(hub.FETCH["running"]) or []):
+            hub.fetch_all()
+        self.assertEqual(seen, [True])
+        self.assertFalse(hub.FETCH["running"])
+
     def test_errors_read_while_fetching_never_change_under_the_reader(self):
         """The cards read the fetch errors (git_info, from other threads) while the fetches
         run: a dict a reader is going through must not change size under it."""
