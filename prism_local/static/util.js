@@ -98,7 +98,17 @@ const Util = (() => {
     for (let i = elements.length - 1; i >= 0; i--) if (elements[i].length + html.length <= limit) html = elements[i] + html;
     return html;
   }
-  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog };
+  function frameBatch(draw, { schedule = requestAnimationFrame, cancel = cancelAnimationFrame } = {}) {
+    const pending = new Map(); let frame = null;
+    function flush() {
+      if (frame !== null) cancel(frame);
+      frame = null;
+      const batch = [...pending]; pending.clear();
+      for (const [key, value] of batch) draw(key, value);
+    }
+    return { set(key, value) { pending.set(key, value); if (frame === null) frame = schedule(flush); }, flush };
+  }
+  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog, frameBatch };
 })();
 
 if (typeof module !== "undefined") module.exports = Util;

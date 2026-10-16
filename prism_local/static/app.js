@@ -982,7 +982,8 @@ $("#problems").addEventListener("click", (e) => {
 });
 
 let diagMarks = [];
-function applyDiagnostics() {
+function applyDiagnostics() { cm.operation(applyDiagnosticMarks); }
+function applyDiagnosticMarks() {
   for (const [doc, h, cls] of diagMarks) doc.removeLineClass(h, "background", cls);
   diagMarks = [];
   for (const d of S.diagnostics) {
@@ -1168,12 +1169,14 @@ document.querySelectorAll(".gutter").forEach((g) => {
     e.preventDefault(); g.classList.add("drag");
     const target = { sidebar: $("#sidebar"), pdf: $("#pdf-pane"), chat: $("#chat") }[g.dataset.resize];
     const startX = e.clientX, startW = target.getBoundingClientRect().width;
-    const move = (ev) => {
-      const dx = ev.clientX - startX;
+    const resize = Util.frameBatch((_, x) => {
+      const dx = x - startX;
       const w = Math.max(160, startW + (g.dataset.resize === "sidebar" ? dx : -dx));
       target.style.width = w + "px"; cm.refresh();
-    };
+    });
+    const move = (ev) => resize.set("width", ev.clientX);
     const up = () => {
+      resize.flush();
       g.classList.remove("drag"); document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
       store.set("w." + g.dataset.resize, target.style.width);
     };
@@ -1457,13 +1460,16 @@ const AH = {
 
   clear(kind = null) {
     for (const [path, list] of this.marks) {
-      this.marks.set(path, kind ? list.filter((m) => m.kind !== kind) : []);
+      const next = kind ? list.filter((m) => m.kind !== kind) : [];
+      if (next.length === list.length) continue;
+      if (next.length) this.marks.set(path, next); else this.marks.delete(path);
       this.apply(path);
     }
   },
 
   // Put the marks of `path` on its tab's document (after a swap, a reload, a change).
-  apply(path) {
+  apply(path) { cm.operation(() => this.applyNow(path)); },
+  applyNow(path) {
     for (const [doc, line, cls] of this.handles.get(path) || []) {
       doc.removeLineClass(line, "background", cls); doc.removeLineClass(line, "gutter", cls + "-g");
       doc.removeLineClass(line, "wrap", cls + "-w");
@@ -1750,6 +1756,7 @@ async function followTurn(job, provider, mode) {
   const log = $("#chat-log");
   const status = (s) => { $("#chat-status").textContent = C.stopping ? "Stopping…" : s; };
   const messages = new Map();    // message id -> element
+  const replies = Util.frameBatch((el, text) => { el.innerHTML = renderMd(text); });
   const tools = new Map();       // tool id -> its row
   // Thinking and the text of a file being written stream into their own boxes, which close
   // when that step ends (click to open them again). Their text is drawn once per batch of
@@ -1759,7 +1766,9 @@ async function followTurn(job, provider, mode) {
   const dirty = new Set();
   const draw = (stick) => {
     for (const x of dirty) {
-      x.pre.textContent = x.text.length > 200000 ? "…" + x.text.slice(-200000) : x.text;
+      if (x.text.length > 240000) { x.text = x.text.slice(-200000); x.pre.textContent = "…" + x.text; }
+      else if (x.text.length > x.drawn) x.pre.append(document.createTextNode(x.text.slice(x.drawn)));
+      x.drawn = x.text.length;
       x.pre.scrollTop = x.pre.scrollHeight;
     }
     dirty.clear();
@@ -1771,7 +1780,7 @@ async function followTurn(job, provider, mode) {
     box.className = cls; box.open = true;
     box.innerHTML = `<summary>${esc(summary)}</summary><pre></pre>`;
     log.appendChild(box);
-    return { box, pre: box.querySelector("pre"), text: "" };
+    return { box, pre: box.querySelector("pre"), text: "", drawn: 0 };
   };
   const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
   // Newer models (Opus) think without sending the text: the box then counts the seconds.
@@ -1803,7 +1812,7 @@ async function followTurn(job, provider, mode) {
       } else if (s.draw === "message") {
         let el = messages.get(s.id);
         if (!el) messages.set(s.id, el = chatAppend("", "msg assistant"));
-        el.innerHTML = renderMd(s.text);
+        replies.set(el, s.text);
         el.dataset.md = s.text;          // kept with the log: drawn again when it is restored
         if (stick) log.scrollTop = log.scrollHeight;
       } else if (s.draw === "tool") {
@@ -1864,7 +1873,7 @@ async function followTurn(job, provider, mode) {
     }
   } finally {            // whatever happened above, the panel and saving work again
     clearInterval(timer);
-    show(t.end(), false); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
+    show(t.end(), false); replies.flush(); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
     C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
