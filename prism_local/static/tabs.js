@@ -81,8 +81,9 @@ const Tabs = (() => {
       if (r._status === 409 && r.conflict) {
         t.conflict = r.gone ? "gone" : "disk";
         onChange(t, "conflict");
-        notify(`${t.path} ${r.gone ? "was deleted" : "changed"} on disk — not saved. Resolve in the banner.`);
-        return { ok: false, reason: r.gone ? "gone" : "conflict" };
+        const message = `${t.path} ${r.gone ? "was deleted" : "changed"} on disk — not saved. Resolve in the banner.`;
+        notify(message);
+        return { ok: false, reason: r.gone ? "gone" : "conflict", message };
       }
       if (r._status !== 200) {
         const message = `Save failed: ${r.error || r._status}`;
@@ -115,7 +116,8 @@ const Tabs = (() => {
       }
       if (!failed.length) return { ok: true };
       const reason = ["gone", "stopped", ...REASONS].find((x) => failed.some((f) => f.reason === x));
-      return { ok: false, reason, paths: failed.map((f) => f.path), message: (failed.find((f) => f.message) || {}).message };
+      return { ok: false, reason, paths: failed.map((f) => f.path),
+               message: (failed.find((f) => f.reason === reason && f.message) || {}).message };
     }
 
     // The tree poll saw the file on disk with `mtime`: "same" (nothing to do, or a save of
@@ -164,12 +166,14 @@ const Tabs = (() => {
 
   // What to tell the author when saveAll did not save everything (before a build, a sync,
   // a message to the agent …).
+  // A save that found the problem just now said so (notify) in these same words, so the
+  // page's notice stack shows it once.
   function unsavedWhy(r) {
-    if (r.reason === "gone") return "The file was deleted on disk. Save it under a new name or close its tab.";
+    if (r.reason === "gone") return r.message || "The file was deleted on disk. Save it under a new name or close its tab.";
     if (r.reason === "stopped") return "This page cannot save. Reopen the project from Home.";
-    if (r.reason === "conflict") return "Resolve the save conflict first (the banner above the editor).";
+    if (r.reason === "conflict") return r.message || "Resolve the save conflict first (the banner above the editor).";
     if (r.reason === "held") return "Your edits are saved when the agent's turn ends.";
-    return (r.message || "Saving failed") + ". Try again.";
+    return r.message || "Saving failed";
   }
 
   return { createTabStore, unsavedWhy };

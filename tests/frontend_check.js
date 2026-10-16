@@ -244,7 +244,7 @@ check("a file changed on disk is not overwritten: the conflict, then Keep mine",
   const { s, changes } = store(srv);
   const t = s.add("a.tex", new FakeDoc("x"), 1);
   t.doc.type("y");
-  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "conflict" });
+  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "conflict", message: "a.tex changed on disk — not saved. Resolve in the banner." });
   assert.deepStrictEqual([t.conflict, changes], ["disk", ["conflict"]]);
   assert.deepStrictEqual(await s.save(t, true), { ok: true }, "force: the author keeps theirs");
   assert.deepStrictEqual([srv.calls[1].force, t.conflict], [true, null]);
@@ -289,13 +289,16 @@ check("a reload: kept when typed into meanwhile, else the disk's text", () => {
 
 check("saveAll says why, the reason needing you most", async () => {
   const srv = fakeServer((b) => (b.path === "a.tex" ? { _status: 500, error: "disk full" } : { _status: 409, conflict: true }));
-  const { s } = store(srv);
+  const { s, notes } = store(srv);
   for (const p of ["a.tex", "b.tex", "c.tex"]) s.add(p, new FakeDoc(""), 0);
   s.tabs[0].doc.type("1"); s.tabs[1].doc.type("2");
   const r = await s.saveAll();
-  assert.deepStrictEqual(r, { ok: false, reason: "conflict", paths: ["a.tex", "b.tex"], message: "Save failed: disk full" });
-  assert.match(Tabs.unsavedWhy(r), /conflict/);
-  assert.match(Tabs.unsavedWhy({ ok: false, reason: "failed", message: "Save failed: disk full" }), /disk full/);
+  const conflict = "b.tex changed on disk — not saved. Resolve in the banner.";
+  assert.deepStrictEqual(r, { ok: false, reason: "conflict", paths: ["a.tex", "b.tex"], message: conflict });
+  // What the page then says is what saving said already: one notice, not two.
+  assert.ok(notes.includes(Tabs.unsavedWhy(r)), Tabs.unsavedWhy(r));
+  const failed = { ok: false, reason: "failed", message: "Save failed: disk full" };
+  assert.strictEqual(Tabs.unsavedWhy(failed), "Save failed: disk full");
   assert.deepStrictEqual(await store(fakeServer(saved(1))).s.saveAll(), { ok: true });
 });
 
