@@ -27,6 +27,7 @@ sid = resume or str(uuid.uuid4())
 if "EDIT" in message:
     (root / "main.tex").write_text("edited by deepcode\n", encoding="utf-8")
 
+time.sleep(float(os.environ.get("PRISM_TEST_DEEPCODE_DELAY", "0")))
 d = sessions_dir(root)
 d.mkdir(parents=True, exist_ok=True)
 with open(d / f"{sid}.jsonl", "a", encoding="utf-8") as f:

@@ -349,16 +349,17 @@ class DeepCode(Backend):
             if now - checked < .5:
                 return
             checked = now
-            live_sid = live_sid or latest_session(job.root, start)
-            if not live_sid:
+            candidate = live_sid or latest_session(job.root, start)
+            if not candidate:
                 return
             try:
-                stat = (sessions_dir(job.root) / f"{live_sid}.jsonl").stat()
+                stat = (sessions_dir(job.root) / f"{candidate}.jsonl").stat()
                 current = (stat.st_mtime_ns, stat.st_size)
                 if current == stamp or stat.st_mtime_ns < int(start * 1e9):
                     return
-                if self.check_session(job.root, live_sid):
+                if self.check_session(job.root, candidate):
                     return
+                live_sid = candidate
                 self._replay_tools(job, live_sid, start, seen=seen, results=results)
                 stamp = current
             except (OSError, UnicodeError, ValueError):

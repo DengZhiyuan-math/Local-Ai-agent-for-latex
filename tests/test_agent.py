@@ -473,8 +473,11 @@ class DeepCodeBackend(unittest.TestCase):
         self.assertEqual(done["session_id"], sid)
 
     def test_tools_are_shown_before_the_cli_finishes_without_duplicates(self):
+        # A just-finished chat is still in the session index while the new CLI starts.
+        wait_done(self.m.jobs[self.m.start("previous chat", None, "ask")["job"]])
         release = self.root / "release-cli"
-        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release)}):
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release),
+                                          "PRISM_TEST_DEEPCODE_DELAY": ".8"}):
             job = self.m.jobs[self.m.start("look at the paper", None, "ask")["job"]]
             try:
                 deadline = time.monotonic() + 3
