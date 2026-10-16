@@ -1,0 +1,9 @@
+19:27:46 refused GET /api/agent/events: ValueError: could not convert string to float: 'soon'
+{"event": "git_target", "project_key": "prism-test-4cgk5yzf-7e16af4687", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-4cgk5yzf", "git_top": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-4cgk5yzf", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "push_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "repository_identity": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "configuration_fingerprint": "0d85852631fe7f7306fed902368fddfd680b85a0a716741091db57ddd5d3d3d1"}, "stage": "validation", "blocked_reason": null}
+{"event": "git_sync", "git_top": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-4cgk5yzf", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "push_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "repository_identity": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-vpzcm9kr", "configuration_fingerprint": "0d85852631fe7f7306fed902368fddfd680b85a0a716741091db57ddd5d3d3d1"}, "stage": "push", "result": "passed", "error": null}
+{"event": "git_target", "project_key": "prism-test-3z56d1ed-284530072e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-3z56d1ed", "git_top": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-3z56d1ed", "target": null, "stage": "validation", "blocked_reason": "A unique remote upstream or origin is required"}
+......................s..........................s..........
+----------------------------------------------------------------------
+Ran 60 tests in 11.585s
+
+OK (skipped=2)

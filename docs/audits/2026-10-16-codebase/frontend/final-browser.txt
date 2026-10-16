@@ -1,0 +1,18 @@
+== frontend audit: 21 passed, 0 not
+== editor files menu: 14 passed, 3 not
+    FAIL copy toast
+    FAIL bad name refused with message
+    FAIL script exited 3221226505
+== turn reload, double send: 6 passed, 1 not
+    FAIL script exited 3221226505
+== turn view: 8 passed, 1 not
+    FAIL script exited 3221226505
+== saving: 6 passed, 2 not
+    FAIL held during an Edit turn, and said so: {"r":{"ok":false,"reason":"held","paths":["main.tex"]},"status":""}
+    FAIL script exited 3221226505
+== home menu: 8 passed, 1 not
+    FAIL script exited 3221226505
+== pages load: 25 passed, 0 not
+== many pages: 6 passed, 0 not
+== trash folder: 1 passed, 0 not
+== clipboard file: 1 passed, 0 not
