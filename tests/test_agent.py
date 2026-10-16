@@ -811,6 +811,52 @@ class Snapshots(unittest.TestCase):
         self.assertIsNone(job.proc)
         self.assertFalse((d / "started.txt").exists())
 
+    def turn_of(self, backend, d, stop_after=None, timeout=20):
+        """A whole turn of `backend` through the manager: its done event and its events."""
+        m = manager(d, lambda: [], **{backend.id: backend})
+        jid = m.start("go", None, "ask")["job"]
+        if stop_after is not None:
+            threading.Timer(stop_after, m.stop, (jid,)).start()
+        done = wait_done(m.jobs[jid], timeout)
+        return done, m.jobs[jid].events
+
+    def test_how_a_turn_ended_is_decided_once_for_every_backend(self):
+        """Stop is "stopped", with no error for what stopping broke; a failure is said
+        once, with what the CLI printed; a turn that went well is "ok"."""
+        stoppable, d = self.cli("import sys, time\nprint('{}', flush=True)\ntime.sleep(30)\n")
+        done, events = self.turn_of(stoppable, d, stop_after=1.5)
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in events if e["t"] == "error"])
+
+        failing, d = self.cli("import sys\nsys.stderr.write('error: not logged in\\n')\nsys.exit(3)\n")
+        done, events = self.turn_of(failing, d)
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("exit 3", done["error"])
+        self.assertIn("not logged in", done["error"])
+
+        fine, d = self.cli("print('{}')\n")
+        self.assertEqual(self.turn_of(fine, d)[0]["outcome"], "ok")
+
+    def test_a_failure_an_error_event_told_is_not_told_again(self):
+        class Told(backends.Backend):
+            def run(self, job):
+                job.emit({"t": "error", "message": "Codex: turn failed"})
+                return {"is_error": True, "subtype": "turn failed", "stderr": "the same, again"}
+
+        done, events = self.turn_of(Told("told"), tmpdir())
+        self.assertEqual((done["outcome"], done["error"]), ("failed", None))
+        self.assertEqual([e["message"] for e in events if e["t"] == "error"], ["Codex: turn failed"])
+
+        class BrokenByStop(backends.Backend):       # the API's reader, its response closed under it
+            def run(self, job):
+                job.cancel.wait(10)
+                job.emit({"t": "error", "message": "AttributeError: 'NoneType' object has no attribute 'peek'"})
+                return {"is_error": True, "subtype": "API error"}
+
+        done, events = self.turn_of(BrokenByStop("api"), tmpdir(), stop_after=0.5)
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in events if e["t"] == "error"])
+
     def test_a_cli_that_exits_at_once_says_why(self):
         """The CLI exits before reading its input (a bad flag, no login): writing the prompt
         to it fails, and what it printed on stderr is what the author needs."""

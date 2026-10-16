@@ -34,12 +34,14 @@ Events a backend emits through ``job.emit`` (the panel understands exactly these
     {"t": "build", "result": dict}              a build the agent ran (agent.py, not backends)
     {"t": "context", "used": int, "window": int|None}   how full the context window is
     {"t": "rate", "rate": dict}                 Claude usage limits
-    {"t": "error", "message": str}
+    {"t": "error", "message": str}              (none after Stop: "done" says it stopped)
 
 `run` returns a dict with any of: session_id, exit (0 = success), is_error, subtype,
-cost (USD, only when billed per token), billing ("subscription" or "api"), duration
-(ms), usage ({"in": tokens, "out": tokens}), denials (tool
-names refused), stderr.
+error (what went wrong, in the backend's words), cost (USD, only when billed per token),
+billing ("subscription" or "api"), duration (ms), usage ({"in": tokens, "out": tokens}),
+denials (tool names refused), stderr. How the turn ended is decided from it once, by the
+manager (agent.outcome), not by each backend: "done" carries outcome ("ok", "stopped",
+"failed") and, for a failure no error event has told yet, error.
 """
 from __future__ import annotations
 
@@ -157,8 +159,13 @@ class Job:
         self.snapshot_issues: set[str] = set()
         self.metadata_before: set[str] = set()   # .git, .codex… present when it started
         self.attachments: list[str] = []
+        self.errors_shown = 0                    # error events the page has had (emit)
 
     def emit(self, ev: dict) -> None:
+        if ev.get("t") == "error":
+            if self.cancel.is_set():
+                return                  # what stopping it broke: "done" says it was stopped
+            self.errors_shown += 1
         with self.cond:
             self.events.append(ev)
             self.cond.notify_all()

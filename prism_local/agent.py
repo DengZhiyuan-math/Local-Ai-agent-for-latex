@@ -39,6 +39,23 @@ class Undoable:
     after: dict[str, snapshot.FileState | None]
 
 
+def outcome(job: Job, res: dict) -> tuple[str, str | None]:
+    """How a turn ended, decided here for every backend: "stopped" when you pressed Stop
+    (what that broke is no error), "failed" when the backend says so (an exit other than
+    0, is_error), else "ok"; and for "failed" what to say about it, unless an error event
+    has said it during the turn already (it is said once)."""
+    if job.cancel.is_set():
+        return "stopped", None
+    code = res.get("exit")
+    if not res.get("is_error") and code in (None, 0):
+        return "ok", None
+    if job.errors_shown:
+        return "failed", None
+    what = str(res.get("error") or res.get("subtype") or (f"exit {code}" if code not in (None, 0) else "it failed"))
+    tail = str(res.get("stderr") or "").strip()
+    return "failed", what + ("\n" + tail if tail and tail not in what else "")
+
+
 class AgentManager:
     def __init__(self, root_fn: Callable[[], Path], files_fn: Callable[[], list[str]],
                  writable_fn: Callable[[str], object] | None = None,
@@ -191,6 +208,7 @@ class AgentManager:
         except Exception as e:  # noqa: BLE001 — the turn ends whatever happens
             job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
             job.emit({"t": "done", "turn": job.id, "provider": job.provider, "changed": [],
+                      "outcome": "stopped" if job.cancel.is_set() else "failed", "error": None,
                       "is_error": True, "session_id": res.get("session_id") or job.session_id})
         finally:
             with job.cond:
@@ -238,7 +256,9 @@ class AgentManager:
             done = [j for j in self.jobs if j != job.id and self.jobs[j].done]
             for old in done[:max(0, len(done) - RECENT_JOBS)]:
                 self.jobs.pop(old)
+        result, error = outcome(job, res)
         ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
+              "outcome": result, "error": error,
               "exit": res.get("exit"), "scope": job.scope,
               "snapshot_issues": sorted(job.snapshot_issues),
               "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],

@@ -552,6 +552,8 @@ class ClaudeCode(CliBackend):
                              "out": u.get("output_tokens") or 0} if u else None,
                       duration=d.get("duration_ms"),
                       is_error=d.get("is_error"), subtype=d.get("subtype"),
+                      # Its own words for a failure (the subtype may say only "success").
+                      error=str(d.get("result") or "")[:2000] or None if d.get("is_error") else None,
                       denials=[p.get("tool_name") for p in d.get("permission_denials") or []],
                       # What each refused call was, e.g. the command: the panel names it.
                       denied=[{"tool": p.get("tool_name"),
