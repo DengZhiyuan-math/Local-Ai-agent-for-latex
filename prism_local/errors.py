@@ -13,13 +13,17 @@ from pathlib import Path
 
 
 class Refused(ValueError):
-    """The request cannot be done as asked; `status` and the message say why. Not logged."""
+    """The request cannot be done as asked; `status` and the message say why. Not logged.
+    `details`: more for the page, sent beside the message."""
     status = 400
+    details: dict = {}
 
-    def __init__(self, message: str, status: int | None = None):
+    def __init__(self, message: str, status: int | None = None, details: dict | None = None):
         super().__init__(message)
         if status is not None:
             self.status = status
+        if details:
+            self.details = details
 
 
 class NotFound(Refused):

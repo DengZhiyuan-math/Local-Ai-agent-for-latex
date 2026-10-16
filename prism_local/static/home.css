@@ -211,6 +211,8 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25); white-space: pre-wrap;
 }
 #toast.err { background: var(--err); color: #fff; }
+#state-damaged { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--err); border-left-width: 4px; border-radius: 6px; color: var(--err); }
+#state-damaged button { margin-left: 8px; }
 
 /* ---------- empty states */
 .empty-note { color: var(--muted); padding: 40px 0; text-align: center; }

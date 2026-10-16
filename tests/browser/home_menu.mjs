@@ -60,6 +60,18 @@ check("still listed", await ev(`return H.projects.some((p) => p.id === "${ids[0]
 
 await ev(`await T.menu('#view .it[data-id="${ids[1]}"]'); T.pick("Move folder to Recycle Bin…"); return true`);
 check("project without editor goes to Recycle Bin", await ev(`return T.until(() => !H.projects.some((p) => p.id === "${ids[1]}"))`), await ev(`return T.toast()`));
+const damaged = await ev(`
+  const real = api, ask = window.confirm; let restored = null;
+  api = async (path, body) => path === "/api/projects"
+    ? { _status: 409, error: "projects.json is damaged; nothing was changed.", damaged_state: "projects.json", backup: true }
+    : path === "/api/state/restore" ? (restored = body.file, { _status: 200, ok: true }) : real(path, body);
+  window.confirm = () => true;
+  await loadOnce();
+  const bar = document.querySelector("#state-damaged"), said = !!bar && bar.textContent.includes("damaged");
+  bar?.querySelector("button")?.click(); await T.sleep(50);
+  api = real; window.confirm = ask; await load();
+  return { said, restored, gone: !document.querySelector("#state-damaged") };`);
+check("a damaged project list says so and can be put back", damaged.said && damaged.restored === "projects.json" && damaged.gone, JSON.stringify(damaged));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 await closeSocket(ws);

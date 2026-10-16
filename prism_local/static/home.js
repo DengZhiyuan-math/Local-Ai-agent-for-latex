@@ -26,6 +26,7 @@ const byId = (id) => H.projects.find((p) => p.id === id);
 const load = poller(loadOnce, 10000);
 async function loadOnce() {
   const r = await api("/api/projects");
+  showDamaged(r, "projects.json");
   if (r._status !== 200) return;
   delete r._status;
   showUpdate(r.updated);
@@ -35,6 +36,34 @@ async function loadOnce() {
   H.projects = r.projects; H.folders = r.folders || []; H.tagColors = r.tags || {};
   H.defaultParent = r.default_parent; H.loaded = true;
   render();
+}
+// A state file (projects.json, settings.json) the server cannot read: what it says, and,
+// when the version before its last change can be read, a button that puts it back. Gone
+// once that file can be read again.
+const damaged = new Map();            // file -> the answer that said so
+function showDamaged(r, file) {
+  if (!r) return;
+  if (r._status === 200) damaged.delete(file);
+  else if (r.damaged_state) damaged.set(r.damaged_state, r);
+  const [name, said] = damaged.entries().next().value || [], old = $("#state-damaged");
+  if (old && old.dataset.file === name) return;
+  if (old) old.remove();
+  if (!name) return;
+  const bar = document.createElement("div");
+  bar.id = "state-damaged"; bar.dataset.file = name; bar.setAttribute("role", "alert");
+  bar.textContent = said.error + " ";
+  if (said.backup) {
+    const restore = document.createElement("button");
+    restore.textContent = "Put back the previous version";
+    restore.onclick = async () => {
+      if (!confirm(`Put back ${name} as it was before its last change? The damaged file is kept as ${name}.damaged.`)) return;
+      const x = await api("/api/state/restore", { file: name });
+      if (x._status !== 200) return toast(x.error || "Could not put it back", true);
+      damaged.delete(name); bar.remove(); H.sig = null; load(); loadSettings();
+    };
+    bar.append(restore);
+  }
+  $("#home-main").before(bar);
 }
 // prism-local was updated in the background (selfupdate.py) while this page's server ran.
 function showUpdate(updated) {
@@ -1299,6 +1328,7 @@ $("#btn-new").onclick = openNew;
 /* ------------------------------------------------------------------ settings */
 async function loadSettings(refresh = false) {
   const r = await api("/api/settings" + (refresh ? "?refresh=1" : "")).catch(() => null);
+  showDamaged(r, "settings.json");
   if (r && r._status === 200) { H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.update = r.update; }
   return r;
 }

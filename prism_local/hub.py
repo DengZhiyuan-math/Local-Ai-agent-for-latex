@@ -1180,6 +1180,9 @@ class Handler(httpbase.Handler):
         return self._err(404, "not found")
 
     def post(self, path, body):
+        if path == "/api/state/restore":
+            registry.restore_backup(str(body["file"]))
+            return self._json({"ok": True})
         if path == "/api/settings":
             return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
                                "claude": claude_status()})

@@ -948,6 +948,24 @@ class HubServer(unittest.TestCase):
     def post(self, path, body):
         return request(self.url, path, json.dumps(body).encode(), HEADERS)
 
+    def test_a_damaged_project_list_can_be_put_back_from_its_backup(self):
+        """The page showed nothing when projects.json was damaged; it says so now and can put
+        back the version before its last change, keeping the damaged one to look at."""
+        state = self.tmp / "state"
+        _, first = self.post("/api/projects/add", {"path": str(PROJECT)})
+        self.post("/api/projects/update", {"id": first["id"], "pinned": True})    # a .bak now
+        (state / "projects.json").write_bytes(b'{"projects": [')                  # a power cut
+        status, r = request(self.url, "/api/projects")
+        self.assertEqual((status, r.get("damaged_state"), r.get("backup")), (409, "projects.json", True), r)
+        status, r = self.post("/api/state/restore", {"file": "projects.json"})
+        self.assertEqual(status, 200, r)
+        status, listed = request(self.url, "/api/projects")
+        self.assertEqual((status, [p["id"] for p in listed["projects"]]), (200, [first["id"]]))
+        self.assertEqual((state / "projects.json.damaged").read_bytes(), b'{"projects": [')
+        status, r = self.post("/api/state/restore", {"file": "projects.json"})
+        self.assertEqual(status, 409, "a readable list is not replaced")
+        self.assertEqual(self.post("/api/state/restore", {"file": "../x.json"})[0], 400)
+
     def test_manage_projects(self):
         self.assertEqual(request(self.url, "/api/ping")[1]["app"], "prism-home")
         status, r = self.post("/api/projects/add", {"path": str(PROJECT)})

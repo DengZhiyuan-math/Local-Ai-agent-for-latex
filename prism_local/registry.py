@@ -19,7 +19,7 @@ import shutil
 import time
 import zlib
 from pathlib import Path
-from errors import LockBusy
+from errors import Conflict, LockBusy, Refused
 from fsutil import replace_file
 
 WIN = os.name == "nt"
@@ -57,8 +57,14 @@ def read_json(path: Path) -> dict | None:
         return None
 
 
-class StateUnreadable(ValueError):
-    """A state file is there but cannot be read: damaged, or held by another program."""
+class StateUnreadable(Conflict):
+    """A state file is there but cannot be read: damaged, or held by another program. A
+    damaged one says so to the page (details), and whether its backup can be put back."""
+
+    def __init__(self, message: str, path: Path | None = None):
+        bak = backup_of(path) if path else None
+        super().__init__(message, details={"damaged_state": path.name, "backup": _readable(bak)}
+                         if path else None)
 
 
 def read_state(path: Path, tries: int = 10) -> dict:
@@ -84,8 +90,39 @@ def read_state(path: Path, tries: int = 10) -> dict:
         bak = backup_of(path)
         raise StateUnreadable(f"{path} is damaged; nothing was changed. Fix it, or rename it "
                               "to start afresh" + (f" (the version before its last change is {bak})."
-                                                   if bak.is_file() else "."))
+                                                   if bak.is_file() else "."), path)
     return data
+
+
+def _readable(path: Path) -> bool:
+    try:
+        return isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
+    except (OSError, ValueError):
+        return False
+
+
+STATE_FILES = ("projects.json", "settings.json")
+
+
+def restore_backup(name: str) -> None:
+    """Put back the version of a damaged state file before its last change (its .bak),
+    keeping the damaged one as <name>.damaged. Only a damaged one: a readable file, or one
+    another program holds, is left alone."""
+    if name not in STATE_FILES:
+        raise Refused(f"not a state file: {name}")
+    path = state_dir() / name
+    with FileLock(path.with_suffix(".lock"), timeout=10):
+        try:
+            read_state(path, tries=1)
+            raise Conflict(f"{name} can be read: nothing to put back")
+        except StateUnreadable as e:
+            if not e.details:
+                raise                               # held, not damaged
+        bak = backup_of(path)
+        if not _readable(bak):
+            raise Conflict(f"{bak} cannot be read either; nothing was changed")
+        replace_file(path.with_name(name + ".damaged"), path.read_bytes())
+        replace_file(path, bak.read_bytes(), durable=True)
 
 
 def backup_of(path: Path) -> Path:

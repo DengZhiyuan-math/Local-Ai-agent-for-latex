@@ -98,8 +98,8 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode())
 
-    def _err(self, code, msg):
-        self._json({"error": msg}, code)
+    def _err(self, code, msg, details=None):
+        self._json({**(details or {}), "error": msg}, code)
 
     def _static(self, rel):
         p = (STATIC / rel).resolve()
@@ -170,7 +170,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._answered or isinstance(e, (ConnectionError, TimeoutError)):
                 raise                       # the page went away, or the answer was started
             if isinstance(e, Refused):
-                return self._err(e.status, str(e))
+                return self._err(e.status, str(e), e.details)
             if isinstance(e, subprocess.TimeoutExpired):
                 return self._err(504, f"{Path(str(e.cmd[0] if isinstance(e.cmd, list) else e.cmd)).name} "
                                       f"did not finish in {e.timeout:g} seconds; try again")
