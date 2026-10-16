@@ -45,6 +45,7 @@ manager (agent.outcome), not by each backend: "done" carries outcome ("ok", "sto
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import queue
@@ -146,6 +147,25 @@ def file_place(name: str, args: dict) -> tuple[str | None, tuple[int, int] | Non
     except (TypeError, ValueError):
         lines = None
     return path, lines
+
+
+class Tail:
+    """The end of what a CLI wrote on stderr (all a turn ever shows of it), kept from the
+    thread that reads it: not the whole of it, which a chatty CLI makes megabytes of."""
+
+    def __init__(self, limit: int = 8000):
+        self.limit, self.parts, self.size, self.lock = limit, collections.deque(), 0, threading.Lock()
+
+    def add(self, text: str) -> None:
+        with self.lock:
+            self.parts.append(text)
+            self.size += len(text)
+            while self.size > self.limit and len(self.parts) > 1:
+                self.size -= len(self.parts.popleft())
+
+    def __iter__(self):
+        with self.lock:
+            return iter(list(self.parts))
 
 
 def shut_down(resp) -> None:
@@ -423,14 +443,15 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     if job.cancel.is_set():
         yield None, [], []
         return
-    err: list[str] = []
+    err = Tail()
     out: queue.Queue = queue.Queue()
     proc = start(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                  stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env, **popen)
     job.proc = proc
     def drain_err():
         try:
-            err.extend(proc.stderr)
+            for line in proc.stderr:
+                err.add(line)
         except (OSError, ValueError):
             pass
         finally:

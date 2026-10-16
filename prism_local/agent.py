@@ -29,6 +29,7 @@ import snapshot
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
 MAX_TURNS = 50          # past turns Undo can still take back
+MAX_UNDO_BYTES = 300 * 1024 * 1024   # and what they may hold in all (the oldest go first)
 RECENT_JOBS = 8         # finished turns whose events a page may still be reading
 UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files (a slow hook) before saying so
 
@@ -39,6 +40,10 @@ class Undoable:
     root: Path
     before: dict[str, snapshot.FileState | None]
     after: dict[str, snapshot.FileState | None]
+
+    @property
+    def size(self) -> int:
+        return sum(len(s.data or b"") for side in (self.before, self.after) for s in side.values() if s)
 
 
 def outcome(job: Job, res: dict) -> tuple[str, str | None]:
@@ -73,7 +78,9 @@ class AgentManager:
         self.backends, self.default, self.config_error = backends or load_backends()
         self.jobs: dict[int, Job] = {}
         self.turns: dict[int, Undoable] = {}
-        self.ids = itertools.count(1)
+        # Turn numbers go on growing across restarts (milliseconds since 1970): a page asking
+        # for turn N's events after the server restarted must not get another turn N's.
+        self.ids = itertools.count(int(time.time() * 1000))
         self.lock = threading.Lock()
         self.active: Job | None = None
         self.server_url: str | None = None    # the editor server, for the compile tool
@@ -259,7 +266,8 @@ class AgentManager:
         job.after = {r: job.after.get(r) for r in keep}
         with self.lock:
             self.turns[job.id] = Undoable(job.root, job.before, job.after)
-            while len(self.turns) > MAX_TURNS:
+            while len(self.turns) > MAX_TURNS or (
+                    len(self.turns) > 1 and sum(t.size for t in self.turns.values()) > MAX_UNDO_BYTES):
                 self.turns.pop(next(iter(self.turns)))
             done = [j for j in self.jobs if j != job.id and self.jobs[j].done]
             for old in done[:max(0, len(done) - RECENT_JOBS)]:

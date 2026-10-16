@@ -4,6 +4,7 @@ No real CLI or API is started: CLI backends are checked through the command they
 would run and the events they make from sample output, and the OpenAI-compatible
 backend runs against a fake chat-completions server on 127.0.0.1.
 """
+import itertools
 import json
 import os
 import sys
@@ -630,6 +631,32 @@ class Snapshots(unittest.TestCase):
                              "only the changed files stay in memory")
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
+
+    def test_memory_a_turn_keeps_is_bounded(self):
+        """A CLI's stderr is kept to its end; Undo's history to MAX_UNDO_BYTES; and turn
+        numbers grow across restarts, so a page never reads another turn's events."""
+        tail = backends.Tail(limit=100)
+        for i in range(10000):
+            tail.add(f"line {i}\n")
+        text = "".join(tail)
+        self.assertLess(len(text), 200)
+        self.assertTrue(text.endswith("line 9999\n"))
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+
+            written = itertools.count()
+
+            class Big(backends.Backend):
+                def run(self, job):
+                    (job.root / f"t{next(written)}.dat").write_bytes(b"x" * 1000)
+                    return {"exit": 0}
+
+            m = manager(root, lambda: [], big=Big("big"))
+            with mock.patch.object(agent, "MAX_UNDO_BYTES", 2500):
+                turns = [wait_done(m.jobs[m.start(f"t{i}", None, "edit")["job"]])["turn"] for i in range(4)]
+            self.assertEqual(list(m.turns), turns[-2:], "the oldest went once the history passed its size")
+            later = manager(root, lambda: [], big=Big("big"))
+            self.assertGreater(next(later.ids), turns[-1], "a restarted server numbers on")
 
     def test_no_undo_while_another_turn_runs(self):
         """What Undo wrote would be the running turn's change (its diff, its Undo)."""
