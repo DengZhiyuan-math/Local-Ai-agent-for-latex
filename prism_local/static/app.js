@@ -23,7 +23,7 @@ $("#btn-home").onclick = async () => {
   let fresh = true;
   try { fresh = !!w && w.location.href === "about:blank"; } catch { fresh = false; }
   if (w && fresh) w.document.body.innerHTML = '<p style="font:15px system-ui;color:#6f6a60;margin:40vh auto;text-align:center">Opening your projects…</p>';
-  const r = await Q.home().catch(() => ({ error: "server not reachable" }));
+  const r = await Q.home();
   if (r.url) {
     // An existing Home tab only needs to load again if its server had to be restarted.
     if (!w) location.href = r.url;
@@ -81,7 +81,7 @@ const SNIP = Snippets.attach(cm, {
 });
 let snipContent;                 // the file as last read: unchanged, it is not compiled again
 async function loadSnippets() {
-  const r = await Q.snippets().catch(() => ({}));
+  const r = await Q.snippets();
   if (r._status !== 200) return;
   for (const k of Object.keys(SNIP_SET)) SNIP_SET[k] = r[k] !== false;
   if (r.content === snipContent) return;
@@ -163,7 +163,7 @@ function jumpToLine(line) {
 async function closeTab(path) {
   const t = S.tabs.find((x) => x.path === path);
   if (t && isDirty(t) && C.editTurn) return toast(Tabs.unsavedWhy({ reason: "held" }) + " Keep this tab open until then.");
-  if (t && isDirty(t) && !t.conflict) await saveTab(t);      // autosave may still be pending
+  if (t && isDirty(t) && !t.conflict) await TABS.save(t);      // autosave may still be pending
   if (t && isDirty(t) && !confirm(`${path} has unsaved changes. Close anyway?`)) return;
   TABS.remove((x) => x.path === path);
   if (S.active === path) {
@@ -202,12 +202,12 @@ function persistSession() { if (!S.ready || S.restoring || foreignProject) retur
 /* ------------------------------------------------------------------ save & external changes */
 // Saving: one at a time per tab, held during an agent's Edit turn, busy git waited out,
 // a file changed on disk never overwritten (tabs.js).
-const saveTab = async (t, force = false) => (await TABS.save(t, force)).ok;
 async function saveActive() {
   const t = activeTab(); if (!t) return;
   clearTimeout(t.saveTimer);
-  const ok = await saveTab(t);
-  if (ok && $("#auto-compile").checked) compile();
+  const saved = await TABS.save(t);
+  if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
+  if (saved.ok && $("#auto-compile").checked) compile();
 }
 
 /* Autosave, as in Overleaf: an edit is saved a moment after you stop typing, and every
@@ -221,7 +221,7 @@ function scheduleSave(t) {
 }
 async function autosave(t) {
   if (!S.tabs.includes(t) || t.conflict || !isDirty(t)) return;
-  if ((await saveTab(t)) && $("#auto-compile").checked) scheduleCompile();
+  if ((await TABS.save(t)).ok && $("#auto-compile").checked) scheduleCompile();
 }
 function flushSaves() {
   for (const t of S.tabs) { clearTimeout(t.saveTimer); autosave(t); }
@@ -282,7 +282,7 @@ function showBanner(t) {
     <button id="bn-keep">Keep mine (overwrite disk)</button>
     <button id="bn-diff">Show git diff</button>`;
   $("#bn-reload").onclick = () => reloadFromDisk(t, true);
-  $("#bn-keep").onclick = () => saveTab(t, true);
+  $("#bn-keep").onclick = () => TABS.save(t, true);
   $("#bn-diff").onclick = () => showDiff(t.path);
 }
 
@@ -397,7 +397,7 @@ function askRename(target) {
   const li = treeItem(target); if (!li) return;
   askName(li, target.path.split("/").pop(), "", async (name) => {
     const tabs = S.tabs.filter((t) => within(t.path, target.path));
-    for (const t of tabs) if (isDirty(t) && !t.conflict) await saveTab(t);   // its text goes with it
+    for (const t of tabs) if (isDirty(t) && !t.conflict) { const saved = await TABS.save(t); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }   // its text goes with it
     const r = await fileAction("rename", { path: target.path, name }); if (!r) return;
     const moved = (p) => r.path + p.slice(target.path.length);
     for (const t of tabs) t.path = moved(t.path);
@@ -561,14 +561,14 @@ function renameProject() {
     if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
     const saved = await saveAll();
     if (!saved.ok) { showProjectName(old, S.projectFolder); return toast(Tabs.unsavedWhy(saved)); }
-    let r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
+    let r = await Q.renameProject(name);
     if (r._status === 404) {
       // This project's server started before renaming existed: restart it with the new
       // code, rename, and load the page again.
       toast("Updating this project's server to rename it…");
       const ok = await restartServer();
       if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
-      r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
+      r = await Q.renameProject(name);
       if (r._status === 200) {
         if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(); }
         return reloadPage();
@@ -679,12 +679,12 @@ $("#btn-sync").onclick = async (e) => {
   e.stopPropagation(); syncMenu($("#sync-menu").hidden);
   if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) {
     // Created in a terminal since the editor started? Look once, now that you ask.
-    const st = await Q.recheck().catch(() => null);
+    const st = await Q.recheck();
     if (st && st._status === 200) { delete st._status; renderSync(st); }
     if (!$("#sync-publish").hidden) loadPublish();
   }
   if (!$("#sync-menu").hidden && !S.githubUrl) {
-    const r = await Q.github().catch(() => ({}));
+    const r = await Q.github();
     S.githubUrl = r.github || "";
     if (S.githubUrl) { $("#sync-github").href = S.githubUrl; $("#sync-github").hidden = false; }
   }
@@ -703,7 +703,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   // changes brings in (no "changed on disk" clash with text not saved yet).
 
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
-  const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined).catch(() => null);
+  const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined);
   if (r && r._status === 200) renderSync(r);
   else if (r && r.error) toast(r.error);
   await poll();
@@ -713,7 +713,7 @@ async function loadPublish() {
   const f = $("#sync-publish"), go = $("#pub-go"), note = $("#pub-note");
   if (f.dataset.loaded) return;
   note.textContent = "Checking…"; go.disabled = true;
-  const r = await Q.publishInfo().catch(() => null);
+  const r = await Q.publishInfo();
   if (!r || r._status !== 200) { note.textContent = "Could not check: " + ((r && r.error) || "server not reachable"); return; }
   f.dataset.loaded = "1";
   if (!f.elements.name.value) f.elements.name.value = r.name;
@@ -817,7 +817,7 @@ async function restartServer() {
   if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
   const saved = await saveAll();
   if (!saved.ok) return Tabs.unsavedWhy(saved);
-  const r = await Q.restart().catch(() => ({ error: "server not reachable" }));
+  const r = await Q.restart();
   if (r.error) return r.error;
   return waitForNewServer();
 }
@@ -843,7 +843,7 @@ $("#btn-restart").onclick = async () => {
 function lineBefore(ed) { const c = ed.getCursor(); return ed.getLine(c.line).slice(0, c.ch); }
 // What to complete (\ref, \cite, \commands): chatlogic.js decides, this draws.
 function computeHints(ed, explicit) {
-  const cur = ed.getCursor(), found = ChatLogic.completions(lineBefore(ed), S.symbols, explicit);
+  const cur = ed.getCursor(), found = TexComplete.completions(lineBefore(ed), S.symbols, explicit);
   if (!found) return null;
   const list = found.items.map((i) => ({ text: i.text, render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
   return { list, from: { line: cur.line, ch: cur.ch - found.word.length }, to: cur };
@@ -852,7 +852,7 @@ function computeHints(ed, explicit) {
 function showCompletions(ed, explicit) {
   if (ed.state.completionActive) return;          // the open widget re-queries by itself
   if (!computeHints(ed, explicit)) {
-    if (explicit && ChatLogic.CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
+    if (explicit && TexComplete.CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
     return;
   }
   ed.showHint({ hint: (e) => computeHints(e, explicit), completeSingle: false });
@@ -1210,7 +1210,7 @@ const providerSeq = { account: 0, usage: 0, catalog: 0 };
 async function loadAccount() {
   const provider = C.provider, seq = ++providerSeq.account;
   const el = $("#agent-account");
-  const r = await Q.account(provider).catch(() => null);
+  const r = await Q.account(provider);
   if (provider !== C.provider || seq !== providerSeq.account) return;
   const a = r && r._status === 200 && r.account;
   if (!a) { el.hidden = true; return; }
@@ -1525,7 +1525,7 @@ const AV = {
     v.setValue(""); v.refresh();
     if (name === "Write") { this.base = ""; return; }
     // An edit changes the file as it is on disk.
-    const r = await Q.file(path).catch(() => ({}));
+    const r = await Q.file(path);
     if (this.id !== id) return;
     v.setValue(r.content || ""); this.base = v.getValue();
     this.render();
@@ -1725,16 +1725,12 @@ async function sendMessage() {
   const mode = $("#chat-mode").value;
   const mentions = parseMentions(text);
   const refs = await referenceBlock(mentions);
-  let prompt;
-  if (slash) { await loadCatalog(); prompt = slashPrompt(text, refs); }
-  else prompt = refs ? refs + "\n\n" + text : text;
+  if (slash) await loadCatalog();
   const attached = ATT.block(), sentFiles = ATT.files.filter((f) => f.path);
   const unsupported = sentFiles.find((f) => !(prov().input_types || ["text"]).includes(
     /\.(png|jpe?g|gif|webp)$/i.test(f.path) ? "image" : /\.pdf$/i.test(f.path) ? "pdf" : "text"));
   if (unsupported) return toast(`${provLabel()} does not support this attachment: ${unsupported.name}.`);
-  if (attached) prompt = slash ? `${prompt}\n\n${attached}` : `${attached}\n\n${prompt}`;   // a /command stays first
-  // Only the mentioned files may change; without mentions, the whole project.
-  const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
+  const { prompt, scope } = ChatLogic.compose({ text, refs, attached, mentions, mode });
   const provider = C.provider;
   if (!P.projectKey) return toast("Wait for the project identity to load.");
   const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
@@ -1947,7 +1943,7 @@ async function checkUsage(auto = false) {
   const provider = C.provider, seq = ++providerSeq.usage;
   const b = $("#quota-refresh");
   if (b) { b.disabled = true; b.textContent = "…"; }
-  const r = await Q.usage(provider).catch(() => ({}));
+  const r = await Q.usage(provider);
   if (provider !== C.provider || seq !== providerSeq.usage) return;
   renderQuota(r.rate || store.get("chat.rate", null));
   if (r.error && !auto) toast(r.error);
@@ -2064,7 +2060,7 @@ let catalog = null;          // {skills, commands, terminal_only} from /api/agen
 async function loadCatalog(refresh = false) {
   if (catalog && !refresh) return catalog;
   const provider = C.provider, seq = ++providerSeq.catalog;
-  const r = await Q.commands(provider, refresh).catch(() => ({}));
+  const r = await Q.commands(provider, refresh);
   if (provider !== C.provider || seq !== providerSeq.catalog) return null;
   if (r._status === 200) catalog = r;
   return catalog;
@@ -2160,7 +2156,6 @@ function renderProviders(info) {
 }
 $("#chat-provider").onchange = (e) => setProvider(e.target.value);
 
-const slashPrompt = ChatLogic.slashPrompt;      // a /command comes first
 
 /* Completion menu: "/" at the start of the message lists commands and skills;
    "@" anywhere lists the editor selection, the open file and the project files. */

@@ -95,4 +95,11 @@ async function localChip() {
   assert.strictEqual(input.value, "my unfinished draft");
   assert.deepStrictEqual(commands, [["model", "fast"]]);
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function manualSave() {
+  let builds = 0;
+  const run = vm.runInNewContext(section("async function saveActive()", "\n/* Autosave") + ";saveActive", {
+    activeTab: () => ({}), clearTimeout: () => {}, TABS: { save: async () => ({ ok: false, reason: "held" }) },
+    $: () => ({ checked: true }), compile: () => builds++, toast: () => {}, Tabs: require("../prism_local/static/tabs.js") });
+  await run(); assert.strictEqual(builds, 0, "a failed manual save must not trigger auto-compile");
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

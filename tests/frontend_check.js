@@ -402,6 +402,14 @@ check("needsCompile: a changed file newer than the PDF, or not listed yet", () =
   assert.strictEqual(Turn.needsCompile(["a.tex"], files, null), true, "no PDF yet");
 });
 
+check("message composition keeps commands first and scopes only mentioned files", () => {
+  assert.deepStrictEqual(Chat.compose({ text: "/review", refs: "REF", attached: "FILE", mode: "edit",
+    mentions: [{ file: "a.tex" }, { file: "a.tex" }, { file: "b.tex" }] }),
+    { prompt: "/review\n\nREF\n\nFILE", scope: ["a.tex", "b.tex"] });
+  assert.deepStrictEqual(Chat.compose({ text: "explain", refs: "REF", attached: "FILE", mode: "ask", mentions: [{ file: "a.tex" }] }),
+    { prompt: "FILE\n\nREF\n\nexplain", scope: null });
+});
+
 // ---------------------------------------------------------------- mathtext.js
 const MathText = require("../prism_local/static/mathtext.js");
 const katex = require("../prism_local/static/vendor/katex/katex.min.js");
