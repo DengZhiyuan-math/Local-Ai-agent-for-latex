@@ -87,6 +87,15 @@ class Targets(unittest.TestCase):
         self.assertIn("Sync target changed", st["blocked_reason"])
         self.assertTrue(run.called, "a changed config is looked at again at once")
 
+    def test_working_the_target_out_takes_few_git_commands(self):
+        """Renewed every CACHE_TTL seconds while the editor is idle: it took 12 commands,
+        each reading the configuration again; one listing of it serves them now."""
+        from repository import Repository
+        repo = Repository(self.root.resolve(), (self.root / ".git").resolve())
+        with mock.patch.object(gitsync.gitenv, "git", wraps=gitsync.gitenv.git) as run:
+            synctarget._resolve(repo)
+        self.assertLessEqual(run.call_count, 5, [c.args[1:] for c in run.call_args_list])
+
     def test_push_checks_the_target_afresh(self):
         self.g.bind_target()
         self.g.status()

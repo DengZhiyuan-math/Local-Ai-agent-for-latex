@@ -140,10 +140,18 @@ def _resolve(repo: Repository) -> dict:
     if not branch.startswith("refs/heads/"):
         raise ValueError("Detached HEAD: select a local branch before syncing")
     name = branch.removeprefix("refs/heads/")
+    # All of the configuration in one git (keys are git's: section and name in lower case).
+    listed = git("config", "--null", "--list").stdout
+    config: list[tuple[str, str | None]] = []
+    for e in listed.split("\0"):
+        if e:
+            key, nl, value = e.partition("\n")
+            config.append((key, value if nl else None))
 
     def values(key):
-        return git("config", "--get-all", key).stdout.strip().splitlines()
-    remotes = git("remote").stdout.splitlines()
+        return [v if v is not None else "" for k, v in config if k == key]
+    remotes = {k.split(".", 1)[1].rpartition(".")[0] for k, _ in config
+               if k.startswith("remote.") and k.count(".") >= 2}
     upstream = values(f"branch.{name}.remote")
     merges = values(f"branch.{name}.merge")
     if len(upstream) > 1 or len(merges) > 1:
@@ -152,12 +160,15 @@ def _resolve(repo: Repository) -> dict:
     if remote == "." or remote not in remotes:
         raise ValueError("A unique remote upstream or origin is required")
     branch_ref = merges[0] if merges else branch
-    if not branch_ref.startswith("refs/heads/") or git("check-ref-format", branch_ref).returncode:
+    if not branch_ref.startswith("refs/heads/") or (
+            branch_ref != branch and git("check-ref-format", branch_ref).returncode):
         raise ValueError("Sync requires one valid remote branch")
-    for key in (f"branch.{name}.pushRemote", "remote.pushDefault"):
+    for key, label in ((f"branch.{name}.pushremote", f"branch.{name}.pushRemote"),
+                       ("remote.pushdefault", "remote.pushDefault")):
         if any(v != remote for v in values(key)):
-            raise ValueError(f"{key} differs from the sync remote {remote}")
-    if git("config", "--bool", "--get", f"remote.{remote}.mirror").stdout.strip() == "true":
+            raise ValueError(f"{label} differs from the sync remote {remote}")
+    mirror = [v for k, v in config if k == f"remote.{remote}.mirror"]
+    if mirror and _true(mirror[-1]):
         raise ValueError("Mirror remotes cannot be used for editor sync")
     fetch = git("remote", "get-url", "--all", remote).stdout.strip().splitlines()
     push = git("remote", "get-url", "--push", "--all", remote).stdout.strip().splitlines()
@@ -167,11 +178,11 @@ def _resolve(repo: Repository) -> dict:
     if identity != repository_identity(push[0], repo.top) or (
             "://" in fetch[0] and not identity.startswith("github.com/") and fetch[0] != push[0]):
         raise ValueError("Fetch and push repositories differ: " + redact_url(push[0]))
-    config = git("config", "--null", "--get-regexp",
-                 r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$").stdout
+    relevant = re.compile(r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)"
+                          r"|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$")
     # Only relevant selected-remote/branch configuration affects the binding. Other
     # remotes may be added by the author without changing this target.
-    entries = [e for e in config.split("\0") if e and (
+    entries = [e for e in listed.split("\0") if e and relevant.match(e.partition("\n")[0]) and (
         e.lower().startswith((f"branch.{name}.".lower(), f"remote.{remote}.".lower(),
                               "remote.pushdefault", "url.")))]
     fingerprint = hashlib.sha256(json.dumps([branch, sorted(entries)]).encode()).hexdigest()
@@ -179,6 +190,19 @@ def _resolve(repo: Repository) -> dict:
             "fetch_url": redact_url(fetch[0]), "push_url": redact_url(push[0]), "repository_identity": identity,
             "git_dir": registry.norm(repo.git_dir.resolve()),
             "configuration_fingerprint": fingerprint}
+
+
+def _true(value: str | None) -> bool:
+    """A git boolean as `git config --bool` reads it (a key without "=" is true)."""
+    if value is None:
+        return True
+    v = value.strip().lower()
+    if v in ("true", "yes", "on"):
+        return True
+    try:
+        return int(v) != 0
+    except ValueError:
+        return False
 
 
 class RepoSettings:
