@@ -138,13 +138,29 @@
 
 回归（导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[546 项，31 跳过，无失败](frontend/review-after-tests.txt)；[浏览器 101 项通过](frontend/review-after-browser.txt)（页面代码最后变更在 `ecc35c8`）。第一次单元回归中 `performance_check.js` 只截取了编辑器 change 回调的第一行，`adcd0d3` 把它改成多行后检查本身语法出错，见[初次结果](frontend/review-first-tests.txt)；`8d89bce` 改为截取整个回调后通过。
 
-### 仍未处理
+### 第二轮修复
 
-- `proc.run` 用带 KILL_ON_JOB_CLOSE 的 Job Object，命令返回时它启动的后台程序一并结束（已在本机验证）；可能影响 `git fsmonitor--daemon` 和签名提交时的 gpg-agent（未实测）。
-- 1.4：Undo 先查 busy 再最多等待 10 秒写锁，期间开始的新一轮会把撤销算进自己的 diff。
-- Deep Code 续接会话时，新 user 行只写了一半，上一轮的工具可能被当作本轮的实时事件；每 0.5 秒重读整个会话文件。
-- 错误通知按关键词判断，"GitHub did not answer…" 这类服务端原文仍 4 秒消失；Edit 轮中关闭已删除文件的标签页时，提示"本轮结束后保存"不成立。
-- `outcome()` 只要出现过 error 事件就不再报告退出码；stderr 改为 `read(4096)` 后，管道被后台进程占住时可能丢最后一段。
-- Home：`place_of` 缓存在外层仓库内新建仓库后不更新；`sync_facts` 键缺 XDG 配置和 `config.worktree`。
-- 方案中未做：1.1 `_read_catalog` 的手写 Timer；2.3 的 `git config -z --list` 合并与空闲 1 分钟测试；1.3 每个适配器各一个失败回合测试；`saveAll` 纯转发。
-- 测试偏弱：`EventBatches` 的零等待断言在 `done` 已为真时无法区分；`watch_check.js` 的 backoff 只测一次重试。
+上一版"仍未处理"中的各项，逐项一个提交：
+
+| 提交 | 问题 | 修复后的行为 | 测试 |
+|---|---|---|---|
+| `6ce8a01` | `proc.run` 的 Job Object 带 KILL_ON_JOB_CLOSE，命令返回后它另行启动的后台程序（fsmonitor 守护进程、gpg-agent）随句柄关闭被结束 | 命令正常结束时去掉该标志再关闭句柄，后台程序照常运行；超时和 `kill_tree` 仍结束整棵进程树 | `test_proc.Run`（新增 1 项） |
+| `79c75b1` | 1.4：Undo 先查 busy 再等写锁，等待期间开始的一轮把撤销算进自己的 diff | Undo 拿到写锁后再查一次；一轮的起始快照也在写锁内取 | `test_agent`（新增 1 项） |
+| `e580a6a` | Deep Code 续接会话时，新消息只写了一半，上一轮的工具被当作本轮实时事件 | 本轮开始时记下会话已有的消息数，只看其后的部分 | `test_agent.DeepCodeBackend`（新增 1 项，fake 可半写一行） |
+| `6a3e3ee` | 服务端原文的错误（GitHub 超时、编译、上传、文件操作）被当作普通提示，4 秒后消失 | 这些调用处明确标为错误，保留到手动关闭 | 浏览器新增 1 项 |
+| `7e1d653` | Edit 轮中关闭已删除或冲突文件的标签页，提示"本轮结束后保存"，但它永远不会自动保存 | 改为询问是否放弃未保存的修改 | 浏览器新增 1 项 |
+| `a16a8fd` | stderr 用文本文件的 `read(4096)`，后台程序占住 stderr 时最后一段永远读不到 | 直接读底层描述符，到多少收多少 | `test_agent`（新增 1 项） |
+| `1168ca1` | Codex 的 error 条目（非致命通知）让 `outcome()` 以为错误已说过，随后的非零退出不再报告 | 这类通知照常显示，但不算本轮的失败说明 | `test_agent`（新增 2 项） |
+| `f60425c` | Home：外层仓库里的项目新建自己的仓库后仍显示 nested；同步信息的缓存键缺 `$XDG_CONFIG_HOME/git/config` 和 worktree 配置 | 项目与仓库顶层之间出现 `.git` 时重新定位；缓存键改用同步目标缓存的同一组配置 | `test_hub`（新增 1 项） |
+| `7a3fdd6` | 2.3：同步目标每 60 秒重新解析一次，要 12 个 git 进程 | 一次 `git config --null --list` 代替 8 次逐项查询，共 5 个；目标和指纹与原实现逐项一致，已确认的绑定不受影响（11 种配置对照） | `test_git_target`（新增 1 项） |
+| `e938edf` | 1.3：方案要求每个适配器各一个失败回合测试 | Claude Code、Codex、Deep Code、OpenAI 接口各一项，失败只说一次；四项都直接通过，代码无需改 | `test_backend_contracts.OneErrorPerFailure` |
+| `757bab2` | 4.7：`saveAll` 纯转发 | 删除，调用处直接用 `TABS.saveAll()` | Node 与浏览器检查同步改 |
+| `b8b5297` | 测试偏弱 | 零等待改在运行中的回合上测（去掉截止时间上限的变异会失败）；补伪唤醒不提前结束；保存退避测到 1→2→4→8→16→30→30 秒 | `test_agent.EventBatches`、`watch_check.js` |
+
+回归（`b8b5297` 导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[558 项，31 跳过，无失败](frontend/review2-tests.txt)；[浏览器 103 项通过](frontend/review2-browser.txt)。
+
+### 有意不改与剩余
+
+- 1.1 `_read_catalog` 的手写 Timer 保留：它读到 init 行就结束 Claude Code，不等完整（计费的）回复；`kill_tree` 结束整个 Job，不会挂住。换成 `proc.run` 反而要等整条回复。
+- Deep Code 实时事件每 0.5 秒（文件有变化时）重读整个会话文件；很长的会话会多花些读取时间，未改。
+- 复核报告里的小项未改：编辑器的同步开关在写入刚结束时可能被更早的轮询结果闪回约 2 秒；未绑定项目标识的页面（独立 PDF 窗口）在存储满时可能淘汰当前项目的聊天记录；`ChatLogic.compose` 的 slash 判断比原来宽；保存失败时同时出现两条持久通知；1.5 API 出错时不保存会话（现有测试要求失败请求不留半截对话）；1.8 `.bak` 不自动恢复、共享仓库拆分不是完全原子、手动 push/pull 超时文字未统一。
