@@ -808,6 +808,29 @@ class CheckGitHub(TempState):
         (root / "build" / "main.pdf").write_bytes(b"%PDF")               # the output folder: never
         self.assertEqual(hub.git_info(root)["changes"], 2)
 
+    def test_home_sees_a_repository_made_inside_another_and_a_url_rewrite_of_xdg(self):
+        """locate was asked again only once its git dir went: a project in an enclosing
+        repository that got one of its own stayed "nested". And the sync facts missed a
+        URL rewrite in $XDG_CONFIG_HOME/git/config, which git reads too."""
+        from unittest import mock
+        git = lambda *a, cwd: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+        outer = self.tmp / "outer"
+        root = outer / "paper"
+        root.mkdir(parents=True)
+        (root / "main.tex").write_text("x\n", encoding="utf-8")
+        git("init", "-q", "-b", "main", cwd=outer)
+        self.assertEqual(hub.place_of(root).kind, "nested")
+        git("init", "-q", "-b", "main", cwd=root)
+        self.assertEqual(hub.place_of(root).kind, "own", "its own repository is seen")
+        xdg = self.tmp / "xdg"
+        (xdg / "git").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}):
+            git("remote", "add", "origin", "mygh:me/paper.git", cwd=root)
+            self.assertIsNone(hub.git_info(root)["github"])
+            (xdg / "git" / "config").write_text('[url "https://github.com/"]\n\tinsteadOf = mygh:\n', encoding="utf-8")
+            # The rewrite makes another target, which the page must have you confirm.
+            self.assertIn("Sync target changed", hub.git_info(root)["fetch_error"] or "", "the rewrite is seen")
+
     def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
         """A page that asks then must keep watching, or it never shows what was found."""
         from unittest import mock

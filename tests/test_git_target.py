@@ -93,7 +93,7 @@ class Targets(unittest.TestCase):
         (self.root / "main.tex").write_text("mine\n")
         self.g.commit(["main.tex"], "edit")
         # A change the cache does not see (a system-wide config, say): the push still does.
-        with mock.patch.object(synctarget, "_config_key", return_value=("same",)):
+        with mock.patch.object(synctarget, "config_key", return_value=("same",)):
             synctarget._CACHE.clear()
             self.g.status()
             git(self.root, "remote", "set-url", "origin", str(self.tool))

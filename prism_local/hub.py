@@ -37,6 +37,7 @@ import gitsync  # noqa: E402
 import github  # noqa: E402
 import settings  # noqa: E402
 import sources  # noqa: E402
+import synctarget  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from publish import (create_github_repo, ensure_ignore, git_init, github_of, project_sync, publish_info,  # noqa: E402
                      publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
@@ -114,22 +115,34 @@ def title_of(path: Path) -> str | None:
 
 def place_of(root: Path):
     """locate(root), looked up again only when its repository's git dir went (the project
-    joined a shared repository, or left one) or it had none (one may have been made)."""
+    joined a shared repository, or left one), it had none (one may have been made), or a
+    .git appeared between it and the top of the repository it is in (git finds that one)."""
     hit = _PLACES.get(str(root))
-    if hit is not None and hit.repo is not None and hit.repo.git_dir.is_dir():
+    if hit is not None and hit.repo is not None and hit.repo.git_dir.is_dir()             and not (hit.prefix and _git_below(root, hit.repo.top)):
         return hit
     place = locate(root, timeout=8)
     _PLACES[str(root)] = place
     return place
 
 
+def _git_below(folder: Path, top: Path) -> bool:
+    """A .git in `folder` or a folder above it, below `top`."""
+    p, top = folder.resolve(), top.resolve()
+    while p != top and p != p.parent:
+        if (p / ".git").exists():
+            return True
+        p = p.parent
+    return False
+
+
 def sync_facts(root: Path, git_dir: Path) -> dict:
     """What git_info shows of the project's sync (its GitHub page, why it is paused, its
     target): a GitSync's status, some seven git commands, worked out again only when the
     repository's refs or configuration (refs_stamp), its prism-local.json (the binding)
-    or your ~/.gitconfig (URL rewrites) changed."""
+    or what git reads of its configuration besides (your ~/.gitconfig and
+    $XDG_CONFIG_HOME/git/config with their URL rewrites, a worktree's config) changed."""
     stamp = refs_stamp(git_dir)
-    key = (stamp, _stat(git_dir / "prism-local.json"), _stat(Path.home() / ".gitconfig"))
+    key = (stamp, _stat(git_dir / "prism-local.json"), synctarget.config_key(git_dir))
     hit = _SYNC_FACTS.get(str(git_dir))
     if hit and stamp is not None and hit[0] == key:
         return hit[1]
@@ -137,7 +150,7 @@ def sync_facts(root: Path, git_dir: Path) -> dict:
     facts = {k: status[k] for k in ("github", "blocked_reason", "target")}
     # Asked again: the status may have bound the target, changing prism-local.json.
     _SYNC_FACTS[str(git_dir)] = ((refs_stamp(git_dir), _stat(git_dir / "prism-local.json"),
-                                  _stat(Path.home() / ".gitconfig")), facts)
+                                  synctarget.config_key(git_dir)), facts)
     return facts
 
 

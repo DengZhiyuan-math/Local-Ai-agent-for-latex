@@ -82,7 +82,8 @@ _CACHE: dict[tuple, tuple] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def _config_key(git_dir: Path) -> tuple:
+def config_key(git_dir: Path) -> tuple:
+    """What git reads of a repository's configuration (its own, its worktree's, HEAD, yours)."""
     common = git_dir
     try:                                  # a worktree keeps its config in the main repository
         common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
@@ -101,8 +102,8 @@ def _config_key(git_dir: Path) -> tuple:
 
 def cached(kind: str, git_dir: Path, compute: Callable[[], object]):
     """compute(), or its result from less than CACHE_TTL seconds ago while git_dir's
-    configuration (_config_key) is unchanged. A ValueError it raises is kept like a result."""
-    key, stamp = (kind, registry.norm(git_dir)), _config_key(git_dir)
+    configuration (config_key) is unchanged. A ValueError it raises is kept like a result."""
+    key, stamp = (kind, registry.norm(git_dir)), config_key(git_dir)
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
     if hit and hit[0] == stamp and time.monotonic() - hit[1] < CACHE_TTL:
