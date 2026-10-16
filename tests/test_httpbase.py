@@ -28,6 +28,8 @@ class Failing(httpbase.Handler):
             raise RuntimeError("something broke")
         if path == "/slow":
             raise subprocess.TimeoutExpired(["git", "status"], 10)
+        if path == "/push":
+            raise subprocess.TimeoutExpired(["git", "-c", "x=y", "push", "origin", "main"], 60)
         if path == "/half":
             self._send(200, b"{}")
             raise RuntimeError("after the answer")
@@ -75,7 +77,11 @@ class Answers(unittest.TestCase):
     def test_a_command_that_timed_out_says_so(self):
         status, r = self.ask("/slow")
         self.assertEqual(status, 504)
-        self.assertIn("git did not finish in 10 seconds", r["error"])
+        self.assertIn("git did not finish within 10 seconds; try again", r["error"])
+        status, r = self.ask("/push")             # a Push or Pull from the menu: as the sync says it
+        self.assertEqual(status, 504)
+        self.assertIn("GitHub did not answer within 60 seconds", r["error"])
+        self.assertNotIn("origin", r["error"])
 
     def test_a_lock_another_window_holds_is_a_409_that_says_so(self):
         """Not a dropped connection, which the page reads as "server not reachable"."""

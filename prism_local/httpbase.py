@@ -28,7 +28,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from errors import LockBusy, Params, Refused
+from errors import LockBusy, Params, Refused, say
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -171,9 +171,9 @@ class Handler(BaseHTTPRequestHandler):
                 raise                       # the page went away, or the answer was started
             if isinstance(e, Refused):
                 return self._err(e.status, str(e), e.details)
-            if isinstance(e, subprocess.TimeoutExpired):
-                return self._err(504, f"{Path(str(e.cmd[0] if isinstance(e.cmd, list) else e.cmd)).name} "
-                                      f"did not finish in {e.timeout:g} seconds; try again")
+            if isinstance(e, subprocess.TimeoutExpired):       # in the words the sync uses too
+                said = say(e)
+                return self._err(504, said if said.startswith("GitHub") else said + "; try again")
             if isinstance(e, UnicodeDecodeError):
                 return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
             if isinstance(e, FileNotFoundError):
