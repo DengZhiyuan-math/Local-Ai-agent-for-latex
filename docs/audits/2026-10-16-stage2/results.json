@@ -68,7 +68,7 @@
     "record": "stress-results.json"
   },
   "user_checked": [
-    "a real Codex Edit turn in the editor",
+    "a real Codex Edit turn in the editor, after 3e9b938 and again after aa54609",
     "Update: restart"
   ]
 }

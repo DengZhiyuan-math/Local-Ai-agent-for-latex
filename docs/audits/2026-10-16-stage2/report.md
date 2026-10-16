@@ -83,7 +83,7 @@
 | 真实 TeX（不设 `PRISM_SKIP_TEX`） | `test_build` 34 项（2 项 Linux/macOS 专用跳过）、`test_synctex` 8 项，全部通过 | [tex-tests.txt](tex-tests.txt) |
 | 浏览器端到端（`python tests/browser/run.py <空目录>`） | 9 组检查，连续 3 次全部通过：文件菜单 16、重载后接回回合 6、回合显示 8、保存 7、Home 菜单 8、页面加载 10、多页面 6、回收站目录 1、剪贴板文件 1 | [browser.txt](browser.txt) |
 | 同步压力测试：`test_sync_buttons…test_buttons_while_typing_and_a_coauthor_pushes` 重复运行，每轮核对输入的行和合作者的修改都到达远端、按钮无错误、仓库无未完成状态 | 100/100 通过，2 个独立进程并发，696.5 秒 | [stress-results.json](stress-results.json) |
-| 用户实测 | 在编辑器中用 Codex 真实完成一次 Edit 回合；“Update: restart” 成功。时间在 `3e9b938` 之后、`d74eea1` 之前 | — |
+| 用户实测 | 在编辑器中用 Codex 真实完成 Edit 回合：`3e9b938` 之后一次（同时 “Update: restart” 成功），`aa54609`（Job Object）之后又一次，均通过 | — |
 
 30 项跳过：需要 TeX 12 项（完整回归设了 `PRISM_SKIP_TEX`，已在上表单独运行并通过），需显式开启的原生 Codex 沙盒 9 项（已单独运行并通过），Linux/macOS 专用 8 项，需要符号链接 1 项。
 
@@ -99,7 +99,7 @@
 
 ## 未验证与边界
 
-- `aa54609`（Job Object）之后没有再做真实的 Codex Edit 回合，只有原生沙盒测试。Codex 若启动要求脱离 Job 的进程，允许离开，这类进程不受管。
+- Codex 若启动要求脱离 Job 的进程，允许离开，这类进程不受管。
 - `aa54609` 起，Linux/macOS 上 CLI 留下的命令在回合结束时总会被结束（此前只在它们占着输出时）。本轮没有在 Linux/macOS 上运行。
 - 回合中由 Agent 打开的程序（例如用 `start` 打开的 PDF 阅读器）会在回合结束时关闭。
 - `3b5e80b`：未持有在线连接的页面若非正常关闭（浏览器崩溃），服务器最多约 2 分钟后才不再计入。只影响 Home 上“编辑器已打开”的标记，以及“编辑器开着时不能移到回收站”。
