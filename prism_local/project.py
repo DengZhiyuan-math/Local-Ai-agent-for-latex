@@ -448,6 +448,8 @@ class Project:
                 # page that did not see the turn start, or was reloaded during it).
                 return {"busy": True, "error": "the agent is editing the files; your edits are "
                                                "saved when its turn ends"}, 503
+            if not p.exists() and base_mtime is not None and base_mtime > 0 and not force:
+                return {"conflict": True, "gone": True, "error": "The file was deleted on disk; save under a new name."}, 409
             if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
                     and not force:
                 return {"conflict": True, "mtime": mtime(p)}, 409

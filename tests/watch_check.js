@@ -33,6 +33,10 @@ async function saves() {
   store.diskSeen(t, null);
   version++;
   assert.strictEqual((await store.save(t)).reason, "gone", "autosave cannot resurrect a deleted file");
+  const race = Tabs.createTabStore({ saveFile: async () => ({ _status: 409, conflict: true, gone: true }) });
+  const deleted = race.add("race.tex", doc, 1); version++;
+  assert.strictEqual((await race.save(deleted)).reason, "gone");
+  assert.strictEqual(deleted.conflict, "gone", "a deletion discovered by saving offers Save as");
   console.log("ok");
 }
 saves().catch((e) => { console.error(e); process.exitCode = 1; });

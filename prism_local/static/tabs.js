@@ -76,10 +76,10 @@ const Tabs = (() => {
         if (isHeld()) return { ok: false, reason: "held" };   // an Edit turn began meanwhile
       }
       if (r._status === 409 && r.conflict) {
-        t.conflict = "disk";
+        t.conflict = r.gone ? "gone" : "disk";
         onChange(t, "conflict");
-        notify(`${t.path} changed on disk — not saved. Resolve in the banner.`);
-        return { ok: false, reason: "conflict" };
+        notify(`${t.path} ${r.gone ? "was deleted" : "changed"} on disk — not saved. Resolve in the banner.`);
+        return { ok: false, reason: r.gone ? "gone" : "conflict" };
       }
       if (r._status !== 200) {
         const message = `Save failed: ${r.error || r._status}`;

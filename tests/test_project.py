@@ -56,6 +56,17 @@ class Files(unittest.TestCase):
 
 
 class Writes(unittest.TestCase):
+    def test_deletion_between_poll_and_save_does_not_recreate_the_file(self):
+        p = make({"main.tex": "original\n"})
+        file = p.root / "main.tex"
+        base = file.stat().st_mtime
+        file.unlink()
+        reply, status = p.save("main.tex", "unsaved draft\n", base, False)
+        self.assertEqual(status, 409)
+        self.assertTrue(reply["gone"])
+        self.assertFalse(file.exists())
+        self.assertEqual(p.save("copy.tex", "unsaved draft\n", 0, False)[1], 200)
+
     def test_a_project_on_its_own_saves_and_tells_whoever_listens(self):
         p = make({"main.tex": "one\r\n"})
         changed = []
