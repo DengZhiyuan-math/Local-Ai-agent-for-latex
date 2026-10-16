@@ -170,6 +170,11 @@ try {
     const t = activeTab(), text = t.doc.getValue(); t.doc.replaceRange("draft", { line: 0, ch: 0 });
     C.editTurn = true; await closeTab(t.path);
     const kept = TABS.get(t.path) === t; C.editTurn = false; t.doc.setValue(text); TABS.synced(t, t.mtime); return kept;`));
+  check("an error the server words is kept until dismissed", await p.ev(`
+    const real = Q.fileAction; Q.fileAction = async () => ({ _status: 500, error: "GitHub did not answer within 30 seconds" });
+    await fileAction("rename", {}); Q.fileAction = real;
+    const row = [...document.querySelectorAll('#notifications [role="alert"]')].find(el => el.textContent.includes("did not answer"));
+    if (!row) return false; row.querySelector("button").click(); return true;`));
   check("disk reload restores compilation line diagnostics", await p.ev(`
     const t = activeTab(); S.diagnostics = [{ file: t.path, line: 1, severity: "error" }]; applyDiagnostics();
     t.doc.setValue("temporary text"); TABS.synced(t, t.mtime); await reloadFromDisk(t);

@@ -278,7 +278,7 @@ function showBanner(t) {
       const path = prompt("Save as a new project file", t.path);
       if (!path || path === t.path) return;
       const r = await Q.saveFile({ path, content: t.doc.getValue(), base_mtime: 0 });
-      if (r._status !== 200) return toast(r.error || "Could not save the new file");
+      if (r._status !== 200) return toast(r.error || "Could not save the new file", true);
       TABS.remove((x) => x === t); S.active = null;
       await poll(); await openFile(path);
     };
@@ -357,7 +357,7 @@ $("#tree").closest("section").addEventListener("contextmenu", (e) => {
 
 async function fileAction(action, body) {
   const r = await Q.fileAction(action, body);
-  if (r._status !== 200) { toast(r.error || `Could not ${action}`); return null; }
+  if (r._status !== 200) { toast(r.error || `Could not ${action}`, true); return null; }
   return r;
 }
 async function copyItems(paths) {
@@ -483,7 +483,7 @@ async function importProjectFiles(files) {
   for (const [i, file] of files.entries()) {
     status.textContent = `Adding ${i + 1}/${files.length}: ${file.name}…`;
     try { await uploadFile(file, "project"); added++; await poll(); }
-    catch (e) { failed++; toast(`${file.name}: ${e.message || e}`); }
+    catch (e) { failed++; toast(`${file.name}: ${e.message || e}`, true); }
   }
   status.textContent = `${added} file${added === 1 ? "" : "s"} added${failed ? ` · ${failed} failed` : ""}`;
 }
@@ -615,7 +615,7 @@ async function pollOnce() {
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
   if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
   showProjectName(r.name || r.root, r.root);
-  if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
+  if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error, true); }
   if (!bindProject(r.project_key)) return;
   if (!BUILD.loaded) await loadConfig();
   const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })), asked);
@@ -718,7 +718,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
   const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined);
   if (r && r._status === 200) renderSync(r);
-  else if (r && r.error) toast(r.error);
+  else if (r && r.error) toast(r.error, true);
   await poll();
 });
 // Create a private GitHub repository for the project (publish.publish_project, through this server).
@@ -775,7 +775,7 @@ $("#sync-clash").addEventListener("click", async (e) => {
   const seq = ++diffSeq;
   const r = await Q.theirs(b.dataset.theirs);
   if (seq !== diffSeq) return;                        // the diff view was asked for again
-  if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
+  if (r._status !== 200) return toast(r.error || "Could not get GitHub's version", true);
   const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
   $("#diff").innerHTML = diffHtml([head, "", r.diff || "(the same)"].join("\n"));
   openPanel("diff");
@@ -881,7 +881,7 @@ async function loadConfig() {
   const want = store.get("buildmode", "draft");
   BUILD.mode = BUILD.modes.includes(want) ? want : BUILD.modes[0] || "";
   renderCompileMenu();
-  if (r.error) { $("#build-info").textContent = r.error; toast(r.error); }
+  if (r.error) { $("#build-info").textContent = r.error; toast(r.error, true); }
 }
 
 
@@ -1157,6 +1157,7 @@ sidebarHidden(store.get("sidebar.hidden", false));
 $("#btn-sidebar").onclick = () => sidebarHidden(!$("#sidebar").classList.contains("hidden"));
 
 // Build status stays in its own line; actionable errors remain until dismissed.
+// `error`: it stays until dismissed. Messages from the server pass true; the guess is for the rest.
 function toast(msg, error = /failed|error|could not|cannot |not saved|not undone|unreachable|not reachable|resolve .*conflict/i.test(String(msg))) {
   notice(String(msg), error);
 }
@@ -1655,7 +1656,7 @@ const ATT = {
         for (const p of open) {
           if (!r[p]) continue;
           this.sync.set(p, { ...r[p], at: this.sync.get(p).at });
-          if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
+          if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`, true);
         }
         this.showSync();
       }
@@ -1950,7 +1951,7 @@ async function checkUsage(auto = false) {
   const r = await Q.usage(provider);
   if (provider !== C.provider || seq !== providerSeq.usage) return;
   renderQuota(r.rate || store.get("chat.rate", null));
-  if (r.error && !auto) toast(r.error);
+  if (r.error && !auto) toast(r.error, true);
 }
 $("#quota").addEventListener("click", (e) => {
   if (e.target.id === "quota-refresh") return checkUsage();
