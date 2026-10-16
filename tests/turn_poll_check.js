@@ -8,4 +8,7 @@ assert.strictEqual(Turn.pollDelay(10), 30000);
 assert.deepStrictEqual(Turn.result({ outcome: "stopped", exit: 1, stderr: "terminated" }), { outcome: "stopped", error: null });
 assert.deepStrictEqual(Turn.result({ outcome: "failed", error: "precise failure" }), { outcome: "failed", error: "precise failure" });
 assert.strictEqual(Turn.result({ outcome: "failed", error: null }).error, null, "an already reported error is not repeated");
+assert.strictEqual(Turn.mayFollow({ started: 1, current: 1, focused: true, hidden: false }), true);
+for (const state of [{ current: 2 }, { focused: false }, { hidden: true }])
+  assert.strictEqual(Turn.mayFollow({ started: 1, current: 1, focused: true, hidden: false, ...state }), false);
 console.log("ok");

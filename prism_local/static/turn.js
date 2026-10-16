@@ -160,7 +160,8 @@ const Turn = (() => {
       : e.error || `${e.subtype || "exit " + e.exit}${e.stderr ? "\n" + e.stderr : ""}`;
     return { outcome, error };
   }
-  return { create, needsCompile, pollFailed, pollDelay, result };
+  const mayFollow = ({ started, current, focused, hidden }) => started === current && focused && !hidden;
+  return { create, needsCompile, pollFailed, pollDelay, result, mayFollow };
 })();
 
 if (typeof module !== "undefined") module.exports = Turn;

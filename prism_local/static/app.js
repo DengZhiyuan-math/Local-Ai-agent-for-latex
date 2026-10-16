@@ -126,7 +126,9 @@ async function loadTab(path) {
 // Each file asked for to be shown counts: the last one asked for is the one in front, even
 // if an earlier one's file arrives after it (see init: the tabs of the last session).
 let openAsked = 0;
-async function openFile(path, line) {
+async function openFile(path, line, following = false) {
+  if (foreignProject) return;
+  if (C.job && !following) { C.follow = false; $("#agent-view").hidden = true; }
   if (S.files.some((f) => f.path === path && f.editable === false)) {
     window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
     return;
@@ -1525,7 +1527,7 @@ const AV = {
     const v = this.view();
     v.setOption("mode", modeFor(path));
     $("#agent-view-title").textContent = `${name === "Write" ? "Writing" : "Editing"} ${path}`;
-    $("#agent-view").hidden = this.hidden;           // hidden: it still marks the editor (AH)
+    $("#agent-view").hidden = this.hidden || !C.follow || !Turn.mayFollow({ started: C.followOpened, current: openAsked, focused: cm.hasFocus(), hidden: this.hidden });
     v.setValue(""); v.refresh();
     if (name === "Write") { this.base = ""; return; }
     // An edit changes the file as it is on disk.
@@ -1571,6 +1573,7 @@ const AV = {
   // The step `id` ended (null: the turn ended). Show the result in the editor.
   async end(id, ok) {
     if (this.id === null || (id !== null && id !== this.id)) return;
+    const turnJob = C.job;
     const { path, name, text, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
     const start = Math.max(0, (at || 0) - this.old.length);   // where the edit was, in the old file
     this.id = null;
@@ -1590,9 +1593,16 @@ const AV = {
     if (this.id !== null) return;                       // the next step already took the view
     $("#agent-view").hidden = true;
     // Show the result where it is, unless you hid the agent's view.
-    if (!this.hidden && S.files.some((f) => f.path === path)) openFile(path, line);
+    if (!S.files.some((f) => f.path === path)) return;
+    if (C.job === turnJob && C.follow && Turn.mayFollow({ started: C.followOpened, current: openAsked, focused: cm.hasFocus(), hidden: this.hidden })) {
+      await openFile(path, line, true); C.followOpened = openAsked;
+    } else chatAppend(`<a data-file="${esc(path)}" data-line="${line}">Jump to ${esc(path)}:${line}</a>`, "card");
   },
 };
+
+document.addEventListener("focusin", (e) => {
+  if (C.job && !cm.getWrapperElement().contains(e.target)) { C.follow = false; $("#agent-view").hidden = true; }
+});
 
 /* Files added to a message: the + button, files dragged onto the panel, an image pasted
    into the box. Each is saved in the project's prism-uploads/ folder (/api/upload),
@@ -1749,7 +1759,7 @@ async function sendMessage() {
 // running when this page loaded (a reload), which is then shown and can be stopped.
 // What each event shows is turn.js's; here it is drawn.
 async function followTurn(job, provider, mode) {
-  C.job = job; C.stopping = false; setUndoBusy(true); AV.hidden = false; AH.clear();   // last turn's marks go
+  C.job = job; C.follow = true; C.followOpened = openAsked; C.stopping = false; setUndoBusy(true); AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
