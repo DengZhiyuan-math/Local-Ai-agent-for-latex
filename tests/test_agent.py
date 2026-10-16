@@ -757,6 +757,29 @@ class EventBatches(unittest.TestCase):
         events, done = job.wait_events(0, 0)
         self.assertEqual((len(events), done, waits), (2, False, []), "a hidden page's non-waiting poll is immediate")
 
+    def test_the_done_event_is_not_held_back_for_a_batch(self):
+        """The done event comes a moment before the turn's thread marks the job done: a
+        poll that had it still waited out the batch window."""
+        job = job_for()
+        waits = []
+
+        class Arriving:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                waits.append(timeout)
+                if not job.events:
+                    job.events.append({"t": "done", "turn": 1})
+
+        job.cond = Arriving()
+        events, done = job.wait_events(0, 5)
+        self.assertEqual(([e["t"] for e in events], done), (["done"], False))
+        self.assertEqual(len(waits), 1, "returned as soon as the done event came")
+        waits.clear()
+        job.events = [{"t": "delta", "text": "last words"}, {"t": "done", "turn": 1}]
+        events, _ = job.wait_events(0, 5)
+        self.assertEqual((len(events), waits), (2, []), "a done event already there is not waited on")
+
     def test_a_wakeup_with_nothing_new_does_not_end_the_wait(self):
         job = job_for()
         job.events = [{"t": "delta", "text": "seen"}]

@@ -297,9 +297,11 @@ class Job:
                     break
                 self.cond.wait(remaining)
             # A short fixed window combines nearby tokens without postponing a batch
-            # indefinitely. Completed turns and non-waiting polls return immediately.
+            # indefinitely. Completed turns and non-waiting polls return immediately, and
+            # so does a poll that has the done event (the last; the job is marked done a
+            # moment after it).
             batch_until = min(deadline, time.monotonic() + .04)
-            while len(self.events) > after and not self.done:
+            while len(self.events) > after and not self.done and self.events[-1].get("t") != "done":
                 remaining = batch_until - time.monotonic()
                 if remaining <= 0:
                     break
