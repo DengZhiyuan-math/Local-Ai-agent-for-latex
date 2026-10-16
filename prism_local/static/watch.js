@@ -1,7 +1,9 @@
-/* Reconcile a tree response with the page's last response and open tabs. No I/O. */
+/* Reconcile a tree response with the page's last response and open tabs. No I/O. `asked`:
+   Tabs.stamp() when the tree was asked for; a tab saved, opened or reloaded since (t.seen
+   above it) is newer than the tree and left alone. */
 "use strict";
 const Watch = (() => {
-  function reconcile(prev, tree, tabs) {
+  function reconcile(prev, tree, tabs, asked = Infinity) {
     const out = { foreign: !!(prev?.project_key && tree.project_key !== prev.project_key),
       treeChanged: false, reload: [], conflicts: [], gone: [], symbols: false, pdf: false };
     if (out.foreign) return out;
@@ -13,7 +15,7 @@ const Watch = (() => {
     out.pdf = !prev || prev.pdf_mtime !== tree.pdf_mtime || prev.pdf_main !== tree.pdf_main;
     for (const t of tabs) {
       const f = files.get(t.path);
-      if (t.inFlight) continue;
+      if (t.inFlight || t.seen > asked) continue;
       if (!f) { if (t.conflict !== "gone") out.gone.push(t.path); continue; }
       if (t.conflict === "gone" || Math.abs(f.mtime - t.mtime) >= 1e-6)
         out[t.dirty ? "conflicts" : "reload"].push(t.path);

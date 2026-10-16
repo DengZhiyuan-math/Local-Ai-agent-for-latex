@@ -605,6 +605,7 @@ const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
   if (foreignProject) return;
+  const asked = TABS.stamp();
   const r = await Q.tree();
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
@@ -613,7 +614,7 @@ async function pollOnce() {
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
   if (!bindProject(r.project_key)) return;
   if (!BUILD.loaded) await loadConfig();
-  const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })));
+  const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })), asked);
   if (action.foreign) return stopForProject();
   S.ready = true; S.watch = r;
   S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];

@@ -8,6 +8,8 @@
      await TABS.save(t)                       // {ok} or {ok: false, reason, message}
      await TABS.saveAll()                     // the same, for every edited tab
      TABS.diskSeen(t, mtime)                  // the tree poll saw the file on disk
+     TABS.stamp()                             // before a tree request: tabs whose disk state
+                                             // the page learned later have t.seen above it
 
    One save per tab at a time: a second waits for the first, so two writes never race on
    the server (the second would look like a change made on disk). While isHeld() (an
@@ -29,12 +31,13 @@ const Tabs = (() => {
                             isStopped = () => false }) {
     const tabs = [];
     let heldNoted = false;
+    let learned = 0;                   // counts what the page learned of the disk (t.seen)
 
     const dirty = (t) => !t.doc.isClean(t.gen);
 
     function add(path, doc, mtime) {
-      const t = { path, doc, mtime, gen: doc.changeGeneration(true), conflict: null, saving: null, inFlight: false,
-        saveError: null, retryTimer: null, retries: 0 };
+      const t = { path, doc, mtime, seen: ++learned, gen: doc.changeGeneration(true), conflict: null, saving: null,
+        inFlight: false, saveError: null, retryTimer: null, retries: 0 };
       tabs.push(t);
       return t;
     }
@@ -96,7 +99,7 @@ const Tabs = (() => {
         return { ok: false, reason: "failed", message };
       }
       cancel(t.retryTimer); t.retryTimer = null; t.retries = 0; t.saveError = null;
-      t.mtime = r.mtime; t.gen = gen; t.conflict = null;
+      t.mtime = r.mtime; t.seen = ++learned; t.gen = gen; t.conflict = null;
       onChange(t, "saved");
       return { ok: true };
     }
@@ -143,14 +146,16 @@ const Tabs = (() => {
     // The tab holds the disk's text of `mtime` now.
     function synced(t, mtime) {
       cancel(t.retryTimer); t.retryTimer = null; t.saveError = null; t.retries = 0;
-      t.mtime = mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
+      t.mtime = mtime; t.seen = ++learned; t.gen = t.doc.changeGeneration(true); t.conflict = null;
       onChange(t, "synced");
     }
 
     // An agent's Edit turn starts: its "saved when the turn ends" note is shown once again.
     const turnStarted = () => { heldNoted = false; };
 
-    return { tabs, add, get, remove, dirty, save, saveAll, diskSeen, loaded, synced, turnStarted };
+    const stamp = () => learned;
+
+    return { tabs, add, get, remove, dirty, save, saveAll, diskSeen, loaded, synced, turnStarted, stamp };
   }
 
   // What to tell the author when saveAll did not save everything (before a build, a sync,

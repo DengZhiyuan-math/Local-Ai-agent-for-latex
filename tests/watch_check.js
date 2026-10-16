@@ -37,6 +37,29 @@ async function saves() {
   const deleted = race.add("race.tex", doc, 1); version++;
   assert.strictEqual((await race.save(deleted)).reason, "gone");
   assert.strictEqual(deleted.conflict, "gone", "a deletion discovered by saving offers Save as");
-  console.log("ok");
 }
-saves().catch((e) => { console.error(e); process.exitCode = 1; });
+
+async function staleTrees() {
+  let version = 0, content = "a";
+  const doc = { changeGeneration: () => version, isClean: (g) => g === version, getValue: () => content };
+  let writes = 0;
+  const store = Tabs.createTabStore({ saveFile: async () => ({ _status: 200, mtime: 1 + ++writes }) });
+  const t = store.add("a.tex", doc, 1);
+  // A tree asked for before a save finished arrives after it, while you type on.
+  const asked = store.stamp();
+  version++; content = "ab";
+  assert.ok((await store.save(t)).ok);
+  version++; content = "abc";
+  const late = Watch.reconcile(tree(1), tree(1), [{ ...t, dirty: true }], asked);
+  assert.deepStrictEqual([late.conflicts, late.reload, late.gone], [[], [], []], "a tree older than the save is no change on disk");
+  assert.deepStrictEqual(Watch.reconcile(tree(1), tree(2), [{ ...t, dirty: true }], store.stamp()).conflicts, [],
+    "the next tree sees the saved file");
+  assert.deepStrictEqual(Watch.reconcile(tree(2), tree(3), [{ ...t, dirty: true }], store.stamp()).conflicts, ["a.tex"],
+    "a later change on disk still is one");
+  // A tab opened after the tree was asked for is not missing from it.
+  const before = store.stamp();
+  const fresh = store.add("new.tex", doc, 5);
+  assert.deepStrictEqual(Watch.reconcile(tree(2), tree(2), [{ ...fresh, dirty: true }], before).gone, []);
+}
+
+saves().then(staleTrees).then(() => console.log("ok")).catch((e) => { console.error(e); process.exitCode = 1; });
