@@ -241,7 +241,8 @@ class Job:
         if ev.get("t") == "error":
             if self.cancel.is_set():
                 return                  # what stopping it broke: "done" says it was stopped
-            self.errors_shown += 1
+            if not ev.get("notice"):    # a notice the turn went on after tells nothing of its end
+                self.errors_shown += 1
         with self.cond:
             self.events.append(ev)
             self.cond.notify_all()

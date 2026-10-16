@@ -294,4 +294,6 @@ class Codex(CliBackend):
             if completed and item.get("text"):
                 job.emit({"t": "thinking", "text": str(item["text"])})
         elif kind == "error" and completed:
-            job.emit({"t": "error", "message": item.get("message") or "Codex error"})
+            # An error item is Codex's non-fatal notice (its turn goes on); turn.failed and a
+            # top-level error say how a turn failed.
+            job.emit({"t": "error", "message": item.get("message") or "Codex error", "notice": True})

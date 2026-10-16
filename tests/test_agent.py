@@ -1038,6 +1038,15 @@ class Snapshots(unittest.TestCase):
         self.assertEqual((done["outcome"], done["error"]), ("failed", None))
         self.assertEqual([e["message"] for e in events if e["t"] == "error"], ["Codex: turn failed"])
 
+        class Warned(backends.Backend):              # a notice the turn went on after (Codex's error item)
+            def run(self, job):
+                job.emit({"t": "error", "message": "Reconnecting… 1/5", "notice": True})
+                return {"exit": 1, "stderr": "fatal: not logged in"}
+
+        done, _ = self.turn_of(Warned("warned"), tmpdir())
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("fatal: not logged in", done["error"] or "", "the failure is told after a notice")
+
         class BrokenByStop(backends.Backend):       # the API's reader, its response closed under it
             def run(self, job):
                 job.cancel.wait(10)
@@ -1122,6 +1131,15 @@ class Snapshots(unittest.TestCase):
         self.assertEqual([(e["t"], e.get("text")) for e in job.events],
                          [("thinking_start", None), ("thinking", "First, read main.tex."),
                           ("thinking_start", None), ("thinking", "Then the proof.")])
+
+    def test_a_codex_error_item_is_a_notice_not_how_the_turn_ended(self):
+        job, st, codex = job_for(root=Path(".")), {}, Codex("codex")
+        codex.handle({"type": "item.completed", "item": {"type": "error", "id": "e1",
+                                                          "message": "Reconnecting… 1/5"}}, job, st)
+        self.assertEqual([(e["t"], e["message"]) for e in job.events], [("error", "Reconnecting… 1/5")])
+        self.assertEqual(job.errors_shown, 0)
+        self.assertEqual(agent.outcome(job, {"exit": 1, "stderr": "fatal: stream closed"}),
+                         ("failed", "exit 1\nfatal: stream closed"))
 
     def test_undo_while_git_holds_the_files_says_busy(self):
         """git holding the files long (a repository's slow hook): Undo says so after a moment,
