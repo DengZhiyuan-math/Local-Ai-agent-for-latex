@@ -22,6 +22,7 @@ async function page(inject = "") {
   await send("Runtime.enable"); await send("Page.enable");
   if (inject) await send("Page.addScriptToEvaluateOnNewDocument", { source: inject });
   await send("Page.navigate", { url });
+  await send("Page.bringToFront");
   const wait = async (condition) => {
     for (let i = 0; i < 160; i++) {
       if (await ev(`try { return !!(${condition}); } catch { return false; }`)) return;
@@ -106,5 +107,32 @@ try {
     const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && $("#chat-input").value === "next draft";
     ATT.files = []; ATT.render(); $("#chat-input").value = ""; Q.agent = realAgent; Q.events = realEvents;
     return kept;`));
+} finally { await p.close(); }
+p = await page();
+try {
+  await p.wait("S.ready && !S.restoring && S.active");
+  check("1000 edits preserve the tab bar nodes", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(), node = $("#tabs").firstElementChild;
+    const mutations = new MutationObserver(() => {}); mutations.observe($("#tabs"), { childList: true });
+    for (let i = 0; i < 1000; i++) t.doc.replaceRange("x", { line: 0, ch: 0 });
+    const rebuilt = mutations.takeRecords().length; mutations.disconnect();
+    t.doc.setValue(text); TABS.synced(t, t.mtime);
+    return rebuilt === 0 && $("#tabs").firstElementChild === node;`));
+  check("unchanged sync actions retain their DOM nodes", await p.ev(`
+    const st = { own: true, remote: true, enabled: true, kept: [{ path: "main.tex", line: 1, who: "A" }], clash: [] };
+    renderSync(st); const button = $("#sync-kept button"); renderSync(st);
+    return button === $("#sync-kept button");`));
+  check("streamed reply batches draw their final text once per frame", await p.ev(`
+    const real = Q.events; let calls = 0;
+    let replacements = 0;
+    const collect = records => { replacements += records.filter(r => r.target.matches?.(".msg.assistant")).length; };
+    const mutations = new MutationObserver(collect); mutations.observe($("#chat-log"), { childList: true, subtree: true });
+    Q.events = async () => ++calls <= 100 ? { _status: 200, done: false, events: [{ t: "delta", text: "x" }] }
+      : { _status: 200, done: true, events: [{ t: "done", outcome: "ok", exit: 0, changed: [] }] };
+    await followTurn(9100, "slow", "ask"); Q.events = real;
+    collect(mutations.takeRecords()); mutations.disconnect();
+    const message = [...$("#chat-log").querySelectorAll(".msg.assistant")].at(-1);
+    return message.textContent === "x".repeat(100) && replacements <= 2;`));
+  check("performance changes raise no page errors", p.errors.length === 0);
 } finally { await p.close(); }
 process.exitCode = failures ? 1 : 0;
