@@ -1327,14 +1327,7 @@ function chatAppend(html, cls) {
 }
 // The conversation is kept as HTML: its latest messages, whole, up to 400 000 characters.
 function saveChatLog() {
-  const kids = $("#chat-log").children;
-  let html = "";
-  for (let i = kids.length - 1; i >= 0; i--) {
-    const h = kids[i].outerHTML;
-    if (html.length + h.length > 400000) break;
-    html = h + html;
-  }
-  provSet("log", html);
+  provSet("log", Util.boundedLog([...$("#chat-log").children].map((el) => el.outerHTML)));
 }
 // Earlier versions cut the saved log anywhere, even inside a tag, where the rest of an
 // attribute (a tool's command, say) could read as new HTML. So a restored log keeps only

@@ -51,7 +51,54 @@ const Util = (() => {
              leaveOut: (r.private_dirs || []).filter((d) => !d.ignored) };
   }
 
-  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState };
+  function createStore(access, { project = () => null, now = Date.now, onError = () => {} } = {}) {
+    let used = {};
+    try { used = JSON.parse(access().getItem("prism.storage.used") || "{}"); } catch { /* no history */ }
+    const touch = (key) => {
+      used[key] = now();
+      try { access().setItem("prism.storage.used", JSON.stringify(used)); } catch { /* value already saved */ }
+    };
+    return {
+      get(key, fallback) {
+        try {
+          const value = access().getItem("prism." + key);
+          if (value === null) return fallback;
+          if (key.endsWith(".log")) touch("prism." + key);
+          return JSON.parse(value);
+        } catch { return fallback; }
+      },
+      set(key, value) {
+        const full = "prism." + key;
+        try {
+          const storage = access(), text = JSON.stringify(value);
+          try { storage.setItem(full, text); }
+          catch (e) {
+            if (!(e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)) throw e;
+            const candidates = Array.from({ length: storage.length }, (_, i) => storage.key(i))
+              .filter((k) => { const m = /^prism\.chat\.([^.]+)\..+\.log$/.exec(k); return m && m[1] !== project() && k !== full; })
+              .sort((a, b) => (used[a] || 0) - (used[b] || 0));
+            let saved = false;
+            for (const old of candidates) {
+              storage.removeItem(old); delete used[old];
+              try { storage.setItem(full, text); saved = true; break; } catch { /* next oldest */ }
+            }
+            if (!saved) throw e;
+          }
+          if (key.endsWith(".log")) touch(full);
+          return true;
+        } catch {
+          onError("Browser storage is full or unavailable. Settings or chat history could not be saved.");
+          return false;
+        }
+      },
+    };
+  }
+  function boundedLog(elements, limit = 400000) {
+    let html = "";
+    for (let i = elements.length - 1; i >= 0; i--) if (elements[i].length + html.length <= limit) html = elements[i] + html;
+    return html;
+  }
+  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog };
 })();
 
 if (typeof module !== "undefined") module.exports = Util;

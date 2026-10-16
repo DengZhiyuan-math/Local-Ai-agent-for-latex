@@ -2,10 +2,22 @@
 "use strict";
 
 const $ = (s) => document.querySelector(s);
-const store = {
-  get(k, d) { try { const v = localStorage.getItem("prism." + k); return v === null ? d : JSON.parse(v); } catch { return d; } },
-  set(k, v) { try { localStorage.setItem("prism." + k, JSON.stringify(v)); } catch { /* ignore */ } },
-};
+const store = Util.createStore(() => localStorage, { project: () => projectKey, onError: (message) => notice(message, true) });
+
+function notice(message, error = false) {
+  let stack = document.querySelector("#notifications");
+  if (!stack) {
+    stack = document.createElement("div"); stack.id = "notifications"; stack.setAttribute("aria-live", "polite");
+    stack.style.cssText = "position:fixed;right:16px;bottom:20px;z-index:10000;display:grid;gap:8px;max-width:min(460px,90vw)";
+    document.body.append(stack);
+  }
+  const row = document.createElement("div"), text = document.createElement("span"), close = document.createElement("button");
+  row.setAttribute("role", error ? "alert" : "status");
+  row.style.cssText = "background:var(--panel,#fff);color:var(--text,#111);border:1px solid var(--border,#bbb);border-left:4px solid var(" + (error ? "--err" : "--accent") + ");padding:10px;box-shadow:0 2px 12px #0003;display:flex;gap:10px;font:13px/1.5 system-ui";
+  text.textContent = message; close.textContent = "×"; close.setAttribute("aria-label", "Dismiss notification");
+  close.onclick = () => row.remove(); row.append(text, close); stack.append(row);
+  if (!error) setTimeout(() => row.remove(), 4000);
+}
 
 let projectKey = null;             // fixed for this page's lifetime; never follow a reused port
 let foreignProject = false;
