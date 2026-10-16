@@ -66,25 +66,51 @@ BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 # ---------------------------------------------------------------- project facts
 
-def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
-    """How many editable source files the project has, and the newest mtime."""
-    count, newest = 0, None
+SCAN_TTL = 60.0
+_SCANS: dict[tuple, tuple] = {}      # (project folder, output folder) -> what the last walk saw
+
+
+def scan_sources(root: Path, outdir: str) -> tuple[int, float | None, bool]:
+    """How many editable source files the project has, the newest mtime, and whether it has
+    more than MAX_SCAN (the count then stops at MAX_SCAN).
+
+    The folders are walked again only when one of those walked last time changed (a file
+    added, removed or renamed in it, which a save by the editor is: it writes a new file
+    and renames it over the old one), the newest file changed, or SCAN_TTL went by. A file
+    edited in place, which changes no folder, is seen at the latest then: one stat per
+    folder instead of a walk of them all every ten seconds."""
+    key = (str(root), outdir)
+    hit = _SCANS.get(key)
+    if hit and time.monotonic() - hit[0] < SCAN_TTL \
+            and all(_stat(Path(p)) == st for p, st in hit[1].items()):
+        return hit[2]
+    when = time.monotonic()
+    # Each folder's stat is taken before it is listed, so a change while it is walked
+    # makes it differ next time.
+    stats = {str(root): _stat(root)}
+    count, newest, newest_path = 0, None, None
     for dirpath, dirnames, filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root).as_posix()
         rel = "" if rel == "." else rel + "/"
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS
                        and rel + d != outdir]
+        stats.update((os.path.join(dirpath, d), _stat(Path(dirpath, d))) for d in dirnames)
         for f in filenames:
             if Path(f).suffix in EDITABLE_SUFFIXES and not f.startswith("._"):
                 count += 1
                 try:
                     t = os.stat(os.path.join(dirpath, f)).st_mtime
-                    newest = t if newest is None or t > newest else newest
+                    if newest is None or t > newest:
+                        newest, newest_path = t, os.path.join(dirpath, f)
                 except OSError:
                     pass
         if count > MAX_SCAN:
             break
-    return count, newest
+    if newest_path:
+        stats[newest_path] = _stat(Path(newest_path))
+    summary = (min(count, MAX_SCAN), newest, count > MAX_SCAN)
+    _SCANS[key] = (when, stats, summary)
+    return summary
 
 
 def _stat(p: Path):
@@ -171,9 +197,9 @@ def project_info(entry: dict) -> dict:
     if not d["exists"]:
         return d
     pdf, main, outdir = pdf_path(root)
-    files, edited = scan_sources(root, outdir)
+    files, edited, capped = scan_sources(root, outdir)
     d.update(main=main, title=title_of(root / main) if main else None,
-             files=files, edited=edited,
+             files=files, files_capped=capped, edited=edited,
              pdf_mtime=pdf.stat().st_mtime if pdf and pdf.is_file() else None)
     # Only a look: a server that is slow to answer right now keeps its instance file.
     state = instances.inspect(root)

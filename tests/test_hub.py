@@ -364,6 +364,81 @@ class Create(TempState):
         self.assertEqual(list(hub.all_git_info({g})), [g])
 
 
+class Scan(TempState):
+    """The file count and newest edit Home shows of each project."""
+
+    def project(self, n: int) -> Path:
+        """A project of n files, main.tex the newest and sections/s0.tex the oldest."""
+        root = (self.tmp / "p").resolve()
+        (root / "sections").mkdir(parents=True)
+        base = time.time() - 1000
+        for i in range(n - 1):
+            (root / "sections" / f"s{i}.tex").write_text("x\n", encoding="utf-8")
+            os.utime(root / "sections" / f"s{i}.tex", (base + i, base + i))
+        (root / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        os.utime(root / "main.tex", (base + n, base + n))
+        hub.add_project(str(root))
+        return root
+
+    def listed(self) -> dict:
+        return hub.list_projects()["projects"][0]
+
+    def walks(self, root: Path) -> list:
+        """A patch that records each walk of root's folder."""
+        real = os.walk
+        seen = []
+
+        def walk(top, *a, **k):
+            if Path(top) == root:
+                seen.append(top)
+            return real(top, *a, **k)
+        return seen, mock.patch.object(hub.os, "walk", side_effect=walk)
+
+    def test_a_count_cut_short_says_so(self):
+        self.project(8)
+        with mock.patch.object(hub, "MAX_SCAN", 5):
+            p = self.listed()
+        self.assertEqual((p["files"], p["files_capped"]), (5, True))
+
+    def test_a_full_count_is_not_cut_short(self):
+        self.project(3)
+        p = self.listed()
+        self.assertEqual((p["files"], p["files_capped"]), (3, False))
+
+    def test_an_unchanged_project_is_not_walked_again(self):
+        root = self.project(3)
+        self.listed()
+        seen, patch = self.walks(root)
+        with patch:
+            p = self.listed()
+        self.assertEqual(seen, [])
+        self.assertEqual(p["files"], 3)
+
+    def test_a_new_file_is_seen(self):
+        root = self.project(3)
+        self.listed()
+        time.sleep(0.05)
+        (root / "sections" / "new.tex").write_text("y\n", encoding="utf-8")
+        seen, patch = self.walks(root)
+        with patch:
+            p = self.listed()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(p["files"], 4)
+
+    def test_the_newest_file_edited_in_place_is_seen(self):
+        root = self.project(3)
+        edited = self.listed()["edited"]
+        os.utime(root / "main.tex", (edited + 100, edited + 100))
+        self.assertEqual(self.listed()["edited"], edited + 100)
+
+    def test_other_edits_are_seen_after_a_while(self):
+        root = self.project(3)
+        edited = self.listed()["edited"]
+        os.utime(root / "sections" / "s0.tex", (edited + 100, edited + 100))
+        with mock.patch.object(hub, "SCAN_TTL", 0):
+            self.assertEqual(self.listed()["edited"], edited + 100)
+
+
 class ProjectFolders(TempState):
     """Home's menu: copy a project's folder, paste folders as projects, delete to the Trash."""
 

@@ -433,7 +433,7 @@ function previewHTML() {
         <dt>Status</dt><dd>${statusHTML(p)}</dd>
         <dt>Modified</dt><dd>${p.edited ? `${fmtDate(p.edited)} <span class="muted">(${ago(p.edited)})</span>` : "—"}</dd>
         <dt>Opened</dt><dd>${p.opened ? `${fmtDate(p.opened)} <span class="muted">(${ago(p.opened)})</span>` : "—"}</dd>
-        ${p.exists ? `<dt>Files</dt><dd>${p.files ? plural(p.files, ".tex file") : "No .tex files"}</dd>` : ""}
+        ${p.exists ? `<dt>Files</dt><dd>${p.files ? (p.files_capped ? "≥ " : "") + plural(p.files, ".tex file") : "No .tex files"}</dd>` : ""}
         <dt>In</dt><dd><button class="linkish" ${fid ? `data-act="folder" data-fid="${esc(fid)}"` : `data-act="view" data-view="all"`}>${icon("folder")}${esc(whereText(fid))}</button></dd>
         <dt>Path</dt><dd class="pv-path">${esc(p.path)}</dd>
         <dt>Tags</dt><dd>${(p.tags || []).map(tagChip).join("") || `<button class="linkish" data-act="tags">Add tags…</button>`}</dd>
