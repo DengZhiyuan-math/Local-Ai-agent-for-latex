@@ -363,5 +363,80 @@ class VisualAttachments(unittest.TestCase):
                                                           attachments=["figure.png"])["error"])
 
 
+class OneErrorPerFailure(unittest.TestCase):
+    """A failed turn says what went wrong once, with every backend: as an error event while
+    it ran, or as the done event's error, not both (and not twice in one of them)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "main.tex").write_text("x\n", encoding="utf-8")
+
+    def told(self, backend):
+        m = manager(self.root, lambda: ["main.tex"], **{backend.id: backend})
+        r = m.start("go", None, "ask")
+        self.assertIn("job", r, r)
+        job = m.jobs[r["job"]]
+        done = wait_done(job, 30)
+        self.assertEqual(done["outcome"], "failed")
+        return [e["message"] for e in job.events if e["t"] == "error"] + ([done["error"]] if done["error"] else [])
+
+    def cli(self, cls, script):
+        """`cls` running `script` (Python) as its CLI, with no login or settings to check."""
+        path = self.root / "cli.py"
+        path.write_text(script, encoding="utf-8")
+
+        class Fake(cls):
+            def unavailable(self):
+                return None
+
+            def preflight(self, root):
+                return None
+
+            def bin(self):
+                return str(path)
+
+            def command(self, job):
+                return [sys.executable, str(path)], job.prompt
+        return Fake(cls.__name__.lower())
+
+    def test_claude_code(self):
+        from backend_claude import ClaudeCode
+        said = self.told(self.cli(ClaudeCode, (
+            "import json, sys\nsys.stdin.read()\n"
+            "print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': 's'}))\n"
+            "print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True, "
+            "'result': 'API Error: 529 overloaded', 'session_id': 's'}))\n"
+            "print('retrying', file=sys.stderr)\nsys.exit(1)\n")))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("529 overloaded", said[0])
+
+    def test_codex(self):
+        said = self.told(self.cli(Codex, (
+            "import json, sys\nsys.stdin.read()\n"
+            "print(json.dumps({'type': 'thread.started', 'thread_id': 't'}))\n"
+            "print(json.dumps({'type': 'turn.failed', 'error': {'message': 'stream disconnected'}}))\n"
+            "print('WARN reconnecting', file=sys.stderr)\nsys.exit(1)\n")))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("stream disconnected", said[0])
+
+    def test_deep_code(self):
+        backend = self.cli(DeepCode, "import sys\nsys.stdin.read()\nsys.stderr.write('Error: invalid API key')\nsys.exit(1)\n")
+        with mock.patch.dict(os.environ, {"HOME": str(self.root), "USERPROFILE": str(self.root)}):
+            said = self.told(backend)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("invalid API key", said[0])
+
+    def test_openai_compatible_api(self):
+        api = FakeAPI([(500, "upstream overloaded")])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        os.environ["PRISM_TEST_KEY"] = "sk-test"
+        self.addCleanup(os.environ.pop, "PRISM_TEST_KEY", None)
+        said = self.told(OpenAICompat("api", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                              "api_key_env": "PRISM_TEST_KEY", "models": ["m"]}))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("upstream overloaded", said[0])
+
+
 if __name__ == "__main__":
     unittest.main()
