@@ -666,8 +666,9 @@ def _init_own(root: Path) -> None:
         write_bytes(exclude, ("\n".join(lines) + "\n").encode("utf-8"))
 
 
-def _remove(p: Path) -> None:
-    """A file or folder this operation made, taken back (git's read-only objects too)."""
+def _remove(p: Path) -> bool:
+    """A file or folder this operation made, taken back (git's read-only objects too).
+    False when it is still there (a program holds a file in it)."""
     def writable(fn, path, _):
         os.chmod(path, 0o700)
         fn(path)
@@ -678,6 +679,7 @@ def _remove(p: Path) -> None:
             p.unlink()
     except OSError:
         pass
+    return not (p.exists() or p.is_symlink())
 
 
 def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
@@ -687,6 +689,7 @@ def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         if r["action"] == "splits":
             tops.setdefault(r["repo"], []).append(r)
     data = registry.load_projects()
+    # Every shared repository is looked at before any is changed.
     for top_s, members in tops.items():
         top, ids = Path(top_s), {r["id"] for r in members}
         strangers = [e.get("name") or Path(e["path"]).name for e in data["projects"]
@@ -696,6 +699,8 @@ def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
                              "which are not in this folder; move them in first")
         if (top / SHARED_BACKUP).exists():
             raise ValueError(f"{top / SHARED_BACKUP} is in the way")
+    for top_s, members in tops.items():
+        top = Path(top_s)
         # Each project's history, cut out of the shared one.
         for r in members:
             prefix = Path(r["path"]).relative_to(top).as_posix()
@@ -711,25 +716,44 @@ def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
                     continue
                 report.append(f"{Path(r['path']).name}: history not carried over "
                               f"({(e.stderr or '').strip()[-200:]}); it starts afresh")
-        # Every project gets its repository and its history (from the shared one, still in
-        # place) before the shared one is set aside: a step failing for one of them takes
-        # back what was made for all, and the folder stays shared and whole. (Setting it
-        # aside first left the projects after the failing one with no repository, and
-        # their history only in the set-aside .git, which a retry did not use.)
-        made: list[Path] = []
-        try:
+    # Every project gets its repository and its history (from its shared one, still in
+    # place) before that is set aside: a step failing for one of them takes back what was
+    # made for all, and every shared repository already set aside is put back, so the
+    # folder stays shared and whole. (Setting it aside first left the projects after the
+    # failing one with no repository, and their history only in the set-aside .git, which
+    # a retry did not use.)
+    made: list[Path] = []
+    set_aside: list[Path] = []
+    member = None
+    try:
+        for top_s, members in tops.items():
+            top = Path(top_s)
             for r in members:
-                root = Path(r["path"])
+                root = member = Path(r["path"])
                 made += [p for p in (root / ".git", root / ".gitignore", root / ".gitattributes") if not p.exists()]
                 _init_own(root)
                 if r.get("split"):
                     run_git(root, "fetch", "-q", "--no-tags", str(top), r["split"], timeout=300)
                     run_git(root, "reset", "-q", "FETCH_HEAD")
+            member = None
             os.replace(top / ".git", top / SHARED_BACKUP)
-        except BaseException:
-            for p in reversed(made):
-                _remove(p)
-            raise
+            set_aside.append(top)
+    except BaseException:
+        if member is not None:
+            report.append(f"{member.name}: its own repository could not be made")
+        left = []
+        for top in reversed(set_aside):
+            try:
+                os.replace(top / SHARED_BACKUP, top / ".git")
+            except OSError:
+                left.append(top / SHARED_BACKUP)
+        left += [p for p in reversed(made) if not _remove(p)]
+        report.append("Nothing was changed: every project stays in its shared repository." if not left else
+                      "Could not take back: " + ", ".join(map(str, left)) + ". Close the programs using "
+                      "them, then delete them (a set-aside .git: rename it back to .git) and try again.")
+        raise
+    for top_s, members in tops.items():
+        top = Path(top_s)
         try:
             (top / gitsync.SHARED_MARKER).unlink()
         except OSError:

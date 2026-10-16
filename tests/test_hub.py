@@ -560,6 +560,8 @@ class FolderSync(TempState):
             r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
         self.assertFalse(r["ok"])
         self.assertIn("the disk is full", " ".join(r["report"]))
+        self.assertIn(f"{fetched[1]}: its own repository could not be made", r["report"], "which project")
+        self.assertIn("Nothing was changed", " ".join(r["report"]))
         self.assertTrue((repo / ".git").is_dir(), "the shared repository is in place")
         self.assertFalse((repo / hub.SHARED_BACKUP).exists())
         for p in hub.list_projects()["projects"]:
@@ -571,6 +573,53 @@ class FolderSync(TempState):
         self.assertTrue(r["ok"], r["report"])
         for name in ("练习/exam", "练习/ex 1"):
             self.assertIn("in one repository", self.git(repo / name, "log", "--format=%s"), name)
+
+    def test_two_shared_repositories_go_back_together_or_not_at_all(self):
+        """A folder whose projects are in two shared repositories: a failure in the second
+        put the first back only if it had not been set aside yet."""
+        for sub in (self.ex, self.sol):
+            r = hub.apply_sync({"id": sub["id"], "mode": "shared"})
+            self.assertTrue(r["ok"], r["report"])
+        repos = {Path(hub.sync_plan(sub["id"])["repo"]) for sub in (self.ex, self.sol)}
+        plan = hub.sync_plan(self.top["id"], "separate")
+        self.assertEqual({Path(r["repo"]) for r in plan["projects"] if r["action"] == "splits"}, repos, plan)
+        real, last = hub.run_git, {r["path"] for r in plan["projects"] if r["action"] == "splits"
+                                    and Path(r["repo"]) == max(repos, key=str)}
+
+        def fails_in_the_second(cwd, *args, **kw):
+            if args[:1] == ("fetch",) and str(Path(cwd)) in last:
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(hub, "run_git", side_effect=fails_in_the_second):
+            # The plan orders the repositories; the failing one must come second.
+            order = list(dict.fromkeys(r["repo"] for r in plan["projects"] if r["action"] == "splits"))
+            self.assertEqual(Path(order[-1]), max(repos, key=str))
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        for repo in repos:
+            self.assertTrue((repo / ".git").is_dir(), f"{repo} is shared again")
+            self.assertFalse((repo / hub.SHARED_BACKUP).exists())
+        for p in hub.list_projects()["projects"]:
+            self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
+
+    def test_what_cannot_be_taken_back_is_named(self):
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(r["ok"], r["report"])
+
+        real = hub.run_git
+
+        def fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+        with mock.patch.object(hub, "run_git", side_effect=fetch_fails), \
+                mock.patch.object(hub, "_remove", return_value=False):          # a program holds them
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        said = " ".join(r["report"])
+        self.assertIn("Could not take back", said)
+        self.assertIn(".git", said)
 
     def test_rename_project_and_folder(self):
         old = self.projects / "ex 1"
