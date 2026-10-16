@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Every page loads without an error, and what util.js now provides works on it.
 // usage: node e2e_pages.mjs <editor url> <home url>
 const [editor, home] = process.argv.slice(2);
@@ -26,7 +27,7 @@ async function open(url) {
     return r.result.result.value;
   };
   // Its page goes too when done: an open page holds connections the next one needs.
-  return { ev, send, errors, close: () => { ws.close(); return fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
+  return { ev, send, errors, close: async () => { await closeSocket(ws); return fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
 }
 
 const ed = await open(editor);
@@ -265,4 +266,4 @@ const vw = await open(editor.replace(/\/$/, "") + "/viewer");
 check("pdf viewer loads", vw.errors.length === 0, vw.errors.join(" | "));
 await vw.close();
 console.log(results.join("\n"));
-process.exit(0);
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

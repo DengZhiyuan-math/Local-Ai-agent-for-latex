@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Many pages of one editor at once: a browser keeps at most six connections to one server,
 // so the pages share one presence stream, and a hidden page follows an agent's turn
 // without holding a connection. usage: node many_pages.mjs <editor url> <project folder>
@@ -27,7 +28,7 @@ async function open() {
     return r.result.result.value;
   };
   await send("Runtime.enable");
-  return { ev, close: () => { ws.close(); return fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
+  return { ev, close: async () => { await closeSocket(ws); return fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
 }
 // Loaded: its scripts ran and the files are listed (false after 15 s).
 // (A page still navigating loses what runs in it: asked again.)
@@ -90,4 +91,4 @@ try {
   for (const p of pages) await p.close().catch(() => {});
 }
 console.log(results.join("\n"));
-process.exit(0);
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

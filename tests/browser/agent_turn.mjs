@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // A page reloaded mid-turn follows the turn and can stop it; a double send sends once.
 const url = process.argv[2];
 const tab = await (await fetch("http://127.0.0.1:9333/json/new?" + encodeURIComponent(url), { method: "PUT" })).json();
@@ -55,5 +56,5 @@ const info = await ev(`return (await api("/api/agent/info")).active`);
 check("server has no running turn", info === null, JSON.stringify(info));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close(); await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
-process.exit(0);
+await closeSocket(ws); await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

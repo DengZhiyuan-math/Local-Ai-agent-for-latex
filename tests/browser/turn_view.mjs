@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // What a turn's events draw in the agent panel (turn.js decides, app.js draws): a recorded
 // Claude Code turn is fed to followTurn through a stand-in for Q.events. Its provider
 // ("recorded") is not the menu's: the session it brings is kept apart from the real ones.
@@ -69,5 +70,5 @@ check("turn card and session", drawn.card.includes("No file changes detected") &
 check("the panel is free again", drawn.job === null && drawn.button === "Send" && drawn.status === "", JSON.stringify(drawn));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close(); await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
-process.exit(0);
+await closeSocket(ws); await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

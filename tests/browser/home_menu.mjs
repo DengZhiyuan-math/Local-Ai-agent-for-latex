@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Drives Home's project menu in headless Chrome. usage: node e2e_home.mjs <home url> <proj> <proj2>
 const [url, proj, proj2] = process.argv.slice(2);
 const tab = await (await fetch("http://127.0.0.1:9333/json/new?" + encodeURIComponent(url), { method: "PUT" })).json();
@@ -61,6 +62,6 @@ await ev(`await T.menu('#view .it[data-id="${ids[1]}"]'); T.pick("Move folder to
 check("project without editor goes to Recycle Bin", await ev(`return T.until(() => !H.projects.some((p) => p.id === "${ids[1]}"))`), await ev(`return T.toast()`));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close();
+await closeSocket(ws);
 await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
-process.exit(0);
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

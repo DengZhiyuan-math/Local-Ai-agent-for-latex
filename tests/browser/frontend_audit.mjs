@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Frontend audit regressions against the runner's isolated editor and Chrome profile.
 const url = process.argv[2];
 let failures = 0;
@@ -30,7 +31,7 @@ async function page(inject = "") {
     }
     throw new Error("Timed out: " + condition + " " + errors.join(" | "));
   };
-  return { ev, wait, errors, close: async () => { ws.close(); await fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
+  return { ev, wait, errors, close: async () => { await closeSocket(ws); await fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
 }
 
 let p = await page(`
