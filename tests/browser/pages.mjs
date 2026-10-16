@@ -211,7 +211,7 @@ check("a line the agent changed gets its class on the line itself, not through :
   return wrap.includes("cm-agent-changed-w") && !(cm.getLineHandle(0).wrapClass || "").includes("cm-agent")
     && !css.includes(":has(> .cm-agent");`));
 // Typed through an input method (a Chinese one, say), each key comes as a composition.
-await ed.ev(`store.set("snip.on", true); cm.setValue(""); cm.focus(); cm.setCursor({ line: 0, ch: 0 });`);
+await ed.ev(`SNIP_SET.on = true; cm.setValue(""); cm.focus(); cm.setCursor({ line: 0, ch: 0 });`);
 for (const key of "mk@a") {
   await ed.send("Input.imeSetComposition", { text: key, selectionStart: 1, selectionEnd: 1 });
   await ed.send("Input.insertText", { text: key });
@@ -244,6 +244,22 @@ check("home search lists the project", await hm.ev(`
   return before >= 1 && found.includes("proj");`));
 check("home loads", hm.errors.length === 0, hm.errors.join(" | "));
 check("home ago and plural", await hm.ev(`return ago(Date.now() / 1000 - 7200) === "2 h ago" && plural(2, "item") === "2 items"`));
+// Snippets are set in Home → Settings, and the editors read them from their own server.
+check("snippet settings in Home reach the editor", await hm.ev(`
+  const wait = async (ok) => { for (let i = 0; i < 100 && !ok(); i++) await new Promise((r) => setTimeout(r, 50)); };
+  await openSettings();
+  const f = $("#form-settings");
+  await wait(() => $("#snip-status").textContent);
+  const shown = f.elements.snippets.checked && f.elements.snippets_fraction.checked && $("#snip-path").textContent.endsWith("snippets.js");
+  $("#snip-list").click();
+  const listed = $("#dlg-snippets").open && $("#snip-text").readOnly && $("#snip-text").value.includes("Built in");
+  $("#dlg-snippets").close();
+  f.elements.snippets_fraction.checked = false;
+  f.requestSubmit();
+  await wait(() => !$("#dlg-settings").open);
+  return shown && listed && !$("#dlg-settings").open;`)
+  && (await (await fetch(editor.replace(/\/?$/, "/") + "api/snippets")).json()).fraction === false);
+await hm.ev(`await api("/api/settings", { snippets_fraction: true });`);
 await hm.close();
 const vw = await open(editor.replace(/\/$/, "") + "/viewer");
 check("pdf viewer loads", vw.errors.length === 0, vw.errors.join(" | "));

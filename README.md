@@ -314,9 +314,10 @@ name is typed once, for both). The ⚡ menu above the editor lists them all.
   `gather`, … Inside `\text{}` it is text again. Comments and the arguments of `\label`,
   `\ref`, `\cite`, `\begin` … get no snippets, and neither does a command you type out
   (`\sum`, `\alpha`).
-- The ⚡ menu turns snippets, auto-fraction and the `&`/`\\` keys on and off.
+- **Home → Settings → Snippets in the editor** turns snippets, auto-fraction and the `&`/`\\`
+  keys on and off, for every project. An editor already open takes a change when you go back to it.
 
-**Your own snippets** go in `~/.prism-local/snippets.js` (⚡ → Edit my snippets): an array of
+**Your own snippets** go in `~/.prism-local/snippets.js` (Home → Settings → Edit my snippets): an array of
 `{trigger, replacement, options}`, in the format of obsidian-latex-suite. They come before the
 built-in ones; `{snippets: [...], defaults: false}` drops the built-in ones.
 

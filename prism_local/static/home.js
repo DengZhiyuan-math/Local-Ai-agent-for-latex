@@ -1351,11 +1351,61 @@ async function openSettings() {
     f.elements.github_owner.value = st.github_owner || "";
     f.elements.claude_account.value = st.claude_account || "";
     f.elements.claude_config_dir.value = st.claude_config_dir || "";
+    for (const k of ["snippets", "snippets_fraction", "snippets_matrix"]) f.elements[k].checked = st[k] !== false;
     renderGhStatus(); renderUpdateStatus();
   };
   fill(); dlg.showModal();
+  loadSnippetsFile();
   await loadSettings(true); fill();          // re-check gh: you may have just logged in
 }
+
+// Your snippets file (snippets.js reads it; every editor uses it): whether it loads, and
+// a dialog to edit it or to read every snippet.
+const SNIP = { path: "", content: null };
+async function loadSnippetsFile() {
+  const r = await api("/api/snippets").catch(() => null);
+  if (!r || r._status !== 200) return;
+  SNIP.path = r.path; SNIP.content = r.content;
+  $("#snip-path").textContent = r.path;
+  const el = $("#snip-status");
+  try {
+    const u = Snippets.load(r.content);
+    el.className = "gh-status ok";
+    el.textContent = r.content == null ? "No file of your own yet: the built-in snippets are used."
+      : `✓ ${u.list.length} of your own` + (u.defaults ? ", and the built-in ones" : " (the built-in ones are off)");
+  } catch (e) {
+    el.className = "gh-status err";
+    el.textContent = `Your snippets file has an error, so the editors use only the built-in ones: ${e.message || e}`;
+  }
+}
+function snippetsDialog(title, text, editable) {
+  const dlg = $("#dlg-snippets"), ta = $("#snip-text");
+  dlgError(dlg, "");
+  $("#snip-title").textContent = title;
+  $("#snip-save").hidden = !editable;
+  ta.readOnly = !editable; ta.value = text;
+  dlg.showModal(); ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0;
+}
+$("#snip-edit").onclick = () => snippetsDialog("My snippets", SNIP.content ?? Snippets.TEMPLATE, true);
+$("#snip-list").onclick = () => {
+  let u = { list: [], defaults: true };
+  try { u = Snippets.load(SNIP.content); } catch { /* the status says what is wrong */ }
+  snippetsDialog("All snippets", Snippets.listing(u.list, u.defaults), false);
+};
+// Tab indents in the file, as in an editor (Shift-Tab still leaves the box).
+$("#snip-text").addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.shiftKey || e.target.readOnly) return;
+  e.preventDefault();
+  document.execCommand("insertText", false, "\t");
+});
+$("#form-snippets").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const dlg = $("#dlg-snippets"), text = $("#snip-text").value;
+  try { Snippets.load(text); } catch (err) { return dlgError(dlg, "Not saved: " + (err.message || err)); }
+  const r = await api("/api/snippets", { content: text });
+  if (r._status !== 200) return dlgError(dlg, "Not saved: " + (r.error || r._status));
+  dlg.close(); toast("Snippets saved"); loadSnippetsFile();
+});
 $("#btn-settings").onclick = openSettings;
 $("#form-settings").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1365,6 +1415,8 @@ $("#form-settings").addEventListener("submit", async (e) => {
     github_repo: f.elements.github_repo.checked, github_owner: f.elements.github_owner.value.trim(),
     claude_account: f.elements.claude_account.value.trim(),
     claude_config_dir: f.elements.claude_config_dir.value.trim(),
+    snippets: f.elements.snippets.checked, snippets_fraction: f.elements.snippets_fraction.checked,
+    snippets_matrix: f.elements.snippets_matrix.checked,
   });
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not save the settings");
   H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.sig = null;

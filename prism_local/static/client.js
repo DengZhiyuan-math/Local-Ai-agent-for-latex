@@ -32,7 +32,6 @@ const Client = (() => {
       restart: () => post("/api/restart"),
       renameProject: (name) => post("/api/project/rename", { name }),
       snippets: () => get("/api/snippets"),
-      saveSnippets: (content) => post("/api/snippets", { content }),
       // files
       file: (path) => get("/api/file", { path }),
       saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),

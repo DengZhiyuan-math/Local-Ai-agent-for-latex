@@ -31,7 +31,7 @@ import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from project import UPLOAD_DIR, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy, locate, refs_stamp  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
@@ -41,6 +41,7 @@ import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
+import settings  # noqa: E402
 import sources  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
@@ -145,12 +146,6 @@ def sync_upload(rel: str) -> None:
                             "using the repository, so it is committed with the next autosave"}
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
         UPLOAD_SYNC[rel] = {"state": "failed", "message": f"git: {str(e)[-300:]}"}
-
-# Your snippets (static/snippets.js): one file for every project. JavaScript, run by the
-# editor page, so it lives with your settings and not in a project co-authors share.
-def snippets_file() -> Path:
-    return Path(os.environ.get("PRISM_SNIPPETS") or Path.home() / ".prism-local" / "snippets.js")
-
 
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
@@ -332,8 +327,10 @@ class Handler(httpbase.Handler):
         if path == "/api/symbols":
             return self._json(PROJECT.symbols())
         if path == "/api/snippets":
-            f = snippets_file()
-            return self._json({"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None})
+            # Your snippets file and how they expand, both set in Home → Settings.
+            st = settings.load()
+            return self._json({**settings.snippets(), "on": st["snippets"],
+                               "fraction": st["snippets_fraction"], "matrix": st["snippets_matrix"]})
         if path == "/api/file":
             p = PROJECT.resolve(q.get("path", ""))
             return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
@@ -426,10 +423,6 @@ class Handler(httpbase.Handler):
             return self._json(GITSYNC.status())
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
-        if path == "/api/snippets":
-            f = snippets_file()         # every project's server reads it: never half-written
-            write_bytes(f, with_line_ends_of(str(body.get("content") or ""), f).encode("utf-8"))
-            return self._json({"path": str(f)})
         if path == "/api/file":
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),

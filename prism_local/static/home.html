@@ -148,11 +148,34 @@
       <p class="hint">Every project gets a repository of its own, separate from the prism-local repository.
         It is created with the GitHub CLI (<code>gh</code>), using the account it is logged in to.</p>
     </fieldset>
+    <fieldset class="gh-set">
+      <legend>Snippets in the editor</legend>
+      <label class="check"><input type="checkbox" name="snippets"> Expand snippets <i class="hint">(mk → $ $, @a → \alpha, beq Tab → equation)</i></label>
+      <label class="check"><input type="checkbox" name="snippets_fraction"> Auto-fraction <i class="hint">(in math, x/ becomes \frac{x}{})</i></label>
+      <label class="check"><input type="checkbox" name="snippets_matrix"> Tab puts &amp; and Enter ends the row with \\ <i class="hint">(in align, matrix, cases …)</i></label>
+      <div id="snip-status" class="gh-status"></div>
+      <span class="row"><button type="button" id="snip-edit">Edit my snippets…</button>
+        <button type="button" id="snip-list">List all snippets…</button></span>
+      <p class="hint">One file for every project: <code id="snip-path"></code>. An editor already open
+        takes a change when you go back to it.</p>
+    </fieldset>
     <p class="hint" id="update-status" hidden></p>
     <div class="dlg-error" hidden></div>
     <div class="dlg-actions">
       <button type="button" data-close>Cancel</button>
       <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-snippets" class="wide">
+  <form method="dialog" id="form-snippets">
+    <h3 id="snip-title">My snippets</h3>
+    <textarea name="content" id="snip-text" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Close</button>
+      <button type="submit" class="primary" id="snip-save">Save</button>
     </div>
   </form>
 </dialog>
@@ -297,6 +320,7 @@
 <script src="/static/vendor/pdf.js"></script>
 <script src="/static/util.js"></script>
 <script src="/static/homeview.js"></script>
+<script src="/static/snippets.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/home.js"></script>
 </body>

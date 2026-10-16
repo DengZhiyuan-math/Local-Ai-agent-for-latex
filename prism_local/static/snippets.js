@@ -15,7 +15,7 @@
    equation, align, gather, … and \text{} inside them is text again; comments and the
    arguments of \label, \ref, \cite, \begin, … get no snippets at all.
 
-   Your own snippets: ~/.prism-local/snippets.js (Snippets menu → Edit my snippets). Pure
+   Your own snippets: ~/.prism-local/snippets.js (Home → Settings → Snippets). Pure
    functions are exported for the tests (tests/test_snippets.py runs them under Node). */
 "use strict";
 
@@ -733,7 +733,20 @@ const Snippets = (() => {
 ]
 `;
 
-  return { attach, load, compile, match, parse, expandText, contextAt, scanLine, fractionTerm, tabout, openDepth,
+  // Every snippet as text, one a line: yours (from load), then the built-in ones if they are on.
+  function listing(mine, withDefaults) {
+    const row = (s) => {
+      const trig = s.trigger instanceof RegExp ? "/" + s.trigger.source + "/" : String(s.trigger);
+      const repl = typeof s.replacement === "function" ? "(function)" : String(s.replacement).replace(/\n/g, "⏎").replace(/\t/g, "");
+      return `${trig.padEnd(14)} ${(s.options || "").padEnd(5)} ${repl}${s.description ? "    — " + s.description : ""}`;
+    };
+    return "trigger        opts  replacement\n"
+      + "(options: t text, m math, M display, n inline, A as you type, else Tab, r regex, v on a selection, w after a word boundary)\n\n"
+      + (mine.length ? "Yours\n" + mine.map(row).join("\n") + "\n\n" : "")
+      + (withDefaults ? "Built in\n" + DEFAULTS.map(row).join("\n") : "(the built-in snippets are off: your file says defaults: false)");
+  }
+
+  return { attach, load, listing, compile, match, parse, expandText, contextAt, scanLine, fractionTerm, tabout, openDepth,
     visualMatch, DEFAULTS, TEMPLATE, VARS };
 })();
 

@@ -3,8 +3,8 @@
     python tests/browser/run.py <empty work folder>
 
 Starts isolated servers (an editor on a scratch project, the Home page, a slow
-OpenAI-compatible API for agent turns; PRISM_STATE_DIR and PRISM_AGENTS point into the
-work folder, so your own projects and settings are not touched; PRISM_TRASH_DIR and
+OpenAI-compatible API for agent turns; PRISM_STATE_DIR, PRISM_AGENTS and PRISM_SNIPPETS
+point into the work folder, so your own projects, settings and snippets are not touched; PRISM_TRASH_DIR and
 PRISM_CLIPBOARD_FILE keep what the checks delete and copy out of your Recycle Bin and
 clipboard) and Chrome with remote
 debugging on port 9333, runs each check script, and stops everything it started."""
@@ -33,7 +33,7 @@ shutil.rmtree(work, ignore_errors=True)
 # What the checks delete and copy goes into the work folder, not your Recycle Bin and clipboard.
 env = {**os.environ, "PRISM_STATE_DIR": str(work / "state"), "PRISM_AGENTS": str(work / "agents.json"),
        "PRISM_TRASH_DIR": str(work / "trash"), "PRISM_CLIPBOARD_FILE": str(work / "clipboard.json"),
-       "SLOW_KEY": "x"}
+       "PRISM_SNIPPETS": str(work / "snippets.js"), "SLOW_KEY": "x"}
 procs = []
 
 

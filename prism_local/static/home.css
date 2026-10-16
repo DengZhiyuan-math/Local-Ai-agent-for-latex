@@ -285,6 +285,11 @@ dialog textarea:focus, dialog select:focus { outline: none; border-color: var(--
 .swatch input:checked + span { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--tag); }
 .swatch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 4px; }
 dialog.wide { width: min(760px, calc(100vw - 32px)); }
+/* Settings grew past a laptop screen: it scrolls inside, the buttons with it. */
+#dlg-settings { max-height: calc(100vh - 32px); overflow: auto; }
+#dlg-settings .check .hint { font-style: normal; }
+#snip-text { font-family: var(--mono); font-size: 12.5px; line-height: 1.45; tab-size: 2; white-space: pre;
+  height: min(520px, calc(100vh - 220px)); resize: none; }
 .sync-plan { max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .sync-plan:empty { display: none; }
 .sync-head { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 6px; }

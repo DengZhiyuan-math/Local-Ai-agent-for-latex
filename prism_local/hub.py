@@ -1146,6 +1146,8 @@ class Handler(httpbase.Handler):
                                "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
                                "claude": claude_status(q.get("refresh") == "1"),
                                "update": selfupdate.last()})
+        if path == "/api/snippets":
+            return self._json(settings.snippets())
         if path == "/api/folders/sync":
             return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
         if path == "/api/projects/publish":
@@ -1168,6 +1170,8 @@ class Handler(httpbase.Handler):
         if path == "/api/settings":
             return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
                                "claude": claude_status()})
+        if path == "/api/snippets":
+            return self._json(settings.save_snippets(body.get("content")))
         if path == "/api/projects/add":
             return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
         if path == "/api/projects/create":
