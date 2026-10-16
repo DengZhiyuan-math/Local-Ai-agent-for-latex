@@ -356,6 +356,25 @@ class GitState(unittest.TestCase):
         self.assertIn("a/main.tex", diff)
         self.assertNotIn("README", diff)
 
+    def test_the_tree_asks_git_only_when_something_changed(self):
+        """Every open page asks for the tree every two seconds: with no file and no ref
+        changed since, git's status is not asked again."""
+        import proc
+        root = project({"main.tex": "a\n"})
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-qm", "init")
+        listed = lambda: [("main.tex", server.mtime(root / "main.tex"))]     # noqa: E731
+        self.assertEqual(server.git_status(listed()), {})
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.assertEqual(server.git_status(listed()), {})
+        self.assertEqual(run.call_count, 0)
+        (root / "main.tex").write_text("b\n", encoding="utf-8")
+        os.utime(root / "main.tex", ns=(1, 1))                    # a new mtime, also on a coarse clock
+        self.assertEqual(server.git_status(listed()), {"main.tex": "M"}, "an edit is seen")
+        self.git(root, "commit", "-qam", "second")
+        self.assertEqual(server.git_status(listed()), {}, "a commit is seen")
+
     def test_diff_panel_says_what_it_shows(self):
         root = tmpdir()
         (root / "main.tex").write_text("a\n", encoding="utf-8")

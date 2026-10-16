@@ -30,7 +30,7 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from project import UPLOAD_DIR, Project, mtime  # noqa: E402
-from repository import FilesLock, RepoBusy, locate  # noqa: E402
+from repository import FilesLock, RepoBusy, locate, refs_stamp  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
 import desktop  # noqa: E402
 from errors import NotFound, Refused  # noqa: E402
@@ -63,18 +63,43 @@ def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     return gitenv.git(PROJECT.root, *args, timeout=timeout)
 
 
-_GIT_PREFIX: dict = {}
+_GIT_PLACE: dict = {}
+
+
+def git_place():
+    """Where the project is in git (repository.locate), looked up once."""
+    if PROJECT.root not in _GIT_PLACE:
+        _GIT_PLACE[PROJECT.root] = locate(PROJECT.root)
+    return _GIT_PLACE[PROJECT.root]
 
 
 def git_prefix() -> str:
     """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
-    if PROJECT.root not in _GIT_PREFIX:
-        _GIT_PREFIX[PROJECT.root] = locate(PROJECT.root).prefix
-    return _GIT_PREFIX[PROJECT.root]
+    return git_place().prefix
 
 
-def git_status() -> dict[str, str]:
-    """{project-relative path: status} of the files git reports as changed."""
+_STATUS: list = [(None, {})]         # (key, status), replaced as one (requests run in threads)
+
+
+def git_status(listed=None) -> dict[str, str]:
+    """{project-relative path: status} of the files git reports as changed. With `listed`
+    (the files the tree shows, with their mtimes: what a change to them changes), the last
+    answer is given again while neither they nor the repository changed (refs_stamp): the
+    tree is asked for every two seconds by every open page, and nothing has changed most
+    of those times."""
+    place = git_place()
+    stamp = refs_stamp(place.repo.git_dir) if listed is not None and place.repo else None
+    key = None if stamp is None else (str(place.repo.git_dir), stamp, tuple(listed))
+    last_key, last = _STATUS[0]
+    if key is not None and key == last_key:
+        return last
+    status = _git_status()
+    if key is not None:
+        _STATUS[0] = (key, status)
+    return status
+
+
+def _git_status() -> dict[str, str]:
     try:
         # --no-optional-locks: a look, which never holds the index from a commit meanwhile.
         out = git("--no-optional-locks", "status", "--porcelain", "-z", "-uall", "--", ".").stdout
@@ -251,16 +276,18 @@ class Handler(httpbase.Handler):
                 return self._err(404, "no PDF yet")
             return self._send(200, cfg.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
-            st = git_status()
             walked: list[str] = []
             files, (listed, editable) = [], PROJECT.list_both(walked)
             folders = [f for f in walked if not PROJECT.excluded(f + "/")]
             for f in listed:
                 try:
-                    files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(PROJECT.root / f),
+                    files.append({"path": f, "mtime": mtime(PROJECT.root / f),
                                   "editable": Path(f).suffix in EDITABLE_SUFFIXES})
                 except FileNotFoundError:       # deleted since it was listed (a build, git)
                     pass
+            st = git_status([(f["path"], f["mtime"]) for f in files])
+            for f in files:
+                f["git"] = st.get(f["path"], "")
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": PROJECT.document_order(editable),
