@@ -96,9 +96,10 @@ class AgentManager:
                 "project_key": registry.project_key(root), "root": str(root),
                 "providers": [b.info() for b in self.backends.values()], "active": active}
 
-    def _snapshot(self, job: Job) -> dict:
-        """The project's files now (snapshot.take); what could not be looked at is noted."""
-        files, issues = snapshot.take(job.root, self.output_fn())
+    def _snapshot(self, job: Job, since: dict | None = None) -> dict:
+        """The project's files now (snapshot.take); what could not be looked at is noted.
+        `since`: the turn's start, whose unchanged files are not read again."""
+        files, issues = snapshot.take(job.root, self.output_fn(), since=since)
         job.snapshot_issues |= issues
         return files
 
@@ -223,7 +224,7 @@ class AgentManager:
         # merge holds them too); a hold that cannot be had in time does not stop the turn.
         held = self.writes.acquire(timeout=UNDO_WAIT)
         try:
-            job.after = self._snapshot(job)
+            job.after = self._snapshot(job, since=job.before)
             with self.lock:
                 job.sealed = True
                 snapshot.rebase(job.before, job.rebased, job.rebased_folders)
@@ -236,7 +237,7 @@ class AgentManager:
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = snapshot.restore(job.root, job.before, job.after, out_of_scope)
-                job.after = self._snapshot(job)
+                job.after = self._snapshot(job, since=job.after)
         finally:
             if held:
                 self.writes.release()

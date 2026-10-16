@@ -72,5 +72,53 @@ class Snapshot(unittest.TestCase):
         self.assertEqual(snapshot.changes(before, after), [])
 
 
+class TurnCost(unittest.TestCase):
+    """A turn's two snapshots on a project with big data: read once, the sources kept."""
+
+    def project(self):
+        import os
+        root = tmpdir()
+        (root / "data").mkdir()
+        (root / "data" / "big.csv").write_bytes(b"x" * 300_000)          # walked before sections/
+        (root / "sections").mkdir()
+        (root / "sections" / "a.tex").write_text("one\n", encoding="utf-8")
+        for p in (root / "data" / "big.csv", root / "sections" / "a.tex"):
+            os.utime(p, ns=(10**18, 10**18))                             # written long ago
+        return root
+
+    def test_the_budget_for_undo_goes_to_the_sources_first(self):
+        root = self.project()
+        with mock.patch.object(snapshot, "MAX_BYTES", 200_000):
+            snap, _ = snapshot.take(root)
+        self.assertIsNotNone(snap["sections/a.tex"].data, "a 4-byte .tex could not be undone")
+        self.assertIsNone(snap["data/big.csv"].data, "only its digest")
+
+    def test_what_did_not_change_is_not_read_again(self):
+        import os
+        root = self.project()
+        before, _ = snapshot.take(root)
+        (root / "sections" / "a.tex").write_bytes(b"two\n")                   # the turn's edit, now
+        reads = []
+        real = Path.read_bytes
+        with mock.patch.object(Path, "read_bytes", lambda p: reads.append(p.name) or real(p)):
+            after, _ = snapshot.take(root, since=before)
+        self.assertEqual(reads, ["a.tex"], "the unchanged big file was read again")
+        self.assertEqual([c["path"] for c in snapshot.changes(before, after)], ["sections/a.tex"])
+        # Changed in place with its size and mtime kept (as within a clock step): a file that
+        # recent is read again however its stat looks.
+        st = (root / "sections" / "a.tex").stat()
+        (root / "sections" / "a.tex").write_bytes(b"TWO\n")
+        os.utime(root / "sections" / "a.tex", ns=(st.st_atime_ns, st.st_mtime_ns))
+        again, _ = snapshot.take(root, since=after)
+        self.assertEqual(again["sections/a.tex"].data, b"TWO\n")
+
+    def test_a_big_text_file_is_described_not_diffed(self):
+        a = snapshot.FileState(b"line\n" * 30000, 0o644, digest="a")
+        b = snapshot.FileState(b"line\n" * 30001, 0o644, digest="b")
+        out = snapshot.diff("data.bib", a, b)
+        self.assertIn("Large file changed", out)
+        self.assertLess(len(out), 300)
+
+
 if __name__ == "__main__":
     unittest.main()
