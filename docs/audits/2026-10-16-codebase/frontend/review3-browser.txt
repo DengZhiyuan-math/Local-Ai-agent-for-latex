@@ -1,0 +1,11 @@
+== frontend audit: 25 passed, 0 not
+== editor files menu: 16 passed, 0 not
+== turn reload, double send: 6 passed, 0 not
+== turn view: 8 passed, 0 not
+== saving: 7 passed, 0 not
+== home menu: 9 passed, 0 not
+== pages load: 25 passed, 0 not
+== many pages: 6 passed, 0 not
+== trash folder: 1 passed, 0 not
+== clipboard file: 1 passed, 0 not
+browser exit 0
