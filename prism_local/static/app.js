@@ -2238,7 +2238,8 @@ $("#chat-log").addEventListener("click", (e) => {
   const a = e.target.closest("[data-insert]"); if (!a) return;
   const v = a.dataset.insert;
   // "/model opus" style chips run at once; skill chips are filled in for you to finish.
-  if (/^\/(model|effort|provider) /.test(v)) { $("#chat-input").value = v.trim(); chatSend(); }
+  const local = /^\/(model|effort|provider)\s+([\s\S]+)$/.exec(v);
+  if (local) runLocal(local[1], local[2].trim());
   else { $("#chat-input").value = v; $("#chat-input").focus(); updateScope(); }
 });
 

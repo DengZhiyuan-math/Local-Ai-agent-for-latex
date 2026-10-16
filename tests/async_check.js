@@ -84,4 +84,15 @@ async function errorNotice() {
   run("Save failed: fixture");
   assert.strictEqual(notices[0]?.error, true, "failures use the persistent notification stack");
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function localChip() {
+  const input = { value: "my unfinished draft" }, commands = []; let click;
+  const body = source.indexOf('const a = e.target.closest("[data-insert]")');
+  const start = source.lastIndexOf('$("#chat-log").addEventListener', body);
+  vm.runInNewContext(source.slice(start, source.indexOf("\n});", body) + 4), {
+    $: (selector) => selector === "#chat-log" ? { addEventListener: (_, fn) => { click = fn; } } : input,
+    chatSend: () => {}, updateScope: () => {}, runLocal: (name, arg) => commands.push([name, arg]) });
+  click({ target: { closest: () => ({ dataset: { insert: "/model fast" } }) } });
+  assert.strictEqual(input.value, "my unfinished draft");
+  assert.deepStrictEqual(commands, [["model", "fast"]]);
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
