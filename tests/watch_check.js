@@ -69,4 +69,18 @@ async function staleTrees() {
   assert.ok((await store.save(t)).ok, "its edits are saved");
 }
 
-saves().then(staleTrees).then(() => console.log("ok")).catch((e) => { console.error(e); process.exitCode = 1; });
+async function backoff() {
+  let version = 1;
+  const doc = { changeGeneration: () => version, isClean: (g) => g === version, getValue: () => "x" };
+  const queue = [];
+  const store = Tabs.createTabStore({ saveFile: async () => ({ _status: 0, error: "offline" }),
+    schedule: (fn, ms) => { queue.push({ fn, ms }); return queue.length; }, cancel: () => {} });
+  const t = store.add("a.tex", doc, 1);
+  version++;
+  await store.save(t);
+  for (let i = 0; i < 7; i++) await queue[queue.length - 1].fn();
+  assert.deepStrictEqual(queue.map((q) => q.ms), [1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000],
+    "retries back off, up to thirty seconds");
+}
+
+saves().then(staleTrees).then(backoff).then(() => console.log("ok")).catch((e) => { console.error(e); process.exitCode = 1; });

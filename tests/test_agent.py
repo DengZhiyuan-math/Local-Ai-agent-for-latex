@@ -671,8 +671,27 @@ class EventBatches(unittest.TestCase):
         self.assertGreater(waits[0], 0)
         self.assertLessEqual(waits[0], .040001)  # monotonic clock subtraction rounds at sub-microsecond scale
         waits.clear()
-        job.wait_events(0, 0)
-        self.assertEqual(waits, [], "a hidden page's non-waiting poll is immediate")
+        job.done = False                                  # a running turn with events ready
+        events, done = job.wait_events(0, 0)
+        self.assertEqual((len(events), done, waits), (2, False, []), "a hidden page's non-waiting poll is immediate")
+
+    def test_a_wakeup_with_nothing_new_does_not_end_the_wait(self):
+        job = job_for()
+        job.events = [{"t": "delta", "text": "seen"}]
+        wakeups = []
+
+        class Spurious:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                wakeups.append(timeout)
+                if len(wakeups) == 3:
+                    job.events.append({"t": "delta", "text": "new"})
+
+        job.cond = Spurious()
+        events, _ = job.wait_events(1, 5)
+        self.assertEqual([e["text"] for e in events], ["new"])
+        self.assertGreaterEqual(len(wakeups), 3)
 
 
 class Snapshots(unittest.TestCase):
