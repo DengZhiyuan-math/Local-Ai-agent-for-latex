@@ -27,6 +27,16 @@ sid = resume or str(uuid.uuid4())
 if "EDIT" in message:
     (root / "main.tex").write_text("edited by deepcode\n", encoding="utf-8")
 
+
+
+def wait_for_release():
+    release = os.environ.get("PRISM_TEST_DEEPCODE_RELEASE")
+    if release:
+        deadline = time.monotonic() + 10
+        while not Path(release).exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+
+
 time.sleep(float(os.environ.get("PRISM_TEST_DEEPCODE_DELAY", "0")))
 d = sessions_dir(root)
 d.mkdir(parents=True, exist_ok=True)
@@ -35,21 +45,23 @@ with open(d / f"{sid}.jsonl", "a", encoding="utf-8") as f:
         f.write(json.dumps({"id": str(uuid.uuid4()), "sessionId": sid, "role": "system",
                             "content": '# Local Workspace Environment\n\n```json\n' +
                             json.dumps({"root path": str(root), "pwd": str(root)}) + '\n```'}) + "\n")
-    for m in ({"role": "user", "content": message},
-              {"role": "assistant", "content": "", "tool_calls": [
-                  {"id": "call_1", "type": "function",
-                   "function": {"name": "write_file", "arguments": json.dumps({"path": "main.tex"})}}]},
-              {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
-              {"role": "assistant", "content": "Changed main.tex."}):
-        f.write(json.dumps(m) + "\n")
+    lines = [json.dumps(m) + "\n" for m in (
+        {"role": "user", "content": message},
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "call_1", "type": "function",
+             "function": {"name": "write_file", "arguments": json.dumps({"path": "main.tex"})}}]},
+        {"role": "tool", "tool_call_id": "call_1", "content": "ok"},
+        {"role": "assistant", "content": "Changed main.tex."})]
+    if resume and os.environ.get("PRISM_TEST_DEEPCODE_PARTIAL"):
+        f.write(lines[0][:20])          # the new message only halfway written, for a while
+        f.flush()
+        wait_for_release()
+        f.write(lines.pop(0)[20:])
+    f.writelines(lines)
 index_path = d / "sessions-index.json"
 index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists() else {"entries": []}
 index["originalPath"] = str(root)
 index["entries"] = [e for e in index["entries"] if e["id"] != sid] + [{"id": sid, "updateTime": int(time.time() * 1000)}]
 index_path.write_text(json.dumps(index), encoding="utf-8")
-release = os.environ.get("PRISM_TEST_DEEPCODE_RELEASE")
-if release:
-    deadline = time.monotonic() + 10
-    while not Path(release).exists() and time.monotonic() < deadline:
-        time.sleep(.02)
+wait_for_release()
 print("Changed main.tex.")

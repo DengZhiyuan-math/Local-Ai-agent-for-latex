@@ -493,6 +493,23 @@ class DeepCodeBackend(unittest.TestCase):
         self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
         self.assertEqual(len([e for e in job.events if e["t"] == "tool_result"]), 1)
 
+    def test_a_resumed_chat_does_not_show_the_previous_turns_tools_as_its_own(self):
+        """While the new message was only halfway in the session file, the last whole user
+        message was the previous turn's, and its tools were shown as this turn's."""
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release),
+                                          "PRISM_TEST_DEEPCODE_PARTIAL": "1"}):
+            job = self.m.jobs[self.m.start("second", sid, "ask")["job"]]
+            try:
+                time.sleep(1.5)                  # several session probes
+                self.assertFalse(job.done)
+                self.assertEqual([e for e in job.events if e["t"] == "tool"], [])
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1, "its own tool is shown once")
+
     def test_ask_is_read_only(self):
         done = wait_done(self.m.jobs[self.m.start("EDIT nothing, just explain", None, "ask")["job"]])
         self.assertEqual(done["reverted"], ["main.tex"])

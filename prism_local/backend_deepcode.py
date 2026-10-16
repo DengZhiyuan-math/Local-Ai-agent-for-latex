@@ -342,6 +342,9 @@ class DeepCode(Backend):
         out_lines: list[str] = []
         seen, results = set(), set()
         live_sid, stamp, checked = job.session_id, None, 0.0
+        # A resumed session holds the earlier turns: only what follows them is this turn's
+        # (its new message may be only halfway written when the file is first looked at).
+        earlier = len(self._session_messages(job.root, job.session_id)) if job.session_id else 0
 
         def progress():
             nonlocal live_sid, stamp, checked
@@ -360,7 +363,7 @@ class DeepCode(Backend):
                 if self.check_session(job.root, candidate):
                     return
                 live_sid = candidate
-                self._replay_tools(job, live_sid, start, seen=seen, results=results)
+                self._replay_tools(job, live_sid, earlier, seen=seen, results=results)
                 stamp = current
             except (OSError, UnicodeError, ValueError):
                 pass                            # a session may be halfway through a write
@@ -379,7 +382,7 @@ class DeepCode(Backend):
                 raise ValueError(bad)
             st["session_id"] = sid
             job.emit({"t": "init", "session_id": sid, "model": job.model})
-            self._replay_tools(job, sid, start, seen=seen, results=results)
+            self._replay_tools(job, sid, earlier, seen=seen, results=results)
         reply = "".join(out_lines).strip()
         if reply:
             job.emit({"t": "message_start"})
@@ -392,12 +395,13 @@ class DeepCode(Backend):
                 job.emit({"t": "error", "message": msg})
         return st
 
-    def _replay_tools(self, job: Job, sid: str, since: float, *, seen=None, results=None) -> None:
-        """The tools this turn used, from the session Deep Code saved (it prints none)."""
+    @staticmethod
+    def _session_messages(root: Path, sid: str) -> list[dict]:
+        """The whole messages in a session's file (a line still being written is left out)."""
         try:
-            lines = (sessions_dir(job.root) / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines()
+            lines = (sessions_dir(root) / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines()
         except OSError:
-            return
+            return []
         msgs = []
         for line in lines:
             try:
@@ -406,8 +410,17 @@ class DeepCode(Backend):
                 continue
             if isinstance(m, dict):
                 msgs.append(m)
-        # This turn's part: after the last user message that carries our prompt.
-        start = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
+        return msgs
+
+    def _replay_tools(self, job: Job, sid: str, earlier: int = 0, *, seen=None, results=None) -> None:
+        """The tools this turn used, from the session Deep Code saved (it prints none).
+        `earlier`: how many messages the session held before this turn."""
+        msgs = self._session_messages(job.root, sid)
+        if len(msgs) < earlier:              # rewritten shorter: its last user message decides
+            earlier = 0
+        # This turn's part: after its user message, the last one after the earlier turns.
+        start = max((i for i, m in enumerate(msgs) if i >= earlier and m.get("role") == "user"),
+                    default=earlier - 1)
         seen = set() if seen is None else seen
         results = set() if results is None else results
         for offset, m in enumerate(msgs[start + 1:]):
