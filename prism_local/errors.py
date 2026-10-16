@@ -8,6 +8,9 @@ a KeyError, which is left to mean a bug (a logged 500).
 """
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 
 class Refused(ValueError):
     """The request cannot be done as asked; `status` and the message say why. Not logged."""
@@ -34,6 +37,22 @@ class LockBusy(TimeoutError):
     a request it reaches is answered 409 with this message (httpbase), not dropped as
     though the page had gone."""
     status = 409
+
+
+NETWORK_GIT = ("push", "fetch", "pull", "ls-remote", "clone")
+
+
+def say(e: BaseException) -> str:
+    """An exception as a sentence for the page. A command that did not finish in time says
+    what it was and what to do, not its whole command line; others say what they say."""
+    if isinstance(e, subprocess.TimeoutExpired):
+        args = [str(a) for a in (e.cmd if isinstance(e.cmd, (list, tuple)) else [e.cmd])]
+        name, secs = Path(args[0]).stem if args else "A command", int(e.timeout or 0)
+        if name == "git" and any(a in NETWORK_GIT for a in args):
+            return (f"GitHub did not answer within {secs} seconds; check your internet connection. "
+                    "It is tried again by itself.")
+        return f"{name} did not finish within {secs} seconds"
+    return str(e)
 
 
 class Params(dict):

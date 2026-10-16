@@ -43,7 +43,7 @@ from publish import (create_github_repo, ensure_ignore, git_init, github_of, pro
 from repository import RepoBusy, Repository, locate, refs_stamp  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
-from errors import NotFound  # noqa: E402
+from errors import NotFound, say  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
@@ -283,7 +283,7 @@ def fetch_one(top: Path) -> str | None:
     except RepoBusy:
         return None
     except (OSError, subprocess.SubprocessError) as e:
-        return str(e)
+        return say(e)
     return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "git fetch failed")
 
 

@@ -43,6 +43,7 @@ import keepboth
 import registry
 import gitenv
 import sources
+from errors import say
 from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
@@ -755,7 +756,7 @@ class GitSync:
         except RepoBusy:
             pass                            # another window is at it; the next tick tries again
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, keepboth.MergeError) as e:
-            self.error = str(e)[-300:]
+            self.error = say(e)[-300:]
 
     # ------------------------------------------------------------ the worker
     def tick(self) -> None:

@@ -63,6 +63,14 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_a_push_that_timed_out_says_what_to_do(self):
+        """Not "Command '['git', '--no-optional-locks', 'push', …]' timed out after 180 seconds"."""
+        def stalled():
+            raise subprocess.TimeoutExpired(["git", "--no-optional-locks", "push", "-q", "--", "origin", "HEAD:main"], 180)
+        self.g._safe(stalled)
+        self.assertEqual(self.g.error, "GitHub did not answer within 180 seconds; check your internet "
+                                       "connection. It is tried again by itself.")
+
     def test_an_idle_push_check_runs_no_git(self):
         """The push due every few seconds, with nothing new, asks git nothing: what it would
         answer changes only with the refs, the index or the configuration (refs_stamp)."""
