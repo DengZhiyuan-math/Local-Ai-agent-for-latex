@@ -438,7 +438,7 @@ async function trashItems(target) {
 }
 
 const MAX_UPLOAD_SIZE = 25 * 1024 * 1024;
-async function uploadFile(file, destination = "attachment", signal) {
+async function uploadFile(file, destination = "attachment", signal, uploadId) {
   if (file.size > MAX_UPLOAD_SIZE) throw new Error("File is larger than 25 MB.");
   const data = await new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -451,7 +451,7 @@ async function uploadFile(file, destination = "attachment", signal) {
     signal?.addEventListener("abort", abort, { once: true });
     reader.readAsDataURL(file);
   });
-  const r = await Q.upload({ name: file.name || "pasted.png", data, destination, signal });
+  const r = await Q.upload({ name: file.name || "pasted.png", data, destination, upload_id: uploadId, signal });
   if (r.error || !r.path) throw new Error(r.error || "Upload failed.");
   return r;
 }
@@ -1609,12 +1609,17 @@ $("#chat-input").addEventListener("input", stopFollowing);
    badge says how that went. The message tells the agent where the files are, and it
    reads them with its file tools (Claude Code reads PDFs and images too). */
 const ATT = {
-  files: [],             // {id, name, size, path|null (uploading), error}
+  files: [],             // {id, uploadId, name, size, path|null (uploading), error}
+  // Removing a chip stops its upload, and takes back what the server may have saved of it
+  // already (uploaded, or the stop came too late): the file goes unless a message sent it.
   remove(id) {
-    this.files.find((f) => f.id === id)?.controller?.abort();
-    this.files = this.files.filter((f) => f.id !== id); this.render();
+    const f = this.files.find((x) => x.id === id);
+    f?.controller?.abort();
+    if (f) Q.uploadCancel(f.uploadId);
+    this.files = this.files.filter((x) => x.id !== id); this.render();
   },
   seq: 0,
+  page: Math.random().toString(36).slice(2),     // with seq, an upload's id on the server
 
   render() {
     $("#chat-files").innerHTML = this.files.map((f) => `<span class="att ${f.error ? "err" : f.path ? "" : "busy"}" ${f.path ? `data-path="${esc(f.path)}"` : ""} title="${esc(f.error || f.path || "uploading…")}">`
@@ -1668,11 +1673,12 @@ const ATT = {
   async add(fileList) {
     for (const file of fileList) {
       const f = { id: ++this.seq, name: file.name || "pasted.png", size: file.size, path: null, error: null };
+      f.uploadId = `${this.page}-${f.id}`;
       if (file.size > MAX_UPLOAD_SIZE) { toast(`${f.name} is larger than 25 MB.`); continue; }
       f.controller = new AbortController();
       this.files.push(f); this.render();
       try {
-        const r = await uploadFile(file, "attachment", f.controller.signal);
+        const r = await uploadFile(file, "attachment", f.controller.signal, f.uploadId);
         if (!this.files.includes(f)) continue;
         f.path = r.path; f.size = r.size;
         if (r.sync) this.watch(r.path, r.sync);

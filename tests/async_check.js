@@ -48,17 +48,23 @@ async function syncToggle() {
   assert.ok(toggle.fresh(toggle.stamp()));
 }
 async function attachments() {
-  let calls = 0, aborted = false;
+  let calls = 0, aborted = false; const cancelled = [];
   const ctx = { document: { querySelectorAll: () => [] }, $: () => ({}), MAX_UPLOAD_SIZE: 25000000,
     Date: { now: () => 200000 }, nap: async () => {}, toast: () => {}, foreignProject: false,
-    Q: { uploadSync: async () => { if (++calls > 5) throw Error("attachment polling did not stop"); return { _status: 503 }; } } };
+    Q: { uploadSync: async () => { if (++calls > 5) throw Error("attachment polling did not stop"); return { _status: 503 }; },
+      uploadCancel: async (id) => { cancelled.push(id); return { _status: 200 }; } } };
   const att = vm.runInNewContext(section("const ATT = {", '\n$("#chat-add").onclick') + ";ATT", ctx);
   att.sync.set("a.png", { state: "syncing", at: 0 });
   await att.pollSync();
   assert.strictEqual(att.sync.get("a.png").state, "unknown");
-  att.files = [{ id: 1, controller: { abort: () => { aborted = true; } } }];
+  att.files = [{ id: 1, uploadId: "p-1", path: null, controller: { abort: () => { aborted = true; } } },
+    { id: 2, uploadId: "p-2", path: "prism-uploads/b.png", controller: { abort: () => {} } }];
   att.render = () => {}; att.remove(1);
-  assert.ok(aborted && att.files.length === 0, "removing a pending upload aborts it");
+  assert.ok(aborted && att.files.length === 1, "removing a pending upload aborts it");
+  // The server may have it all the same (the body had arrived), and a finished one it has.
+  att.remove(2);
+  assert.deepStrictEqual(cancelled, ["p-1", "p-2"], "removing a chip takes its upload back");
+  assert.strictEqual(att.files.length, 0);
 }
 async function compilePreview() {
   let releasePreview, releaseBuild, calls = 0, shown = 0;

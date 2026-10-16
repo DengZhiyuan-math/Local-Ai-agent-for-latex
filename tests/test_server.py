@@ -781,6 +781,105 @@ class UploadsToGitHub(unittest.TestCase):
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
 
 
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class UploadsTakenBack(unittest.TestCase):
+    """A chip removed from the message box takes its upload back (/api/upload/cancel): the
+    file goes, unless a message sent it, it was there before, or it changed since."""
+
+    setUp = Routes.setUp
+    ask = Routes.ask
+    git = UploadsToGitHub.git
+    repo = UploadsToGitHub.repo
+
+    def upload(self, upload_id, name, data):
+        import base64
+        return self.ask("/api/upload", {"name": name, "data": base64.b64encode(data).decode(),
+                                        "destination": "attachment", "upload_id": upload_id})
+
+    def synced(self, rel):
+        for _ in range(200):
+            if server.UPLOAD_SYNC.get(rel, {}).get("state") != "syncing":
+                return server.UPLOAD_SYNC.get(rel)
+            time.sleep(0.05)
+        self.fail("the upload's commit did not end")
+
+    def pushed_project(self):
+        root = project({"main.tex": "x\n"})
+        self.repo(root)
+        bare = tmpdir()
+        self.git(bare, "init", "-q", "--bare")
+        self.git(root, "remote", "add", "origin", str(bare))
+        server.GITSYNC.bind_target()
+        return root, bare
+
+    def test_a_committed_upload_taken_back_is_deleted_by_the_next_commit(self):
+        root, bare = self.pushed_project()
+        code, r = self.upload("page-1", "notes.txt", b"notes")
+        self.assertEqual((code, r["path"]), (200, "prism-uploads/notes.txt"))
+        self.assertEqual(self.synced(r["path"])["state"], "synced")
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-1"}),
+                         (200, {"path": "prism-uploads/notes.txt", "deleted": True}))
+        self.assertFalse((root / "prism-uploads" / "notes.txt").exists())
+        server.GITSYNC.commit_all("Autosave")       # the deletion, as any other change
+        self.assertEqual(self.git(root, "show", "--name-status", "--format=", "HEAD"),
+                         "D\tprism-uploads/notes.txt")
+        self.assertEqual(self.git(root, "rev-list", "--count", "HEAD"), "3", "history kept as it was")
+
+    def test_an_upload_taken_back_before_its_commit_is_never_committed(self):
+        root, bare = self.pushed_project()
+        with mock.patch.object(server, "sync_upload") as later:
+            code, r = self.upload("page-2", "draft.txt", b"draft")
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-2"})[1]["deleted"], True)
+        server.sync_upload(*later.call_args.args)
+        self.assertFalse((root / "prism-uploads" / "draft.txt").exists())
+        self.assertEqual(self.git(root, "rev-list", "--count", "HEAD"), "1")
+        self.assertEqual(self.git(bare, "branch", "--list"), "", "nothing pushed")
+
+    def test_an_upload_taken_back_before_it_arrives_is_not_written(self):
+        root = project({"main.tex": "x\n"})
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-3"}),
+                         (200, {"path": None, "deleted": False}))
+        self.assertEqual(self.upload("page-3", "late.txt", b"late")[0], 409)
+        self.assertFalse((root / "prism-uploads" / "late.txt").exists())
+
+    def test_a_file_a_message_sent_is_never_deleted(self):
+        root = project({"main.tex": "x\n"})
+        key = server.registry.project_key(root)
+        with mock.patch.object(server, "sync_upload"):
+            rel = self.upload("page-4", "sent.txt", b"sent")[1]["path"]
+            with mock.patch.object(server.AGENT, "start", return_value={"job": 1}):
+                self.assertEqual(self.ask("/api/agent", {"prompt": "read it", "project_key": key,
+                                                         "attachments": [rel]})[0], 200)
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-4"})[0], 409)
+            self.assertTrue((root / rel).exists())
+            # The same file added again (the sent one, reused) and taken back: it stays too.
+            self.assertEqual(self.upload("page-5", "sent.txt", b"sent")[1]["path"], rel)
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-5"})[0], 409)
+            self.assertTrue((root / rel).exists())
+
+    def test_a_message_cannot_send_a_file_taken_back(self):
+        root = project({"main.tex": "x\n"})
+        key = server.registry.project_key(root)
+        with mock.patch.object(server, "sync_upload"):
+            rel = self.upload("page-6", "gone.txt", b"gone")[1]["path"]
+            self.ask("/api/upload/cancel", {"upload_id": "page-6"})
+            with mock.patch.object(server.AGENT, "start", return_value={"job": 1}) as start:
+                self.assertEqual(self.ask("/api/agent", {"prompt": "read it", "project_key": key,
+                                                         "attachments": [rel]})[0], 409)
+            start.assert_not_called()
+
+    def test_a_file_there_before_or_changed_since_stays(self):
+        root = project({"main.tex": "x\n", "prism-uploads/old.txt": "old"})
+        with mock.patch.object(server, "sync_upload"):
+            self.assertEqual(self.upload("page-7", "old.txt", b"old")[1]["path"], "prism-uploads/old.txt")
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-7"})[1]["deleted"], False)
+            self.assertEqual((root / "prism-uploads" / "old.txt").read_text(), "old")
+            rel = self.upload("page-8", "edited.txt", b"before")[1]["path"]
+            (root / rel).write_text("edited since", encoding="utf-8")
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-8"})[1]["deleted"], False)
+            self.assertEqual((root / rel).read_text(), "edited since")
+
+
 class PlainText(unittest.TestCase):
     def test_titles_read_as_text(self):
         from texutil import plain_text

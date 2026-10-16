@@ -110,6 +110,20 @@ try {
     const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && $("#chat-input").value === "next draft";
     ATT.files = []; ATT.render(); $("#chat-input").value = ""; Q.agent = realAgent; Q.events = realEvents;
     return kept;`));
+  check("removing an attachment takes its upload back, whether it was still uploading or done", await p.ev(`
+    const realUpload = Q.upload, realCancel = Q.uploadCancel, ids = [], cancelled = []; let finish = null;
+    Q.upload = (body) => { ids.push(body.upload_id); return new Promise(r => { finish = r; }); };
+    Q.uploadCancel = async (id) => { cancelled.push(id); return { _status: 200, deleted: true }; };
+    const started = async () => { for (let i = 0; i < 100 && !finish; i++) await new Promise(r => setTimeout(r, 10)); };
+    let adding = ATT.add([new File(["one"], "one.txt")]); await started();
+    ATT.remove(ATT.files[0].id);                    // still being sent: the server may have it all the same
+    finish({ _status: 0, error: "server not reachable" }); await adding; finish = null;
+    adding = ATT.add([new File(["two"], "two.txt")]); await started();
+    finish({ _status: 200, path: "prism-uploads/two.txt", size: 3 }); await adding;
+    const uploaded = ATT.files[0]?.path === "prism-uploads/two.txt";
+    ATT.remove(ATT.files[0].id);
+    Q.upload = realUpload; Q.uploadCancel = realCancel;
+    return uploaded && ids.length === 2 && ids[0] !== ids[1] && JSON.stringify(cancelled) === JSON.stringify(ids) && !ATT.files.length;`));
 } finally { await p.close(); }
 p = await page();
 try {

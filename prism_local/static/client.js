@@ -37,7 +37,9 @@ const Client = (() => {
       saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),
       // the Files menu: one of FILE_ACTIONS
       fileAction: (action, body) => post("/api/files/" + action, body),
-      upload: ({ name, data, destination, signal }) => api("/api/upload", { name, data, destination }, { signal }),
+      // upload_id: the page's name for it, so removing its chip can take it back
+      upload: ({ name, data, destination, upload_id, signal }) => api("/api/upload", { name, data, destination, upload_id }, { signal }),
+      uploadCancel: (upload_id) => post("/api/upload/cancel", { upload_id }),
       uploadSync: (paths) => get("/api/upload/sync", { paths: paths.join("\n") }),
       diff: (path) => get("/api/diff", { path }),
       // the build and the PDF

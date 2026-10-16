@@ -17,6 +17,7 @@ from __future__ import annotations
 import gitenv
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
@@ -29,11 +30,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
-from project import UPLOAD_DIR, Project, mtime  # noqa: E402
+from project import UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy, locate, refs_stamp  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES  # noqa: E402
 import desktop  # noqa: E402
-from errors import NotFound, Refused  # noqa: E402
+from errors import Conflict, NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
 import httpbase  # noqa: E402
@@ -135,8 +136,11 @@ def project_diff(spec: str) -> dict:
 UPLOAD_SYNC: dict[str, dict] = {}     # rel -> {"state": syncing|synced|local|failed, "message"}
 
 
-def sync_upload(rel: str) -> None:
+def sync_upload(rel: str, upload_id: str = "") -> None:
     """Commit the upload `rel` and push it (in a thread; the state is in UPLOAD_SYNC)."""
+    if upload_id and ATTACHMENTS.taken_back(upload_id):
+        UPLOAD_SYNC.pop(rel, None)  # removed from the message before its commit: none is made
+        return
     try:
         o = GITSYNC.record_file(rel, f"Add {rel} (a file used in the agent chat)")
         UPLOAD_SYNC[rel] = {"state": o.state, "message": o.message}
@@ -145,7 +149,82 @@ def sync_upload(rel: str) -> None:
         UPLOAD_SYNC[rel] = {"state": "local", "message": "Saved here; another prism-local window is "
                             "using the repository, so it is committed with the next autosave"}
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
+        if upload_id and ATTACHMENTS.taken_back(upload_id):
+            UPLOAD_SYNC.pop(rel, None)      # deleted while git was adding it: nothing to say
+            return
         UPLOAD_SYNC[rel] = {"state": "failed", "message": f"git: {str(e)[-300:]}"}
+
+
+class Attachments:
+    """The chat's uploads, each under the id its page gave it, so a chip removed from the
+    message box takes its file back (/api/upload/cancel). A file is deleted only when this
+    upload wrote it, it is unchanged since, and no message has sent it: a file sent with a
+    message, or one that was there before (an identical upload reuses it), always stays."""
+
+    KEEP = 1000                     # ids taken back before their upload came, remembered
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.uploads: dict[str, dict] = {}      # id -> {"path", "digest", "wrote"}
+        self.early: dict[str, None] = {}        # ids taken back before their upload arrived
+        self.gone: set[str] = set()             # ids taken back
+        self.sent: set[str] = set()             # paths a message has sent
+
+    def taken_back(self, upload_id: str) -> bool:
+        with self.lock:
+            return upload_id in self.gone
+
+    def saved(self, upload_id: str, rel: str, data: bytes, wrote: bool) -> None:
+        with self.lock:
+            self.uploads[upload_id] = {"path": rel, "digest": hashlib.sha256(data).digest(), "wrote": wrote}
+
+    def send(self, paths: list) -> str | None:
+        """A message sends `paths`: from now on they stay. An error if one was taken back."""
+        paths = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+        with self.lock:
+            gone = {self.uploads[i]["path"] for i in self.gone if i in self.uploads}
+            bad = next((p for p in paths if p in gone and p not in self.sent), None)
+            if bad is not None:
+                return f"{bad} was removed from the message; add it again"
+            self.sent.update(paths)
+            return None
+
+    def cancel(self, upload_id: str) -> tuple[dict, int]:
+        """Take the upload back: delete its file when that is safe. Under the files lock, as
+        an upload is written: one arriving meanwhile is then either here or refused."""
+        if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+            raise Conflict("git is busy with the files; try again in a moment")
+        try:
+            with self.lock:
+                up = self.uploads.get(upload_id)
+                if up is None:          # not arrived yet (or never will): it is not written
+                    self.gone.add(upload_id)
+                    self.early[upload_id] = None
+                    while len(self.early) > self.KEEP:
+                        self.gone.discard(self.early.pop(next(iter(self.early))))
+                    return {"path": None, "deleted": False}, 200
+                rel = up["path"]
+                if rel in self.sent:
+                    return {"error": "this file was sent with a message, so it stays", "path": rel}, 409
+                self.gone.add(upload_id)
+                claimed = any(u["path"] == rel for i, u in self.uploads.items() if i not in self.gone)
+                if not up["wrote"] or claimed:
+                    return {"path": rel, "deleted": False}, 200
+            p = PROJECT.root / rel
+            try:
+                if hashlib.sha256(p.read_bytes()).digest() != up["digest"]:
+                    return {"path": rel, "deleted": False}, 200      # changed since: yours now
+                p.unlink()
+            except FileNotFoundError:
+                return {"path": rel, "deleted": False}, 200
+        finally:
+            SAVE_LOCK.release()
+        UPLOAD_SYNC.pop(rel, None)
+        GITSYNC.touched()               # if it was committed, the next autosave records the deletion
+        return {"path": rel, "deleted": True}, 200
+
+
+ATTACHMENTS = Attachments()
 
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
@@ -462,6 +541,9 @@ class Handler(httpbase.Handler):
                     raise ValueError("scope must be a list of files")
                 for f in scope:
                     PROJECT.resolve(f)          # an editable project file, or ValueError
+            refused = ATTACHMENTS.send(body.get("attachments") or [])
+            if refused:
+                return self._err(409, refused)
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
                             body.get("effort") or None, scope, body.get("provider") or None,
@@ -494,14 +576,32 @@ class Handler(httpbase.Handler):
                 data = base64.b64decode(str(body.get("data") or ""), validate=True)
             except ValueError:
                 return self._err(400, "the file data is not base64")
-            rel = PROJECT.upload(str(body.get("name") or "file"), data,
-                                 folder="" if destination == "project" else UPLOAD_DIR)
             if destination == "project":
+                rel = PROJECT.upload(str(body.get("name") or "file"), data, folder="")
                 GITSYNC.touched()
                 return self._json({"path": rel, "size": len(data)})
+            upload_id = str(body.get("upload_id") or "")
+            if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+                raise Conflict("git is busy with the files; try the upload again in a moment")
+            try:                        # one taken back meanwhile waits for this (Attachments.cancel)
+                if upload_id and ATTACHMENTS.taken_back(upload_id):
+                    return self._err(409, "the file was removed from the message")
+                # What was there before (in any case: Windows' names ignore it) is never "written".
+                folder = PROJECT.root / UPLOAD_DIR
+                before = {p.name.casefold() for p in folder.iterdir()} if folder.is_dir() else set()
+                rel = PROJECT.upload(str(body.get("name") or "file"), data, folder=UPLOAD_DIR)
+                if upload_id:
+                    wrote = rel.rsplit("/", 1)[-1].casefold() not in before
+                    ATTACHMENTS.saved(upload_id, rel, data, wrote)
+            finally:
+                SAVE_LOCK.release()
             UPLOAD_SYNC[rel] = {"state": "syncing", "message": "Committing and pushing…"}
-            threading.Thread(target=sync_upload, args=(rel,), daemon=True).start()
+            threading.Thread(target=sync_upload, args=(rel, upload_id), daemon=True).start()
             return self._json({"path": rel, "size": len(data), "sync": UPLOAD_SYNC[rel]})
+        if path == "/api/upload/cancel":
+            if not body.get("upload_id"):
+                return self._err(400, "missing upload_id")
+            return self._json(*ATTACHMENTS.cancel(str(body["upload_id"])))
         if path == "/api/restart":
             if PROJECT.busy() or RESTART["server"] is None:
                 return self._err(409, "wait until the build or the agent's turn has finished")
