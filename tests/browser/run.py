@@ -10,7 +10,6 @@ clipboard) and Chrome with remote
 debugging on port 9333, runs each check script, and stops everything it started."""
 import json
 import os
-import shutil
 import subprocess
 import sys
 import time
@@ -20,7 +19,8 @@ from pathlib import Path
 here = Path(__file__).resolve().parent
 repo, work = here.parents[1], Path(sys.argv[1]).resolve()
 scripts = here
-shutil.rmtree(work, ignore_errors=True)
+if work.exists() and any(work.iterdir()):
+    raise ValueError("Use a new or empty browser-test folder; existing contents are never removed")
 (work / "proj/sec").mkdir(parents=True)
 (work / "proj/figs").mkdir()
 (work / "proj2").mkdir()
@@ -74,7 +74,8 @@ try:
                                timeout=180, cwd=here)
         except subprocess.TimeoutExpired as e:   # a page that never answers: the rest still run
             return f"FAIL no end after {e.timeout} s"
-        return (r.stdout + r.stderr).strip()
+        out = (r.stdout + r.stderr).strip()
+        return out + (f"\nFAIL script exited {r.returncode}" if r.returncode else "")
     results["frontend audit"] = node(scripts / "frontend_audit.mjs", editor)
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
@@ -91,9 +92,14 @@ try:
 finally:
     for p in procs:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
+failures = 0
 for name, out in results.items():
     lines = [l for l in out.splitlines() if l.startswith(("PASS", "FAIL")) or "Error" in l]
+    if not lines:
+        lines = ["FAIL no check results were produced"]
     fails = [l for l in lines if not l.startswith("PASS")]
+    failures += len(fails)
     print(f"== {name}: {sum(l.startswith('PASS') for l in lines)} passed, {len(fails)} not")
     for l in fails:
         print("   ", l[:300])
+sys.exit(1 if failures else 0)

@@ -132,7 +132,35 @@ try {
     await followTurn(9100, "slow", "ask"); Q.events = real;
     collect(mutations.takeRecords()); mutations.disconnect();
     const message = [...$("#chat-log").querySelectorAll(".msg.assistant")].at(-1);
-    return message.textContent === "x".repeat(100) && replacements <= 2;`));
+    if (message.dataset.md !== "x".repeat(100) || replacements > 2)
+      throw Error(JSON.stringify({ sourceLength: message.dataset.md?.length, replacements }));
+    return true;`));
   check("performance changes raise no page errors", p.errors.length === 0);
+  check("typing in chat keeps the selected file and focus when an agent step ends", await p.ev(`
+    await openFile("sec/a.tex"); C.job = 9200; C.follow = true; C.followOpened = openAsked;
+    await AV.begin("focus-test", "Write", "main.tex");
+    $("#chat-input").focus(); await AV.end("focus-test", true);
+    const kept = S.active === "sec/a.tex" && document.activeElement === $("#chat-input")
+      && $("#chat-log").textContent.includes("Jump to main.tex");
+    C.job = null; return kept;`));
+  check("local command chips preserve an unfinished draft", await p.ev(`
+    const model = C.model; $("#chat-input").value = "unfinished draft";
+    const chip = document.createElement("a"); chip.dataset.insert = "/model audit-model"; $("#chat-log").append(chip); chip.click();
+    const kept = $("#chat-input").value === "unfinished draft" && C.model === "audit-model";
+    C.model = model; provSet("model", model); $("#chat-input").value = ""; chip.remove(); return kept;`));
+  check("an edited tab stays open while its saves are held", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(); t.doc.replaceRange("draft", { line: 0, ch: 0 });
+    C.editTurn = true; await closeTab(t.path);
+    const kept = TABS.get(t.path) === t; C.editTurn = false; t.doc.setValue(text); TABS.synced(t, t.mtime); return kept;`));
+  check("disk reload restores compilation line diagnostics", await p.ev(`
+    const t = activeTab(); S.diagnostics = [{ file: t.path, line: 1, severity: "error" }]; applyDiagnostics();
+    t.doc.setValue("temporary text"); TABS.synced(t, t.mtime); await reloadFromDisk(t);
+    const marked = (t.doc.getLineHandle(0).bgClass || "").includes("cm-line-error");
+    S.diagnostics = []; applyDiagnostics(); return marked;`));
+  check("error notifications remain after four seconds and can be dismissed", await p.ev(`
+    toast("Save failed: persistent audit error"); await new Promise(r => setTimeout(r, 4200));
+    const row = [...document.querySelectorAll('#notifications [role="alert"]')].find(el => el.textContent.includes("persistent audit error"));
+    if (!row) return false; row.querySelector("button").click(); return !row.isConnected;`));
+  check("usability changes raise no page errors", p.errors.length === 0);
 } finally { await p.close(); }
 process.exitCode = failures ? 1 : 0;
