@@ -248,7 +248,6 @@ function scheduleCompile(active = undefined) {
   }, AUTOCOMPILE_MS);
 }
 // Every edited tab: {ok}, or {ok: false, reason} (Tabs.unsavedWhy says it).
-const saveAll = () => TABS.saveAll();
 
 // `discard`: the author chose the disk version over unsaved edits (the conflict banner).
 async function reloadFromDisk(t, discard = false) {
@@ -567,7 +566,7 @@ function renameProject() {
     if (!save || name === old) return showProjectName(old, S.projectFolder);
     showProjectName(name || S.projectFolder, S.projectFolder);
     if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
-    const saved = await saveAll();
+    const saved = await TABS.saveAll();
     if (!saved.ok) { showProjectName(old, S.projectFolder); return toast(Tabs.unsavedWhy(saved)); }
     let r = await Q.renameProject(name);
     if (r._status === 404) {
@@ -712,7 +711,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
-  if (["resolve", "commit", "pull"].includes(b.dataset.sync)) { const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
+  if (["resolve", "commit", "pull"].includes(b.dataset.sync)) { const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
   // Your open files go to disk first: committed by Save now, and out of the way of what Get
   // changes brings in (no "changed on disk" clash with text not saved yet).
 
@@ -748,7 +747,7 @@ $("#sync-publish").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target, go = $("#pub-go");
   if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   go.disabled = true; go.textContent = "Creating…";
   const r = await Q.publish({
@@ -829,7 +828,7 @@ $("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('
 // to true once the new server answers (or to an error message). The page then reloads.
 async function restartServer() {
   if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return Tabs.unsavedWhy(saved);
   const r = await Q.restart();
   if (r.error) return r.error;
@@ -918,7 +917,7 @@ async function compile(clean = false, active = S.active) {
   let released = false;
   try {
     if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
-    else { const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
+    else { const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
     const mode = BUILD.mode;
     const st = $("#build-status");
     st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
@@ -1725,7 +1724,7 @@ async function sendMessage() {
     chatAppend(esc(text), "msg user");
     return runLocal(slash[1], (slash[2] || "").trim());
   }
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   if (ATT.files.some((f) => !f.path && !f.error)) return toast("Wait until the files are uploaded.");
   const mode = $("#chat-mode").value;
@@ -2036,7 +2035,7 @@ $("#chat-log").addEventListener("click", async (ev) => {
   const u = ev.target.closest("[data-undo]");
   if (u) {
     if (C.job) return toast("Wait until the current turn ends before Undo.");
-    const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
+    const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
     const r = await Q.undo(+u.dataset.undo);
     if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }

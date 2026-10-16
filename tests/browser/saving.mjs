@@ -73,7 +73,7 @@ if (banner.shown) {
 
 // During an agent's Edit turn nothing is written; it is saved when the turn ends.
 await ev(`C.editTurn = true; TABS.turnStarted(); cm.replaceRange("% held\\n", { line: 1, ch: 0 }); return true`);
-const held = await ev(`const r = await saveAll(); return { r, status: ($("#notifications")?.textContent || "") }`);
+const held = await ev(`const r = await TABS.saveAll(); return { r, status: ($("#notifications")?.textContent || "") }`);
 check("held during an Edit turn, and said so", held.r.reason === "held" && !readFileSync(file, "utf8").includes("% held")
   && held.status.includes("saved when the agent's turn ends"), JSON.stringify(held));
 await ev(`C.editTurn = false; flushSaves(); return true`);

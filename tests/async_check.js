@@ -55,7 +55,7 @@ async function attachments() {
 async function compilePreview() {
   let releasePreview, releaseBuild, calls = 0, shown = 0;
   const S = { active: "a.tex" }, ctx = { S, C: {}, BUILD: { mode: "draft" }, $: () => ({}),
-    saveAll: async () => ({ ok: true }), setCompileButton: () => {},
+    TABS: { saveAll: async () => ({ ok: true }) }, setCompileButton: () => {},
     Q: { build: () => ++calls === 1 ? Promise.resolve({ _status: 200 }) : new Promise(r => { releaseBuild = r; }) },
     showBuild: () => ++shown === 1 ? new Promise(r => { releasePreview = r; }) : Promise.resolve() };
   const run = vm.runInNewContext(section("async function compile(", '\n$("#btn-compile").onclick') + ";compile", ctx);
