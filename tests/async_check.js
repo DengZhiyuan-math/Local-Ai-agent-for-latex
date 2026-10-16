@@ -67,4 +67,13 @@ async function compilePreview() {
   assert.strictEqual(S.building, true, "an older preview cannot reset a newer build");
   releaseBuild({ _status: 200 }); await second;
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function heldClose() {
+  let confirmations = 0; const notices = [], tab = { path: "a.tex" };
+  const run = vm.runInNewContext(section("async function closeTab(", "\nfunction updateTabState(") + ";closeTab", {
+    S: { tabs: [tab] }, C: { editTurn: true }, isDirty: () => true, saveTab: async () => false,
+    toast: text => notices.push(text), Tabs: require("../prism_local/static/tabs.js"), confirm: () => { confirmations++; return false; } });
+  await run(tab.path);
+  assert.strictEqual(confirmations, 0, "held saves keep the tab instead of asking to discard it");
+  assert.ok(notices[0].includes("turn ends"));
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

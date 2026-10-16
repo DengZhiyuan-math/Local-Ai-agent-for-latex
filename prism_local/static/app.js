@@ -162,6 +162,7 @@ function jumpToLine(line) {
 
 async function closeTab(path) {
   const t = S.tabs.find((x) => x.path === path);
+  if (t && isDirty(t) && C.editTurn) return toast(Tabs.unsavedWhy({ reason: "held" }) + " Keep this tab open until then.");
   if (t && isDirty(t) && !t.conflict) await saveTab(t);      // autosave may still be pending
   if (t && isDirty(t) && !confirm(`${path} has unsaved changes. Close anyway?`)) return;
   TABS.remove((x) => x.path === path);
@@ -698,10 +699,10 @@ $("#sync-menu").addEventListener("click", async (e) => {
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
-  if (b.dataset.sync === "resolve" && !(await saveAll()).ok) return;
+  if (["resolve", "commit", "pull"].includes(b.dataset.sync)) { const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
   // Your open files go to disk first: committed by Save now, and out of the way of what Get
   // changes brings in (no "changed on disk" clash with text not saved yet).
-  if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll()).ok) return;
+
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
   const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined).catch(() => null);
   if (r && r._status === 200) renderSync(r);
@@ -917,7 +918,7 @@ async function compile(clean = false, active = S.active) {
   let released = false;
   try {
     if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
-    else if (!(await saveAll()).ok) return;
+    else { const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
     const mode = BUILD.mode;
     const st = $("#build-status");
     st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
