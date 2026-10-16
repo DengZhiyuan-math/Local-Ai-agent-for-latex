@@ -7,6 +7,7 @@ backend runs against a fake chat-completions server on 127.0.0.1.
 import itertools
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -1071,6 +1072,28 @@ class Snapshots(unittest.TestCase):
         self.assertTrue(st["stderr"].endswith("last error"))
         self.assertTrue(lengths)
         self.assertLessEqual(max(lengths), 8000)
+
+    def test_stderr_is_kept_although_a_program_the_cli_left_holds_it_open(self):
+        """read(4096) waited for 4096 characters or the end: with stderr held open by a
+        program that left the CLI's job, its last words never reached the error card."""
+        pidfile = tmpdir() / "holder.pid"
+
+        def cleanup():
+            if pidfile.exists() and pidfile.read_text():
+                pid = int(pidfile.read_text())
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                else:
+                    os.kill(pid, 9)
+        self.addCleanup(cleanup)
+        apart = "creationflags=0x01000000" if os.name == "nt" else "start_new_session=True"   # breakaway
+        backend, d = self.cli(
+            "import subprocess, sys\nsys.stderr.write('fatal: not logged in'); sys.stderr.flush()\n"
+            f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], stdout=subprocess.DEVNULL, stderr=sys.stderr, {apart})\n"
+            f"open({str(pidfile)!r}, 'w').write(str(p.pid))\nsys.exit(3)\n")
+        st = backend.run(job_for(root=d, prompt="go"))
+        self.assertEqual(st["exit"], 3)
+        self.assertIn("fatal: not logged in", st["stderr"])
 
     def test_tool_events_have_one_form_whatever_the_cli_printed(self):
         """A CLI's output of a shape not expected (a result that is text, not an object; a

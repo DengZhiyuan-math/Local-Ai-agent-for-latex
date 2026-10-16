@@ -45,7 +45,9 @@ manager (agent.outcome), not by each backend: "done" carries outcome ("ok", "sto
 """
 from __future__ import annotations
 
+import codecs
 import collections
+import io
 import json
 import os
 import queue
@@ -472,9 +474,14 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *, on_idle=None
                  stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env, **popen)
     job.proc = proc
     def drain_err():
+        # What has arrived, as it arrives: the text file's read(n) waits for n characters
+        # or the end, and a program the CLI left may hold the end off for good.
+        text = io.IncrementalNewlineDecoder(codecs.getincrementaldecoder("utf-8")("replace"), translate=True)
         try:
-            while chunk := proc.stderr.read(4096):
-                err.add(chunk)
+            fd = proc.stderr.fileno()
+            while chunk := os.read(fd, 4096):
+                err.add(text.decode(chunk))
+            err.add(text.decode(b"", final=True))
         except (OSError, ValueError):
             pass
         finally:
