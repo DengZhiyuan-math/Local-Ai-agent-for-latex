@@ -1,4 +1,5 @@
-"""Where trash() puts files when PRISM_TRASH_DIR names a folder (desktop.py)."""
+"""Where trash() and the file clipboard go when PRISM_TRASH_DIR and PRISM_CLIPBOARD_FILE
+keep them away from the system (desktop.py)."""
 import os
 import sys
 import unittest
@@ -40,6 +41,22 @@ class TrashFolder(unittest.TestCase):
     def test_a_missing_path_is_refused(self):
         with self.assertRaises(FileNotFoundError):
             desktop.trash([self.src / "gone.tex"])
+
+
+class ClipboardFile(unittest.TestCase):
+    def setUp(self):
+        self.dir = tmpdir()
+        env = mock.patch.dict(os.environ, {"PRISM_CLIPBOARD_FILE": str(self.dir / "clip.json")})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def test_copied_paths_are_pasted_back_without_the_system_clipboard(self):
+        self.assertEqual(desktop.clipboard_files(), [], "nothing copied yet")
+        with mock.patch.object(desktop, "_win_set_files") as win, mock.patch.object(desktop, "_jxa") as mac:
+            desktop.copy_files([self.dir / "a.tex", self.dir / "d"])
+            self.assertEqual(desktop.clipboard_files(), [self.dir / "a.tex", self.dir / "d"])
+        win.assert_not_called()
+        mac.assert_not_called()
 
 
 if __name__ == "__main__":

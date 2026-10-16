@@ -4,6 +4,8 @@ reveal(path) shows a file or folder selected in Explorer, Finder or the file man
 open_folder(path) opens a folder. copy_files/clipboard_files put files on the system
 clipboard and read them from it, as Explorer and Finder copy and paste them. trash(paths)
 moves files and folders to the Recycle Bin, or the Trash, never deleting them for good.
+PRISM_CLIPBOARD_FILE and PRISM_TRASH_DIR (the browser checks set them) keep both away
+from the system: the copied paths go into that file, what is trashed into that folder.
 
 What a system cannot do raises Unsupported, with a message for the author.
 Windows uses its own API (ctypes); macOS uses osascript (JavaScript for Automation).
@@ -50,7 +52,9 @@ def open_folder(path: Path) -> None:
 def copy_files(paths: list[Path]) -> None:
     """Put these files and folders on the clipboard, to paste in Explorer or Finder."""
     paths = [str(Path(p)) for p in paths]
-    if os.name == "nt":
+    if os.environ.get("PRISM_CLIPBOARD_FILE"):
+        Path(os.environ["PRISM_CLIPBOARD_FILE"]).write_text(json.dumps(paths), encoding="utf-8")
+    elif os.name == "nt":
         _win_set_files(paths)
     elif sys.platform == "darwin":
         _jxa(MAC_SET, paths)
@@ -60,6 +64,9 @@ def copy_files(paths: list[Path]) -> None:
 
 def clipboard_files() -> list[Path]:
     """The files and folders copied in Explorer or Finder (or by copy_files); [] if none."""
+    if os.environ.get("PRISM_CLIPBOARD_FILE"):
+        f = Path(os.environ["PRISM_CLIPBOARD_FILE"])
+        return [Path(p) for p in json.loads(f.read_text(encoding="utf-8"))] if f.exists() else []
     if os.name == "nt":
         return [Path(p) for p in _win_get_files()]
     if sys.platform == "darwin":
@@ -69,7 +76,7 @@ def clipboard_files() -> list[Path]:
 
 def trash(paths: list[Path]) -> None:
     """Move these files and folders to the Recycle Bin or Trash, where they can be restored.
-    With PRISM_TRASH_DIR set (the browser checks set it), they go into that folder instead."""
+    With PRISM_TRASH_DIR set, they go into that folder instead."""
     paths = [Path(p) for p in paths]
     if os.environ.get("PRISM_TRASH_DIR"):
         _move_into(Path(os.environ["PRISM_TRASH_DIR"]), paths)

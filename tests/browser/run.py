@@ -4,8 +4,9 @@
 
 Starts isolated servers (an editor on a scratch project, the Home page, a slow
 OpenAI-compatible API for agent turns; PRISM_STATE_DIR and PRISM_AGENTS point into the
-work folder, so your own projects and settings are not touched, and PRISM_TRASH_DIR keeps
-what the checks delete out of your Recycle Bin) and Chrome with remote
+work folder, so your own projects and settings are not touched; PRISM_TRASH_DIR and
+PRISM_CLIPBOARD_FILE keep what the checks delete and copy out of your Recycle Bin and
+clipboard) and Chrome with remote
 debugging on port 9333, runs each check script, and stops everything it started."""
 import json
 import os
@@ -29,9 +30,10 @@ shutil.rmtree(work, ignore_errors=True)
 (work / "agents.json").write_text(json.dumps({"default": "slow", "providers": {"slow": {
     "type": "openai", "label": "Slow", "base_url": "http://127.0.0.1:18765/v1", "api_key_env": "SLOW_KEY",
     "models": ["m"], "default_model": "m"}}}), encoding="utf-8")
-# PRISM_TRASH_DIR: what the checks delete goes into the work folder, not your Recycle Bin.
+# What the checks delete and copy goes into the work folder, not your Recycle Bin and clipboard.
 env = {**os.environ, "PRISM_STATE_DIR": str(work / "state"), "PRISM_AGENTS": str(work / "agents.json"),
-       "PRISM_TRASH_DIR": str(work / "trash"), "SLOW_KEY": "x"}
+       "PRISM_TRASH_DIR": str(work / "trash"), "PRISM_CLIPBOARD_FILE": str(work / "clipboard.json"),
+       "SLOW_KEY": "x"}
 procs = []
 
 
@@ -82,6 +84,9 @@ try:
     results["many pages"] = node(scripts / "many_pages.mjs", editor, str(work / "proj"))
     trashed = sorted(p.name for p in (work / "trash").iterdir()) if (work / "trash").is_dir() else []
     results["trash folder"] = ("PASS" if trashed == ["intro.tex", "proj2"] else "FAIL") + f" deleted items: {trashed}"
+    clip = work / "clipboard.json"
+    copied = json.loads(clip.read_text(encoding="utf-8")) if clip.exists() else None
+    results["clipboard file"] = ("PASS" if copied == [str(work / "proj2")] else "FAIL") + f" last copied: {copied}"
 finally:
     for p in procs:
         subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)], capture_output=True)
