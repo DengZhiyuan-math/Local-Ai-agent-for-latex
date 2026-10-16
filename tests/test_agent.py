@@ -968,17 +968,25 @@ class FakeAPI(ThreadingHTTPServer):
                 body = json.loads(h.rfile.read(int(h.headers["Content-Length"])))
                 self.requests.append({"body": body, "auth": h.headers.get("Authorization")})
                 chunks = self.script.pop(0)
-                if isinstance(chunks, int):
-                    h.send_response(chunks)
+                if isinstance(chunks, (int, tuple)):          # a status, or (status, message)
+                    code, message = chunks if isinstance(chunks, tuple) else (chunks, "bad key")
+                    h.send_response(code)
                     h.end_headers()
-                    h.wfile.write(b'{"error": {"message": "bad key"}}')
+                    h.wfile.write(json.dumps({"error": {"message": message}}).encode())
                     return
                 h.send_response(200)
                 h.send_header("Content-Type", "text/event-stream")
                 h.end_headers()
-                for c in chunks:
-                    h.wfile.write(f"data: {json.dumps(c)}\n\n".encode())
-                h.wfile.write(b"data: [DONE]\n\n")
+                try:
+                    for c in chunks:
+                        if isinstance(c, (int, float)):          # a pause in the stream
+                            time.sleep(c)
+                            continue
+                        h.wfile.write(f"data: {json.dumps(c)}\n\n".encode())
+                        h.wfile.flush()
+                    h.wfile.write(b"data: [DONE]\n\n")
+                except OSError:                                   # the client went (Stop)
+                    pass
 
         super().__init__(("127.0.0.1", 0), H)
         threading.Thread(target=self.serve_forever, daemon=True).start()
@@ -1074,6 +1082,48 @@ class OpenAICompatible(unittest.TestCase):
         self.assertTrue(done["is_error"])
         self.assertIn("HTTP 401", done["stderr"])
         self.assertEqual(be.sessions, {}, "a failed request leaves no half conversation")
+
+    def test_stop_ends_a_streaming_turn_at_once_and_keeps_the_conversation(self):
+        """Closing the response under its reader waited for the next chunk and then raised
+        in it; the conversation, never saved, was gone for the next message."""
+        api = FakeAPI([[{"choices": [{"delta": {"content": "Part "}}]}, 20,
+                        {"choices": [{"delta": {"content": "never"}}]}]])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        be = OpenAICompat("ds", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                 "api_key_env": "PRISM_TEST_KEY", "models": ["deepseek-chat"]})
+        m = manager(self.root, lambda: ["main.tex", "other.tex"], ds=be)
+        job = m.jobs[m.start("write a lot", None, "ask")["job"]]
+        end = time.time() + 10
+        while not any(e["t"] == "delta" for e in job.events) and time.time() < end:
+            time.sleep(0.05)
+        t0 = time.time()
+        m.stop(job.id)
+        done = wait_done(job, 15)
+        self.assertLess(time.time() - t0, 3, "Stop waited for the stream")
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in job.events if e["t"] == "error"])
+        self.assertIn(done["session_id"], be.sessions, "the conversation is kept")
+        done2, _, api2, _ = self.run_turn([[{"choices": [{"delta": {"content": "again"}}]}]],
+                                          prompt="go on", session=done["session_id"], backend=be)
+        self.assertEqual(done2["outcome"], "ok")
+        self.assertIn("write a lot", json.dumps(api2.requests[0]["body"]["messages"]))
+
+    def test_a_tool_that_raises_is_an_error_for_the_model_not_the_end_of_the_turn(self):
+        (self.root / "latin1.tex").write_bytes("caf\xe9\n".encode("latin-1"))   # not UTF-8
+        done, events, _, _ = self.run_turn([
+            call_chunks("c1", "read_file", {"path": "main.tex", "offset": "not a number"}),
+            call_chunks("c2", "edit_file", {"path": "latin1.tex", "old_string": "caf", "new_string": "x"}),
+            [{"choices": [{"delta": {"content": "Could not."}}]}]])
+        self.assertEqual(done["outcome"], "ok")
+        results = [e for e in events if e["t"] == "tool_result"]
+        self.assertEqual([r["error"] for r in results], [True, True])
+        self.assertIn("ValueError", results[0]["preview"])
+
+    def test_a_conversation_too_long_says_so(self):
+        done, _, _, _ = self.run_turn([(400, "This model's maximum context length is 65536 tokens.")])
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("too long for the model: start a new chat", done["error"])
 
     def test_missing_key(self):
         os.environ.pop("PRISM_TEST_KEY", None)

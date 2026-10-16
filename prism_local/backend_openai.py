@@ -14,11 +14,14 @@ live in memory and end when the server stops.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import base64
 import mimetypes
 import os
+import queue
 import re
+import threading
 import urllib.error
 import urllib.request
 import uuid
@@ -31,6 +34,10 @@ from fsutil import project_path, with_line_ends_of, write_bytes
 MAX_READ = 200_000        # characters of one read_file result
 MAX_HITS = 200            # search results
 MAX_SESSIONS = 20
+# What APIs answer when the conversation outgrew the model's context (OpenAI, DeepSeek,
+# Qwen, Moonshot, Ollama, vLLM say it in one of these ways).
+TOO_LONG = re.compile(r"context.length|context_length|maximum context|context window|too many tokens"
+                      r"|prompt is too long|reduce the length|exceeds? the (?:model'?s )?(?:max|context)", re.I)
 PROJECT_RULES = ("CLAUDE.md", "AGENTS.md")
 
 TOOL_PROMPT = """\
@@ -164,6 +171,9 @@ class OpenAICompat(Backend):
             except ApiError as e:
                 if job.cancel.is_set():
                     res.update(is_error=True, subtype="stopped")
+                elif TOO_LONG.search(str(e)):
+                    res.update(is_error=True, exit=1, subtype="API error", stderr=str(e),
+                               error="This conversation is now too long for the model: start a new chat.")
                 else:
                     res.update(is_error=True, exit=1, subtype="API error", stderr=str(e))
                 break
@@ -226,44 +236,43 @@ class OpenAICompat(Backend):
         text, reasoning, usage = [], [], {}
         calls: dict[int, dict] = {}
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                job.http = resp
-                for raw in resp:
-                    if job.cancel.is_set():
-                        break
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        d = json.loads(data)
-                    except ValueError:
-                        continue
-                    if d.get("error"):
-                        raise ApiError(json.dumps(d["error"])[:2000])
-                    usage = d.get("usage") or usage
-                    for ch in d.get("choices") or []:
-                        delta = ch.get("delta") or {}
-                        if delta.get("content"):
-                            text.append(delta["content"])
-                            job.emit({"t": "delta", "text": delta["content"]})
-                        if delta.get("reasoning_content"):
-                            reasoning.append(delta["reasoning_content"])
-                            job.emit({"t": "thinking", "text": delta["reasoning_content"]})
-                        for tc in delta.get("tool_calls") or []:
-                            slot = calls.setdefault(tc.get("index", len(calls)),
-                                                    {"id": "", "name": "", "arguments": ""})
-                            slot["id"] = tc.get("id") or slot["id"]
-                            fn = tc.get("function") or {}
-                            slot["name"] = slot["name"] or fn.get("name") or ""
-                            slot["arguments"] += fn.get("arguments") or ""
+            for raw in self._stream(job, req):
+                if job.cancel.is_set():
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    d = json.loads(data)
+                except ValueError:
+                    continue
+                if d.get("error"):
+                    raise ApiError(json.dumps(d["error"])[:2000])
+                usage = d.get("usage") or usage
+                for ch in d.get("choices") or []:
+                    delta = ch.get("delta") or {}
+                    if delta.get("content"):
+                        text.append(delta["content"])
+                        job.emit({"t": "delta", "text": delta["content"]})
+                    if delta.get("reasoning_content"):
+                        reasoning.append(delta["reasoning_content"])
+                        job.emit({"t": "thinking", "text": delta["reasoning_content"]})
+                    for tc in delta.get("tool_calls") or []:
+                        slot = calls.setdefault(tc.get("index", len(calls)),
+                                                {"id": "", "name": "", "arguments": ""})
+                        slot["id"] = tc.get("id") or slot["id"]
+                        fn = tc.get("function") or {}
+                        slot["name"] = slot["name"] or fn.get("name") or ""
+                        slot["arguments"] += fn.get("arguments") or ""
         except urllib.error.HTTPError as e:
             with e:
                 detail = e.read().decode("utf-8", "replace")[:2000]
             raise ApiError(f"HTTP {e.code} from {self.base_url}: {detail}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (urllib.error.URLError, OSError, ValueError, AttributeError, http.client.HTTPException) as e:
+            # AttributeError, HTTPException: the stream ended under the reader (Stop).
             raise ApiError(f"{type(e).__name__}: {e}") from None
         finally:
             job.http = None
@@ -273,6 +282,48 @@ class OpenAICompat(Backend):
             c["id"] = c["id"] or f"call_{uuid.uuid4().hex[:12]}"
             out.append(c)
         return "".join(text), out, "".join(reasoning), usage
+
+    def _stream(self, job: Job, req):
+        """The response's lines, read by a thread of its own, which hands them over. Stop
+        then ends the turn at once: a read blocked in that thread cannot be woken on
+        Windows (neither closing the response, which waits for the lock the read holds,
+        nor shutting its socket down does), so it is left to end by itself, at its next
+        data or the request's timeout, and closes the response then. What that thread
+        raised (an HTTPError, the connection lost) is raised here."""
+        lines: queue.Queue = queue.Queue()
+
+        def pump():
+            resp = None
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                job.http = resp
+                for raw in resp:
+                    lines.put(raw)
+                    if job.cancel.is_set():
+                        break
+                lines.put(None)
+            except BaseException as e:  # noqa: BLE001 — handed to the turn
+                lines.put(e)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        threading.Thread(target=pump, daemon=True, name="api-stream").start()
+        while True:
+            try:
+                raw = lines.get(timeout=0.2)
+            except queue.Empty:
+                if job.cancel.is_set():
+                    return
+                continue
+            if raw is None:
+                return
+            if isinstance(raw, BaseException):
+                raise raw
+            yield raw
 
     # ------------------------------------------------------------ tools
     def _call(self, job: Job, c: dict, denials: list[str]) -> str:
@@ -294,6 +345,8 @@ class OpenAICompat(Backend):
             out, err = f"Error: {e}", True
         except (KeyError, TypeError) as e:
             out, err = f"Error: missing or bad argument {e}", True
+        except Exception as e:  # noqa: BLE001 — a tool failing is the model's to hear, not the turn's end
+            out, err = f"Error: {type(e).__name__}: {e}", True
         job.tool_result(c["id"], err, out)
         return out
 

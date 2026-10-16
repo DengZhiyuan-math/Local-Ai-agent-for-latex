@@ -49,6 +49,7 @@ import json
 import os
 import queue
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -119,6 +120,23 @@ def find_bin(env: str, name: str, extra: tuple[str, ...] = ()) -> str | None:
     """A CLI from the environment variable `env`, else PATH, else a few usual places."""
     return os.environ.get(env) or shutil.which(name) \
         or next((p for p in extra if Path(p).exists()), None)
+
+
+def shut_down(resp) -> None:
+    """End an HTTP response another thread is reading (an API turn's stream, on Stop).
+    Closing it would wait for the lock that reader holds until the next chunk comes, and
+    then pull the stream from under it. Shutting its socket down ends the read at once on
+    Linux and macOS; on Windows only at the next data, which is why the API backend reads
+    in a thread of its own (backend_openai._stream) that the turn need not wait for."""
+    try:
+        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        resp.close()
+    except Exception:  # noqa: BLE001 — closing from another thread may race
+        pass
 
 
 def executable(path: str | None) -> bool:
@@ -278,10 +296,7 @@ class Backend:
         if job.proc and job.proc.poll() is None:
             kill_tree(job.proc)
         if job.http is not None:
-            try:
-                job.http.close()
-            except Exception:  # noqa: BLE001 — closing from another thread may race
-                pass
+            shut_down(job.http)
 
     def commands(self, root: Path, refresh: bool = False) -> dict:
         return {"skills": [], "commands": [], "terminal_only": []}
