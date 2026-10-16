@@ -39,14 +39,16 @@ let p = await page(`
   const originalFetch = window.fetch; let trees = 0;
   window.fetch = async (...args) => {
     if (String(args[0]).startsWith("/api/tree")) {
-      if (++trees === 1) return new Response('{}', { status: 503 });
+      window.auditTrees = ++trees;
+      if (trees === 1) return new Response('{}', { status: 503 });
       if (trees === 2) await new Promise(r => setTimeout(r, 900));
     }
     return originalFetch(...args);
   };`);
 try {
-  await p.wait("typeof store !== 'undefined' && typeof S !== 'undefined'");
-  check("a failed first tree request preserves the saved session", await p.ev(`return store.get("session").tabs.length === 2;`));
+  // Once the first tree has failed (the second, held back, is on its way): not before.
+  await p.wait("window.auditTrees >= 2 && typeof store !== 'undefined'");
+  check("a failed first tree request preserves the saved session", await p.ev(`return !S.ready && store.get("session").tabs.length === 2;`));
   await p.wait("S.ready && !S.restoring && S.tabs.length === 2");
   check("session tabs restore after the first successful response", await p.ev(`return S.active === "main.tex" && !!TABS.get("sec/a.tex");`));
   check("deleted files keep their text and cannot be autosaved", await p.ev(`

@@ -997,6 +997,17 @@ class HubServer(unittest.TestCase):
     def post(self, path, body):
         return request(self.url, path, json.dumps(body).encode(), HEADERS)
 
+    def test_a_rename_while_another_window_holds_the_list_says_so(self):
+        """The page showed only "server not reachable": the lock's timeout dropped the request."""
+        _, added = self.post("/api/projects/add", {"path": str(PROJECT)})
+        with registry.FileLock(self.tmp / "state" / "projects.lock"):            # another window
+            status, r = request(self.url, "/api/projects/rename", json.dumps(
+                {"id": added["id"], "name": "Renamed"}).encode(), HEADERS, timeout=30)
+        self.assertEqual(status, 409, r)
+        self.assertIn("Another Prism window is busy", r["error"])
+        self.assertEqual(self.post("/api/projects/rename", {"id": added["id"], "name": "Renamed"})[0], 200,
+                         "and goes through once it is free")
+
     def test_a_damaged_project_list_can_be_put_back_from_its_backup(self):
         """The page showed nothing when projects.json was damaged; it says so now and can put
         back the version before its last change, keeping the damaged one to look at."""
