@@ -76,4 +76,12 @@ async function heldClose() {
   assert.strictEqual(confirmations, 0, "held saves keep the tab instead of asking to discard it");
   assert.ok(notices[0].includes("turn ends"));
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function errorNotice() {
+  const notices = [];
+  const run = vm.runInNewContext(section("function toast(", '\ndocument.querySelectorAll(".gutter")') + ";toast", {
+    notice: (text, error) => notices.push({ text, error }), $: () => ({}), toastTimer: null, toastPrev: null,
+    setTimeout: () => 1, clearTimeout: () => {} });
+  run("Save failed: fixture");
+  assert.strictEqual(notices[0]?.error, true, "failures use the persistent notification stack");
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(heldClose).then(errorNotice).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

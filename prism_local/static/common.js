@@ -11,6 +11,7 @@ function notice(message, error = false) {
     stack.style.cssText = "position:fixed;right:16px;bottom:20px;z-index:10000;display:grid;gap:8px;max-width:min(460px,90vw)";
     document.body.append(stack);
   }
+  if ([...stack.children].some((row) => row.querySelector("span")?.textContent === message)) return;
   const row = document.createElement("div"), text = document.createElement("span"), close = document.createElement("button");
   row.setAttribute("role", error ? "alert" : "status");
   row.style.cssText = "background:var(--panel,#fff);color:var(--text,#111);border:1px solid var(--border,#bbb);border-left:4px solid var(" + (error ? "--err" : "--accent") + ");padding:10px;box-shadow:0 2px 12px #0003;display:flex;gap:10px;font:13px/1.5 system-ui";

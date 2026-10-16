@@ -606,7 +606,6 @@ async function pollOnce() {
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
   if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
-  if (toastPrev?.[0] === UNREACHABLE) toastPrev = ["", "status"];                       // nor shown after a toast
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
   if (!bindProject(r.project_key)) return;
@@ -1157,15 +1156,9 @@ function sidebarHidden(h) {
 sidebarHidden(store.get("sidebar.hidden", false));
 $("#btn-sidebar").onclick = () => sidebarHidden(!$("#sidebar").classList.contains("hidden"));
 
-// A toast shows in the status line for 4 s, then the status comes back: the one under the
-// first of several toasts in a row, not an earlier toast's text.
-let toastTimer = null, toastShown = null, toastPrev = null;
-function toast(msg) {
-  const st = $("#build-status");
-  if (!(toastTimer && st.textContent === toastShown)) toastPrev = [st.textContent, st.className];
-  st.textContent = msg; st.className = "status warn"; toastShown = msg;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastTimer = null; if (st.textContent === msg) [st.textContent, st.className] = toastPrev; }, 4000);
+// Build status stays in its own line; actionable errors remain until dismissed.
+function toast(msg, error = /failed|error|could not|cannot |not saved|not undone|unreachable|not reachable|resolve .*conflict/i.test(String(msg))) {
+  notice(String(msg), error);
 }
 
 document.querySelectorAll(".gutter").forEach((g) => {
