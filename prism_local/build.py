@@ -34,7 +34,7 @@ import time
 from pathlib import Path
 
 from fsutil import SKIP_DIRS, TEMP_SUFFIX
-from proc import TREE, kill_tree
+from proc import end_group, kill_tree, start
 
 MAX_PASSES = 5            # engine runs per build (at most 3 while the document has errors)
 TIMEOUT = 600.0           # seconds for one whole build
@@ -285,14 +285,14 @@ class Runner:
             if self.stopped.is_set():
                 raise Stopped()
             # No stdin: a program that asks something gets end-of-file instead of waiting.
-            proc = self.proc = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
-                                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                                **TREE)
+            proc = self.proc = start(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
         try:
             out = self._wait(proc)
         finally:
             with self.lock:
                 self.proc = None
+            end_group(proc)             # nothing it started outlives the build step
         if self.stopped.is_set():
             raise Stopped()
         return proc.returncode, out.decode("utf-8", "replace")

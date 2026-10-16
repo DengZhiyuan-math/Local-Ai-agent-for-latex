@@ -254,6 +254,9 @@ class Platform(unittest.TestCase):
         try:
             with mock.patch.object(build, "KILL_GRACE", 1.0), self.assertRaises(build.Stopped):
                 runner.run([sys.executable, str(d / "child.py")], d)
+            if os.name == "nt":                # in the build's job: ended with it
+                from test_proc import gone
+                self.assertTrue(gone(int(pidfile.read_text())), "the program left behind still runs")
         finally:
             if pidfile.exists() and pidfile.read_text():
                 try:

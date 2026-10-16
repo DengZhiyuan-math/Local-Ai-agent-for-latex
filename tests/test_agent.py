@@ -18,6 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))          # tests/: tmpdirs, test_lifecycle
 from tmpdirs import tmpdir  # noqa: E402
+from test_proc import gone  # noqa: E402
 import agent  # noqa: E402
 import backends  # noqa: E402
 import backend_claude  # noqa: E402
@@ -787,6 +788,7 @@ class Snapshots(unittest.TestCase):
         st = backend.run(job)
         self.assertLess(time.time() - t0, backends.OUTPUT_GRACE + 8)
         self.assertEqual((st["exit"], st["seen"]), (0, [{"type": "result"}]))
+        self.assertTrue(gone(int((d / "child.pid").read_text())), "the command it left still runs")
 
     def test_stop_ends_a_turn_whose_cli_has_already_exited(self):
         backend, d = self.cli(
@@ -799,6 +801,7 @@ class Snapshots(unittest.TestCase):
         t0 = time.time()
         backend.run(job)
         self.assertLess(time.time() - t0, min(backends.OUTPUT_GRACE, 5) + 3)
+        self.assertTrue(gone(int((d / "child.pid").read_text())), "the command it left still runs")
 
     def test_stop_before_the_cli_starts_starts_none(self):
         backend, d = self.cli("open('started.txt', 'w').write('x')\n")
@@ -1071,8 +1074,7 @@ class ClaudeRemembers(unittest.TestCase):
     def lookups(self, lines, *calls):
         """How many times `claude` was started for commands(**kw) of each of `calls`."""
         from unittest import mock
-        with mock.patch.object(backend_claude.subprocess, "Popen",
-                               side_effect=lambda *a, **k: FakeInit(lines)) as popen:
+        with mock.patch.object(backend_claude, "start", side_effect=lambda *a, **k: FakeInit(lines)) as popen:
             answers = [self.claude.commands(self.root, **kw) for kw in calls]
         return popen.call_count, answers
 

@@ -54,7 +54,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
-from proc import NO_WINDOW, TREE, end_group, kill_tree  # noqa: F401 — re-exported
+from proc import NO_WINDOW, TREE, end_group, kill_tree, start  # noqa: F401 — re-exported
 from fsutil import project_path
 
 
@@ -342,7 +342,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     it starts still ends it. Its stderr is read from the start: a CLI that exits at once
     (stdin then cannot be written) still says why. And however the with-block is left (a
     handler raising on a line it did not expect), the CLI and the commands it started
-    (TREE) are ended: none goes on writing the files after its turn.
+    (proc.start) are ended, also those still running after it exited: none goes on
+    writing the files after its turn.
 
     The output ends when the CLI's does, or OUTPUT_GRACE after the CLI exited (at once
     after Stop): a command it started (a background shell) may hold the output open for
@@ -352,9 +353,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
         return
     err: list[str] = []
     out: queue.Queue = queue.Queue()
-    proc = subprocess.Popen(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace",
-                            env=env, **TREE, **popen)
+    proc = start(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                 stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env, **popen)
     job.proc = proc
     def drain_err():
         try:
@@ -405,10 +405,9 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
     finally:
         if proc.poll() is None:
             kill_tree(proc)
+        end_group(proc)                          # and what it left running (it may hold its output)
         reader.join(0.5)
         drain.join(0.5 if reader.is_alive() else 5)   # held open too, most likely
-        if reader.is_alive() or drain.is_alive():
-            end_group(proc)                      # what it left running holds its output
         # Its pipes go with it. One whose reader still waits on it (a command the CLI
         # started holds it open) is closed by that reader when it ends: closing it here
         # would wait for that command.

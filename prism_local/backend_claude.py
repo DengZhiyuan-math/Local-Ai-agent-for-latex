@@ -25,7 +25,7 @@ from pathlib import Path
 import registry
 import settings
 import sessionmeta
-from backends import NO_WINDOW, SYSTEM_APPEND, TREE, CliBackend, Job, executable, find_bin, kill_tree
+from backends import NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, executable, find_bin, kill_tree, start
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
@@ -633,9 +633,8 @@ class ClaudeCode(CliBackend):
         cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
                "--output-format", "stream-json", "--verbose"]
         try:
-            proc = subprocess.Popen(cmd, cwd=root, stdin=subprocess.PIPE,
-                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                                    text=True, encoding="utf-8", errors="replace", **TREE)
+            proc = start(cmd, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
         except OSError as e:
             return {"error": f"Could not start Claude Code: {e}"}
         timer = threading.Timer(60, kill_tree, args=(proc,))
