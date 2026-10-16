@@ -52,4 +52,19 @@ async function attachments() {
   att.render = () => {}; att.remove(1);
   assert.ok(aborted && att.files.length === 0, "removing a pending upload aborts it");
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function compilePreview() {
+  let releasePreview, releaseBuild, calls = 0, shown = 0;
+  const S = { active: "a.tex" }, ctx = { S, C: {}, BUILD: { mode: "draft" }, $: () => ({}),
+    saveAll: async () => ({ ok: true }), setCompileButton: () => {},
+    Q: { build: () => ++calls === 1 ? Promise.resolve({ _status: 200 }) : new Promise(r => { releaseBuild = r; }) },
+    showBuild: () => ++shown === 1 ? new Promise(r => { releasePreview = r; }) : Promise.resolve() };
+  const run = vm.runInNewContext(section("async function compile(", '\n$("#btn-compile").onclick') + ";compile", ctx);
+  const first = run(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(S.building, false, "PDF loading must not keep the build busy");
+  const second = run(); await new Promise(r => setImmediate(r));
+  assert.strictEqual(S.building, true);
+  releasePreview(); await first;
+  assert.strictEqual(S.building, true, "an older preview cannot reset a newer build");
+  releaseBuild({ _status: 200 }); await second;
+}
+account().then(usageAndCatalog).then(syncToggle).then(attachments).then(compilePreview).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

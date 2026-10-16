@@ -901,6 +901,7 @@ async function compile(clean = false, active = S.active) {
   // Taken at once: an auto-compile coming while this one saves (git may hold the saves for
   // a while) is not a second build, which would answer "busy" and reset the button.
   S.building = true;
+  let released = false;
   try {
     if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
     else if (!(await saveAll()).ok) return;
@@ -911,12 +912,13 @@ async function compile(clean = false, active = S.active) {
     const r = await Q.build({ mode, clean, active });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
+    S.building = false; setCompileButton(false); released = true;
     await showBuild(r);
   } catch (e) {
     const st = $("#build-status");
     st.className = "status err"; st.textContent = "build request failed: " + e;
   } finally {
-    S.building = false; setCompileButton(false);
+    if (!released) { S.building = false; setCompileButton(false); }
   }
 }
 $("#btn-compile").onclick = () => S.building ? Q.buildStop() : compile();
