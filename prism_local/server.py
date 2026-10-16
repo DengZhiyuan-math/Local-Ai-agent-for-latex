@@ -255,6 +255,8 @@ class Handler(httpbase.Handler):
         return self._get(path, q)      # errors: httpbase._answer
 
     def _get(self, path, q):
+        if self._foreign_project():
+            return
         if path == "/api/ping":
             return self._json({"app": "prism-local", "root": str(PROJECT.root), "project_key": registry.project_key(PROJECT.root), "pid": os.getpid(),
                                "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
@@ -284,6 +286,7 @@ class Handler(httpbase.Handler):
             for f in files:
                 f["git"] = st.get(f["path"], "")
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
+                               "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": PROJECT.document_order(editable),
                                "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
@@ -402,7 +405,17 @@ class Handler(httpbase.Handler):
     def post(self, path, body):
         return self._post(path, body)      # errors: httpbase._answer
 
+    def _foreign_project(self):
+        key = self.headers.get("X-Prism-Project")
+        if key and key != registry.project_key(PROJECT.root):
+            self._json({"error": "This port now belongs to another project. Reopen it from Home.",
+                        "other_project": True}, 409)
+            return True
+        return False
+
     def _post(self, path, body):
+        if self._foreign_project():
+            return
         if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(PROJECT.root):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
         if path.startswith("/api/files/"):

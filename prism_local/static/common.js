@@ -8,9 +8,26 @@ const store = {
 };
 
 let projectKey = null;             // fixed for this page's lifetime; never follow a reused port
+let foreignProject = false;
+function bindProject(key) {
+  if (!key || foreignProject) return !foreignProject;
+  if (projectKey && key !== projectKey) { stopForProject(); return false; }
+  projectKey = key; return true;
+}
+function stopForProject() {
+  if (foreignProject) return;
+  foreignProject = true;
+  const banner = document.createElement("div");
+  banner.id = "other-project"; banner.setAttribute("role", "alert");
+  banner.style.cssText = "position:fixed;inset:0;z-index:10001;display:grid;place-items:center;background:var(--panel,#fff);padding:30px;font:16px/1.6 system-ui";
+  banner.textContent = "This port now belongs to another project. Reopen your project from Home. Your unsaved text remains in this page.";
+  document.body.append(banner);
+  window.dispatchEvent(new Event("prism-project-lost"));
+}
 // Never throws: when the server cannot be reached, the answer is {_status: 0, error}, so
 // every caller handles it like any other failed request (and re-enables its buttons).
 async function api(path, body) {
+  if (foreignProject) return { _status: 409, other_project: true, error: "Reopen this project from Home." };
   if (projectKey && (path.startsWith("/api/agent") || path.startsWith("/api/files/"))) {
     if (body !== undefined) body = { ...body, project_key: projectKey };
     else if (path.startsWith("/api/agent/events")) path += (path.includes("?") ? "&" : "?") + "project_key=" + encodeURIComponent(projectKey);
@@ -19,12 +36,17 @@ async function api(path, body) {
     method: "POST", headers: { "Content-Type": "application/json", "X-Prism-Local": "1" },
     body: JSON.stringify(body),
   };
+  if (projectKey) opts.headers = { ...opts.headers, "X-Prism-Project": projectKey };
   let r;
   try { r = await fetch(path, opts); } catch { return { _status: 0, error: "server not reachable" }; }
   let data = {};
   try { data = await r.json(); } catch { /* non-JSON */ }
   if (!data || typeof data !== "object") data = {};
   data._status = r.status;
+  if (foreignProject || data.other_project || (data.project_key && !bindProject(data.project_key))) {
+    stopForProject();
+    return { _status: 409, other_project: true, error: "This port belongs to another project." };
+  }
   return data;
 }
 // util.js (loaded first): plain helpers both pages use, checked under Node.
@@ -55,7 +77,7 @@ function poller(fn, ms, hiddenMs = null) {
   run.start = async (when = () => true) => {
     if (started) return;
     started = true;
-    for (;;) { await nap(ms, hiddenMs); if (when()) await (running || run()); }
+    for (;;) { await nap(ms, hiddenMs); if (foreignProject) return; if (when()) await (running || run()); }
   };
   return run;
 }

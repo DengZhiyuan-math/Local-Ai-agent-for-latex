@@ -75,6 +75,7 @@ try:
         except subprocess.TimeoutExpired as e:   # a page that never answers: the rest still run
             return f"FAIL no end after {e.timeout} s"
         return (r.stdout + r.stderr).strip()
+    results["frontend audit"] = node(scripts / "frontend_audit.mjs", editor)
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
     results["turn view"] = node(scripts / "turn_view.mjs", editor)

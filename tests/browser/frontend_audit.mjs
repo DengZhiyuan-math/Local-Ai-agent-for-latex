@@ -1,0 +1,65 @@
+// Frontend audit regressions against the runner's isolated editor and Chrome profile.
+const url = process.argv[2];
+let failures = 0;
+function check(name, ok) { console.log(`${ok ? "PASS" : "FAIL"} ${name}`); if (!ok) failures++; }
+async function page(inject = "") {
+  const tab = await (await fetch("http://127.0.0.1:9333/json/new?about:blank", { method: "PUT" })).json();
+  const ws = new WebSocket(tab.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r));
+  let id = 0;
+  const pending = new Map(), errors = [];
+  ws.addEventListener("message", (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); }
+    if (d.method === "Runtime.exceptionThrown") errors.push(d.params.exceptionDetails.exception?.description || d.params.exceptionDetails.text);
+  });
+  const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  const ev = async (code) => {
+    const r = await send("Runtime.evaluate", { expression: `(async () => { ${code} })()`, awaitPromise: true, returnByValue: true });
+    if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "evaluate failed");
+    return r.result.result.value;
+  };
+  await send("Runtime.enable"); await send("Page.enable");
+  if (inject) await send("Page.addScriptToEvaluateOnNewDocument", { source: inject });
+  await send("Page.navigate", { url });
+  const wait = async (condition) => {
+    for (let i = 0; i < 160; i++) {
+      if (await ev(`try { return !!(${condition}); } catch { return false; }`)) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("Timed out: " + condition + " " + errors.join(" | "));
+  };
+  return { ev, wait, errors, close: async () => { ws.close(); await fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
+}
+
+let p = await page(`
+  localStorage.setItem("prism.session", JSON.stringify({ tabs: ["sec/a.tex", "main.tex"], active: "main.tex" }));
+  const originalFetch = window.fetch; let trees = 0;
+  window.fetch = async (...args) => {
+    if (String(args[0]).startsWith("/api/tree")) {
+      if (++trees === 1) return new Response('{}', { status: 503 });
+      if (trees === 2) await new Promise(r => setTimeout(r, 900));
+    }
+    return originalFetch(...args);
+  };`);
+try {
+  await p.wait("typeof store !== 'undefined' && typeof S !== 'undefined'");
+  check("a failed first tree request preserves the saved session", await p.ev(`return store.get("session").tabs.length === 2;`));
+  await p.wait("S.ready && !S.restoring && S.tabs.length === 2");
+  check("session tabs restore after the first successful response", await p.ev(`return S.active === "main.tex" && !!TABS.get("sec/a.tex");`));
+  check("deleted files keep their text and cannot be autosaved", await p.ev(`
+    await openFile("sec/a.tex"); const t = activeTab(); t.doc.setValue("keep these edits");
+    const realTree = Q.tree, realSave = Q.saveFile;
+    Q.tree = async () => ({ ...S.watch, _status: 200, files: S.files.filter(f => f.path !== t.path) });
+    await poll(); let writes = 0; Q.saveFile = async () => { writes++; return { _status: 200 }; };
+    const saved = await TABS.save(t);
+    Q.tree = realTree; Q.saveFile = realSave;
+    return saved.reason === "gone" && writes === 0 && t.doc.getValue() === "keep these edits" && $("#banner").textContent.includes("deleted");`));
+  check("a reused port stops polling and saving without replacing edits", await p.ev(`
+    let polls = 0; Q.tree = async () => { polls++; return { ...S.watch, _status: 200, project_key: "another-paper" }; };
+    await poll(); await poll(); const t = activeTab(), text = t.doc.getValue();
+    const saved = await TABS.save(t);
+    return foreignProject && polls === 1 && !saved.ok && text === "keep these edits" && !!$("#other-project");`));
+  check("startup and reconciliation raise no page errors", p.errors.length === 0);
+} finally { await p.close(); }
+process.exitCode = failures ? 1 : 0;

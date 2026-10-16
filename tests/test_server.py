@@ -507,18 +507,32 @@ class Routes(unittest.TestCase):
         self.addCleanup(self.srv.shutdown)
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
-    def ask(self, path, body=None):
+    def ask(self, path, body=None, headers=None):
         import json
         import urllib.error
         import urllib.request
         req = urllib.request.Request(self.url + path, None if body is None else json.dumps(body).encode(),
-                                     {"Content-Type": "application/json", "X-Prism-Local": "1"})
+                                     {"Content-Type": "application/json", "X-Prism-Local": "1", **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:
             with e:
                 return e.code, json.loads(e.read())
+
+    def test_every_editor_request_is_bound_to_its_project(self):
+        root = project({"main.tex": "original\n"})
+        key = server.registry.project_key(server.PROJECT.root)
+        self.assertEqual(self.ask("/api/tree")[1]["project_key"], key)
+        for path, body in (("/api/tree", None), ("/api/file?path=main.tex", None),
+                           ("/api/file", {"path": "main.tex", "content": "wrong project"}),
+                           ("/api/config", {"main": "other.tex"})):
+            with self.subTest(path=path):
+                status, r = self.ask(path, body, {"X-Prism-Project": "another-project"})
+                self.assertEqual(status, 409)
+                self.assertTrue(r["other_project"])
+        self.assertEqual((server.PROJECT.root / "main.tex").read_text(), "original\n")
+        self.assertEqual(self.ask("/api/tree", headers={"X-Prism-Project": key})[0], 200)
 
     def test_compile_active_document_and_follow_its_pdf(self):
         root = copy_example()

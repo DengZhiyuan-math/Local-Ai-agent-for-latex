@@ -24,14 +24,17 @@ const Tabs = (() => {
   const REASONS = ["conflict", "failed", "held"];
 
   function createTabStore({ saveFile, isHeld = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
-                            onChange = () => {}, notify = () => {}, busyWait = 1000 }) {
+                            onChange = () => {}, notify = () => {}, busyWait = 1000,
+                            schedule = (fn, ms) => setTimeout(fn, ms), cancel = clearTimeout,
+                            isStopped = () => false }) {
     const tabs = [];
     let heldNoted = false;
 
     const dirty = (t) => !t.doc.isClean(t.gen);
 
     function add(path, doc, mtime) {
-      const t = { path, doc, mtime, gen: doc.changeGeneration(true), conflict: null, saving: null, inFlight: false };
+      const t = { path, doc, mtime, gen: doc.changeGeneration(true), conflict: null, saving: null, inFlight: false,
+        saveError: null, retryTimer: null, retries: 0 };
       tabs.push(t);
       return t;
     }
@@ -39,11 +42,13 @@ const Tabs = (() => {
     // Close the tabs `pred` picks (unsaved edits are lost: the page asked first).
     function remove(pred) {
       const gone = tabs.filter(pred);
-      for (const t of gone) tabs.splice(tabs.indexOf(t), 1);
+      for (const t of gone) { cancel(t.retryTimer); tabs.splice(tabs.indexOf(t), 1); }
       return gone;
     }
 
     function save(t, force = false) {
+      if (isStopped() || !tabs.includes(t)) return Promise.resolve({ ok: false, reason: "stopped" });
+      if (t.conflict && !force) return Promise.resolve({ ok: false, reason: t.conflict === "gone" ? "gone" : "conflict" });
       if (isHeld()) {
         if (!heldNoted) { heldNoted = true; notify("Your edits are saved when the agent's turn ends."); }
         return Promise.resolve({ ok: false, reason: "held" });
@@ -54,6 +59,8 @@ const Tabs = (() => {
     }
 
     async function saveNow(t, force) {
+      if (isStopped() || !tabs.includes(t)) return { ok: false, reason: "stopped" };
+      if (isHeld()) return { ok: false, reason: "held" };
       if (!dirty(t) && !force) return { ok: true };
       let gen, r;
       for (let waited = false; ; waited = true) {
@@ -61,6 +68,7 @@ const Tabs = (() => {
         // In flight: the file on disk is this save's until its answer brings the new mtime.
         t.inFlight = true;
         try { r = await saveFile({ path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
+        catch (e) { r = { _status: 0, error: e.message || String(e) }; }
         finally { t.inFlight = false; }
         if (!(r._status === 503 && r.busy)) break;
         if (!waited) notify(`${t.path}: ${r.error || "busy"}.`);
@@ -75,9 +83,19 @@ const Tabs = (() => {
       }
       if (r._status !== 200) {
         const message = `Save failed: ${r.error || r._status}`;
+        t.saveError = message;
+        onChange(t, "failed");
+        cancel(t.retryTimer);
+        if (!r.other_project && !isStopped()) t.retryTimer = schedule(() => {
+          t.retryTimer = null;
+          if (!dirty(t) || t.conflict || isStopped() || !tabs.includes(t)) return;
+          return save(t);
+        }, Math.min(30000, 1000 * 2 ** Math.min(t.retries++, 5)));
+        t.retryTimer?.unref?.();       // Node checks do not stay alive just for browser retries.
         notify(message);
         return { ok: false, reason: "failed", message };
       }
+      cancel(t.retryTimer); t.retryTimer = null; t.retries = 0; t.saveError = null;
       t.mtime = r.mtime; t.gen = gen; t.conflict = null;
       onChange(t, "saved");
       return { ok: true };
@@ -93,7 +111,7 @@ const Tabs = (() => {
         if (!r.ok) failed.push({ path: t.path, ...r });
       }
       if (!failed.length) return { ok: true };
-      const reason = REASONS.find((x) => failed.some((f) => f.reason === x));
+      const reason = ["gone", "stopped", ...REASONS].find((x) => failed.some((f) => f.reason === x));
       return { ok: false, reason, paths: failed.map((f) => f.path), message: (failed.find((f) => f.message) || {}).message };
     }
 
@@ -101,6 +119,11 @@ const Tabs = (() => {
     // ours still in flight: the file on disk is its own), "reload" (no unsaved edits), or
     // "conflict" (unsaved edits: the banner).
     function diskSeen(t, mtime) {
+      if (mtime == null) {
+        cancel(t.retryTimer);
+        if (t.conflict !== "gone") { t.conflict = "gone"; onChange(t, "gone"); }
+        return "gone";
+      }
       if (Math.abs(mtime - t.mtime) < 1e-6 || t.inFlight) return "same";
       if (!dirty(t)) return "reload";
       if (t.conflict !== "disk") { t.conflict = "disk"; onChange(t, "conflict"); }
@@ -119,6 +142,7 @@ const Tabs = (() => {
     }
     // The tab holds the disk's text of `mtime` now.
     function synced(t, mtime) {
+      cancel(t.retryTimer); t.retryTimer = null; t.saveError = null; t.retries = 0;
       t.mtime = mtime; t.gen = t.doc.changeGeneration(true); t.conflict = null;
       onChange(t, "synced");
     }
@@ -132,6 +156,8 @@ const Tabs = (() => {
   // What to tell the author when saveAll did not save everything (before a build, a sync,
   // a message to the agent …).
   function unsavedWhy(r) {
+    if (r.reason === "gone") return "The file was deleted on disk. Save it under a new name or close its tab.";
+    if (r.reason === "stopped") return "This page cannot save. Reopen the project from Home.";
     if (r.reason === "conflict") return "Resolve the save conflict first (the banner above the editor).";
     if (r.reason === "held") return "Your edits are saved when the agent's turn ends.";
     return (r.message || "Saving failed") + ". Try again.";

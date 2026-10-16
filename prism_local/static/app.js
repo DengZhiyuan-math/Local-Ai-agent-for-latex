@@ -5,11 +5,12 @@
 /* ------------------------------------------------------------------ state */
 const S = {
   files: [], folders: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
+  ready: false, restoring: true, watch: null,
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 // The open files and how each is saved (tabs.js); S.tabs is its list.
 const TABS = Tabs.createTabStore({
-  saveFile: Q.saveFile, isHeld: () => C.editTurn, notify: (m) => toast(m),
+  saveFile: Q.saveFile, isStopped: () => foreignProject, isHeld: () => C.editTurn, notify: (m) => toast(m),
   onChange: (t, what) => { renderTabs(); showBanner(t); if (what === "saved") scheduleSymbols(); },
 });
 S.tabs = TABS.tabs;
@@ -172,7 +173,7 @@ async function closeTab(path) {
 
 function renderTabs() {
   $("#tabs").innerHTML = S.tabs.map((t) => `
-    <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""}" data-path="${esc(t.path)}" title="${esc(t.path)}">
+    <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""} ${t.saveError ? "save-failed" : ""}" data-path="${esc(t.path)}" title="${esc(t.saveError || t.path)}">
       <span class="name">${esc(t.path.split("/").pop())}</span><span class="close" data-close="${esc(t.path)}">×</span>
     </div>`).join("");
   AH.refresh();
@@ -183,7 +184,7 @@ $("#tabs").addEventListener("click", (e) => {
 });
 $("#tabs").addEventListener("auxclick", (e) => { const t = e.target.closest(".tab"); if (t && e.button === 1) closeTab(t.dataset.path); });
 
-function persistSession() { store.set("session", { tabs: S.tabs.map((t) => t.path), active: S.active }); }
+function persistSession() { if (!S.ready || S.restoring || foreignProject) return; store.set("session", { tabs: S.tabs.map((t) => t.path), active: S.active }); }
 
 /* ------------------------------------------------------------------ save & external changes */
 // Saving: one at a time per tab, held during an agent's Edit turn, busy git waited out,
@@ -242,12 +243,27 @@ async function reloadFromDisk(t, discard = false) {
     if (scroll) cm.scrollTo(scroll.left, scroll.top);
   }
   TABS.synced(t, r.mtime);
+  if (t === activeTab()) applyDiagnostics();
 }
 
 function showBanner(t) {
   const b = $("#banner");
   if (!t || t !== activeTab() || !t.conflict) { b.hidden = true; return; }
   b.hidden = false;
+  if (t.conflict === "gone") {
+    b.innerHTML = `<b>${esc(t.path)}</b> was deleted on disk. <button id="bn-save-as">Save under a new name</button> <button id="bn-close">Close tab</button>`;
+    $("#bn-close").onclick = () => closeTab(t.path);
+    $("#bn-save-as").onclick = async () => {
+      if (C.editTurn) return toast(Tabs.unsavedWhy({ reason: "held" }));
+      const path = prompt("Save as a new project file", t.path);
+      if (!path || path === t.path) return;
+      const r = await Q.saveFile({ path, content: t.doc.getValue(), base_mtime: 0 });
+      if (r._status !== 200) return toast(r.error || "Could not save the new file");
+      TABS.remove((x) => x === t); S.active = null;
+      await poll(); await openFile(path);
+    };
+    return;
+  }
   b.innerHTML = `<b>${esc(t.path)}</b> was changed on disk (e.g. by Claude Code) while you have unsaved edits.
     <button id="bn-reload">Load disk version (discard mine)</button>
     <button id="bn-keep">Keep mine (overwrite disk)</button>
@@ -567,28 +583,25 @@ const poll = poller(pollOnce, 2000, 30000);
 const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
-  const config = BUILD.loaded ? null : loadConfig();
+  if (foreignProject) return;
   const r = await Q.tree();
-  await config;
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
   if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
   if (toastPrev?.[0] === UNREACHABLE) toastPrev = ["", "status"];                       // nor shown after a toast
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
-  const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]))
-    || JSON.stringify(r.folders || []) !== JSON.stringify(S.folders);
+  if (!bindProject(r.project_key)) return;
+  if (!BUILD.loaded) await loadConfig();
+  const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })));
+  if (action.foreign) return stopForProject();
+  S.ready = true; S.watch = r;
   S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];
-  if (changed) renderTree();
-  let anyChange = false;
-  for (const t of [...S.tabs]) {
-    const f = r.files.find((x) => x.path === t.path);
-    const seen = f ? TABS.diskSeen(t, f.mtime) : "same";     // tabs.js: a save in flight is ours
-    if (seen === "same") continue;
-    anyChange = true;
-    if (seen === "reload") await reloadFromDisk(t);
-  }
-  if (anyChange || changed) loadSymbols();
+  if (action.treeChanged) renderTree();
+  for (const path of action.gone) { const t = TABS.get(path); if (t) TABS.diskSeen(t, null); }
+  for (const path of action.conflicts) { const t = TABS.get(path); if (t) TABS.diskSeen(t, r.files.find((f) => f.path === path).mtime); }
+  for (const path of action.reload) { const t = TABS.get(path); if (t) await reloadFromDisk(t); }
+  if (action.symbols) loadSymbols();
   if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
   if (r.updated && $("#btn-restart").hidden) toast("prism-local was updated: click “Update: restart” to use the new version");
   $("#btn-restart").hidden = !r.updated;
@@ -2072,12 +2085,8 @@ function setProvider(id, quiet) {
     : `<span class="err">${esc(p.label)} is not available: ${esc(p.reason || "")}</span>`);
 }
 function renderProviders(info) {
-  if (projectKey && projectKey !== info.project_key) {
-    toast("This port now serves another project. Reopen the project's editor.");
-    return;
-  }
-  projectKey = info.project_key || null;
-  P.projectKey = info.project_key || null;
+  if (!bindProject(info.project_key)) return;
+  P.projectKey = projectKey;
   P.list = info.providers || [];
   P.byId = Object.fromEntries(P.list.map((p) => [p.id, p]));
   // A server started before this page's code was updated sends no provider list. Hide the
@@ -2233,7 +2242,11 @@ async function loadAgentInfo() {
 (async function init() {
   try {
     loadSnippets();
-    await poll();          // the files and the build settings (and, once the files are known, the symbols)
+    while (!S.ready && !foreignProject) {
+      await poll();
+      if (!S.ready && !foreignProject) await nap(1000, 1000);
+    }
+    if (foreignProject) return;
     const sess = store.get("session", null);
     const exists = (p) => S.files.some((f) => f.path === p);
     const paths = sess && sess.tabs ? sess.tabs.filter((p) => exists(p) && p !== sess.active) : [];
@@ -2247,7 +2260,7 @@ async function loadAgentInfo() {
       await openFile(p);
       if (openAsked === mine) restoring = mine;
     }
-    renderTabs(); persistSession();
+    S.restoring = false; renderTabs(); persistSession();
     // No saved session: open the file the server builds (prism.json's "main", or the guess).
     if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
     renderProblems();
