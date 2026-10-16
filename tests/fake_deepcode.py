@@ -46,4 +46,9 @@ index = json.loads(index_path.read_text(encoding="utf-8")) if index_path.exists(
 index["originalPath"] = str(root)
 index["entries"] = [e for e in index["entries"] if e["id"] != sid] + [{"id": sid, "updateTime": int(time.time() * 1000)}]
 index_path.write_text(json.dumps(index), encoding="utf-8")
+release = os.environ.get("PRISM_TEST_DEEPCODE_RELEASE")
+if release:
+    deadline = time.monotonic() + 10
+    while not Path(release).exists() and time.monotonic() < deadline:
+        time.sleep(.02)
 print("Changed main.tex.")

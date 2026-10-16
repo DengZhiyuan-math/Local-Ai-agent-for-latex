@@ -472,6 +472,24 @@ class DeepCodeBackend(unittest.TestCase):
         self.assertEqual((c["model"], c["effort"]), ("deepseek-v4-pro", "max"))
         self.assertEqual(done["session_id"], sid)
 
+    def test_tools_are_shown_before_the_cli_finishes_without_duplicates(self):
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release)}):
+            job = self.m.jobs[self.m.start("look at the paper", None, "ask")["job"]]
+            try:
+                deadline = time.monotonic() + 3
+                while not any(e["t"] == "tool" for e in job.events) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertFalse(job.done)
+                self.assertTrue(any(e["t"] == "tool" for e in job.events), "tools arrive while the CLI is still running")
+                time.sleep(.7)                   # another session probe must not repeat them
+                self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool_result"]), 1)
+
     def test_ask_is_read_only(self):
         done = wait_done(self.m.jobs[self.m.start("EDIT nothing, just explain", None, "ask")["job"]])
         self.assertEqual(done["reverted"], ["main.tex"])

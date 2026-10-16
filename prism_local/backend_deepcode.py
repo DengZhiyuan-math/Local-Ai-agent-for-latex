@@ -8,8 +8,8 @@ documentation lists for agents. Each chat turn runs it non-interactively in the 
 with the message on stdin: Deep Code appends piped stdin to the prompt, and stdin keeps a
 long message with newlines, quotes or % intact, which an argument through Windows' npm
 ``deepcode.cmd`` shim would not. It prints only the final reply, at the end; afterwards
-prism-local reads the session Deep Code saved (~/.deepcode/projects/<project code>/) for
-the session id, to continue the conversation, and for the tools it used.
+prism-local follows the session Deep Code saves (~/.deepcode/projects/<project code>/)
+for live tool progress and the session id used to continue the conversation.
 
 Settings are Deep Code's own (~/.deepcode/settings.json: model, base URL, API key,
 permissions). prism-local only adds DEEPCODE_API_KEY from DEEPSEEK_API_KEY when Deep Code
@@ -340,7 +340,31 @@ class DeepCode(Backend):
         start = time.time()
         job.emit({"t": "thinking_start"})       # it prints nothing until the reply
         out_lines: list[str] = []
-        with cli_process(job, cmd, self.message(job), self.env(job)) as (proc, lines, err_lines):
+        seen, results = set(), set()
+        live_sid, stamp, checked = job.session_id, None, 0.0
+
+        def progress():
+            nonlocal live_sid, stamp, checked
+            now = time.monotonic()
+            if now - checked < .5:
+                return
+            checked = now
+            live_sid = live_sid or latest_session(job.root, start)
+            if not live_sid:
+                return
+            try:
+                stat = (sessions_dir(job.root) / f"{live_sid}.jsonl").stat()
+                current = (stat.st_mtime_ns, stat.st_size)
+                if current == stamp or stat.st_mtime_ns < int(start * 1e9):
+                    return
+                if self.check_session(job.root, live_sid):
+                    return
+                self._replay_tools(job, live_sid, start, seen=seen, results=results)
+                stamp = current
+            except (OSError, UnicodeError, ValueError):
+                pass                            # a session may be halfway through a write
+
+        with cli_process(job, cmd, self.message(job), self.env(job), on_idle=progress) as (proc, lines, err_lines):
             if proc is None:
                 return {"billing": "api"}       # stopped before it started
             for line in lines:
@@ -354,7 +378,7 @@ class DeepCode(Backend):
                 raise ValueError(bad)
             st["session_id"] = sid
             job.emit({"t": "init", "session_id": sid, "model": job.model})
-            self._replay_tools(job, sid, start)
+            self._replay_tools(job, sid, start, seen=seen, results=results)
         reply = "".join(out_lines).strip()
         if reply:
             job.emit({"t": "message_start"})
@@ -367,7 +391,7 @@ class DeepCode(Backend):
                 job.emit({"t": "error", "message": msg})
         return st
 
-    def _replay_tools(self, job: Job, sid: str, since: float) -> None:
+    def _replay_tools(self, job: Job, sid: str, since: float, *, seen=None, results=None) -> None:
         """The tools this turn used, from the session Deep Code saved (it prints none)."""
         try:
             lines = (sessions_dir(job.root) / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines()
@@ -383,15 +407,16 @@ class DeepCode(Backend):
                 msgs.append(m)
         # This turn's part: after the last user message that carries our prompt.
         start = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
-        seen = set()
-        for m in msgs[start + 1:]:
+        seen = set() if seen is None else seen
+        results = set() if results is None else results
+        for offset, m in enumerate(msgs[start + 1:]):
             params = m.get("messageParams") or {}
             calls = m.get("tool_calls") or params.get("tool_calls") or []
             # Native Deep Code session records store the function on the tool message.
             if m.get("role") == "tool" and (m.get("meta") or {}).get("function"):
                 calls = [{"id": params.get("tool_call_id"), "function": m["meta"]["function"]}]
-            for call in calls:
-                cid = str(call.get("id") or len(job.events))
+            for call_index, call in enumerate(calls):
+                cid = str(call.get("id") or f"deepcode-{start}-{offset}-{call_index}")
                 if cid in seen:
                     continue
                 seen.add(cid)
@@ -408,10 +433,15 @@ class DeepCode(Backend):
                     path, lines = file_place(name, args)
                 job.tool(cid, name, summary, path=path, lines=lines)
             if m.get("role") == "tool":
+                rid = str(m.get("tool_call_id") or params.get("tool_call_id")
+                          or f"deepcode-result-{start}-{offset}")
+                if rid in results:
+                    continue
+                results.add(rid)
                 content = m.get("content")
                 try:
                     result = json.loads(content or "{}")
                 except (TypeError, ValueError):
                     result = {}
                 failed = isinstance(result, dict) and (result.get("ok") is False or bool(result.get("error")))
-                job.tool_result(m.get("tool_call_id") or params.get("tool_call_id") or "", failed, content)
+                job.tool_result(rid, failed, content)

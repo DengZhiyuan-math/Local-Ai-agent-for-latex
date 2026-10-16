@@ -449,7 +449,7 @@ OUTPUT_GRACE = 5      # seconds a CLI's output may stay open after it exited
 
 
 @contextmanager
-def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
+def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *, on_idle=None, **popen):
     """A turn's CLI, its input `stdin` (the prompt goes through stdin so it can never be
     parsed as a flag). Yields (process, its output lines, its stderr lines so far); (None,
     [], []) when Stop was pressed before it started, so it never starts. Stop pressed while
@@ -461,7 +461,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
 
     The output ends when the CLI's does, or OUTPUT_GRACE after the CLI exited (at once
     after Stop): a command it started (a background shell) may hold the output open for
-    good, and the turn must not wait for it."""
+    good, and the turn must not wait for it. An optional short on_idle callback can read
+    progress from a CLI that saves its events elsewhere instead of printing them."""
     if job.cancel.is_set():
         yield None, [], []
         return
@@ -497,6 +498,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, **popen):
             try:
                 line = out.get(timeout=0.2)
             except queue.Empty:
+                if on_idle is not None and not job.cancel.is_set():
+                    on_idle()
                 if proc.poll() is None:
                     continue
                 exited = exited or time.monotonic()
