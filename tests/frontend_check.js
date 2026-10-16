@@ -408,6 +408,8 @@ check("message composition keeps commands first and scopes only mentioned files"
     { prompt: "/review\n\nREF\n\nFILE", scope: ["a.tex", "b.tex"] });
   assert.deepStrictEqual(Chat.compose({ text: "explain", refs: "REF", attached: "FILE", mode: "ask", mentions: [{ file: "a.tex" }] }),
     { prompt: "FILE\n\nREF\n\nexplain", scope: null });
+  for (const text of ["/usr/bin/latex fails", "/ what does this do"])           // a path, a lone slash
+    assert.strictEqual(Chat.compose({ text, refs: "REF" }).prompt, "REF\n\n" + text, text);
 });
 check("build descriptions distinguish a stopped build from a PDF with errors", () => {
   assert.strictEqual(Util.describeBuild({ cancelled: true, exit: 1, seconds: 2 }, []).cls, "warn");

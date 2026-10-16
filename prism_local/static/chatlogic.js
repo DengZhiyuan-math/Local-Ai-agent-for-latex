@@ -33,7 +33,7 @@ const ChatLogic = (() => {
   const slashPrompt = (text, refs) => (refs ? text + "\n\n" + refs : text);
 
   function compose({ text, refs = "", attached = "", mentions = [], mode = "ask" }) {
-    const slash = text.startsWith("/");
+    const slash = /^\/[\w:.-]+(?:\s|$)/.test(text);    // a command as the page reads one (not /usr/bin)
     let prompt = slash ? slashPrompt(text, refs) : refs ? refs + "\n\n" + text : text;
     if (attached) prompt = slash ? prompt + "\n\n" + attached : attached + "\n\n" + prompt;
     const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
