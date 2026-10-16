@@ -1717,13 +1717,13 @@ async function sendMessage() {
 // running when this page loaded (a reload), which is then shown and can be stopped.
 // What each event shows is turn.js's; here it is drawn.
 async function followTurn(job, provider, mode) {
-  C.job = job; AV.hidden = false; AH.clear();   // last turn's marks go
+  C.job = job; C.stopping = false; setUndoBusy(true); AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
   const t = Turn.create();
   const log = $("#chat-log");
-  const status = (s) => { $("#chat-status").textContent = s; };
+  const status = (s) => { $("#chat-status").textContent = C.stopping ? "Stopping…" : s; };
   const messages = new Map();    // message id -> element
   const tools = new Map();       // tool id -> its row
   // Thinking and the text of a file being written stream into their own boxes, which close
@@ -1814,20 +1814,23 @@ async function followTurn(job, provider, mode) {
   };
   try {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
-    let retry = 1000, after = 0, done = false;
+    let attempts = 0, after = 0, done = false;
     while (!done) {
       // A hidden page asks every 5 s without the server waiting: a waiting request holds
       // one of the few connections the browser keeps to this server (see common.js).
       if (document.visibilityState === "hidden") await nap(5000, 5000);
       const d = await Q.events(job, after, document.visibilityState === "hidden" ? 0 : undefined);
-      if (d._status === 0) {
-        status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
-        await new Promise((res) => setTimeout(res, retry));
-        retry = Math.min(retry * 2, 30000);
-        continue;
+      if (d._status !== 200) {
+        if (!foreignProject && Turn.pollFailed(d._status, attempts) === "retry") {
+          const retry = Turn.pollDelay(attempts++);
+          status(`Connection interrupted; trying again in ${Math.round(retry / 1000)}s…`);
+          await new Promise((res) => setTimeout(res, retry));
+          continue;
+        }
+        chatAppend('<div class="warn">The server lost this turn, possibly during a restart. Its result is unknown. Check your files; Undo is unavailable for this turn.</div>', "card");
+        break;
       }
-      retry = 1000;
-      if (d._status !== 200) break;
+      attempts = 0;
       const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
       show(t.feed(d.events), stick);
       draw(stick);
@@ -1837,7 +1840,7 @@ async function followTurn(job, provider, mode) {
   } finally {            // whatever happened above, the panel and saving work again
     clearInterval(timer);
     show(t.end(), false); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
-    C.job = null; C.editTurn = false;
+    C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
     saveChatLog();
@@ -1918,8 +1921,15 @@ $("#quota").addEventListener("click", (e) => {
 });
 
 
+function setUndoBusy(busy) {
+  for (const button of document.querySelectorAll("[data-undo]")) {
+    if (busy && !button.disabled) { button.dataset.turnBusy = "1"; button.disabled = true; button.title = "Wait until the current turn ends."; }
+    else if (!busy && button.dataset.turnBusy) { delete button.dataset.turnBusy; button.disabled = false; button.title = ""; }
+  }
+}
 function renderTurnCard(e) {
-  let h = "";
+  const result = Turn.result(e);
+  let h = result.outcome === "stopped" ? '<div class="meta">Stopped</div>' : "";
   if (e.changed && e.changed.length) {
     h += `<div class="row"><b>Changed ${e.changed.length} file${e.changed.length > 1 ? "s" : ""}</b>
       <button class="tiny sp" data-undo="${e.turn}">Undo this turn</button>
@@ -1959,8 +1969,7 @@ function renderTurnCard(e) {
     h += `<div class="warn">Changes exceeded this turn's permissions and could not be restored: ${esc(e.out_of_scope.join(", "))}.</div>`;
   if (e.new_metadata && e.new_metadata.length)
     h += `<div class="warn">New repository or agent metadata appeared during this turn: ${esc(e.new_metadata.join(", "))}. Nothing was removed; delete it if you did not create it.</div>`;
-  if (e.exit !== 0 || e.is_error)
-    h += `<div class="err">${esc((P.byId[e.provider] || {}).label || "The agent")}: ${esc(e.subtype || "exit " + e.exit)}.${e.stderr ? "\n" + esc(e.stderr) : ""}</div>`;
+  if (result.error) h += `<div class="err">${esc(result.error)}</div>`;
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
   const tokens = e.usage && (e.usage.in || e.usage.out) ? `${k(e.usage.in || 0)} in / ${k(e.usage.out || 0)} out tokens` : "";
   // With the claude.ai login a turn costs no money: it counts against the plan's usage
@@ -1973,6 +1982,7 @@ function renderTurnCard(e) {
   const meta = [e.duration ? (e.duration / 1000).toFixed(1) + "s" : "", cost, tokens, billing].filter(Boolean).join(" · ");
   if (meta) h += `<div class="meta">${esc(meta)}</div>`;
   chatAppend(h, "card");
+  setUndoBusy(!!C.job);
 }
 
 $("#chat-log").addEventListener("click", async (ev) => {
@@ -1983,7 +1993,8 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-compile]")) return compile();
   const u = ev.target.closest("[data-undo]");
   if (u) {
-    if (S.tabs.some(isDirty) && !(await saveAll()).ok) return;
+    if (C.job) return toast("Wait until the current turn ends before Undo.");
+    const saved = await saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
     const r = await Q.undo(+u.dataset.undo);
     if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
@@ -2188,7 +2199,16 @@ $("#chat-log").addEventListener("click", (e) => {
   else { $("#chat-input").value = v; $("#chat-input").focus(); updateScope(); }
 });
 
-$("#chat-send").onclick = () => { if (C.job) Q.stop(C.job); else chatSend(); };
+async function stopTurn() {
+  if (!C.job || C.stopping) return;
+  C.stopping = true; $("#chat-send").textContent = "Stopping…"; $("#chat-status").textContent = "Stopping…";
+  const job = C.job, r = await Q.stop(job);
+  if (C.job === job && r._status !== 200) {
+    C.stopping = false; $("#chat-send").textContent = "Stop";
+    toast("Could not stop the agent: " + (r.error || r._status));
+  }
+}
+$("#chat-send").onclick = () => { if (C.job) stopTurn(); else chatSend(); };
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
 });

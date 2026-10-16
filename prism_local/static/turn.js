@@ -152,7 +152,15 @@ const Turn = (() => {
     });
   }
 
-  return { create, needsCompile };
+  const pollFailed = (status) => status === 0 || status === 408 || status === 429 || status >= 500 ? "retry" : "lost";
+  const pollDelay = (attempts) => Math.min(30000, 1000 * 2 ** Math.min(attempts, 5));
+  function result(e) {
+    const outcome = e.outcome || (e.is_error || (e.exit != null && e.exit !== 0) ? "failed" : "ok");
+    const error = outcome !== "failed" ? null : "outcome" in e ? e.error || null
+      : e.error || `${e.subtype || "exit " + e.exit}${e.stderr ? "\n" + e.stderr : ""}`;
+    return { outcome, error };
+  }
+  return { create, needsCompile, pollFailed, pollDelay, result };
 })();
 
 if (typeof module !== "undefined") module.exports = Turn;

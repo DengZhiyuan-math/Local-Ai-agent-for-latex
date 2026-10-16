@@ -62,4 +62,34 @@ try {
     return foreignProject && polls === 1 && !saved.ok && text === "keep these edits" && !!$("#other-project");`));
   check("startup and reconciliation raise no page errors", p.errors.length === 0);
 } finally { await p.close(); }
+p = await page();
+try {
+  await p.wait("S.ready && !S.restoring && S.active");
+  check("a temporary event failure keeps the turn and saves held", await p.ev(`
+    const real = Q.events; let calls = 0;
+    Q.events = async () => ++calls === 1 ? { _status: 502 } : { _status: 200, done: true,
+      events: [{ t: "done", turn: 9001, provider: "slow", changed: [], outcome: "stopped", exit: 1, stderr: "terminated" }] };
+    const following = followTurn(9001, "slow", "edit");
+    await new Promise(r => setTimeout(r, 30));
+    const held = C.job === 9001 && C.editTurn && (await TABS.save(activeTab())).reason === "held";
+    await following; Q.events = real;
+    return held && calls === 2 && !C.job && !$("#chat-log").lastElementChild.querySelector(".err");`));
+  check("stopped turns have one neutral outcome", await p.ev(`return $("#chat-log").textContent.includes("Stopped") && !$("#chat-log").textContent.includes("terminated");`));
+  check("Undo is disabled during a turn and Stop failures remain retryable", await p.ev(`
+    renderTurnCard({ turn: 8000, outcome: "ok", exit: 0, changed: [{ path: "main.tex", diff: "+x" }] });
+    const realEvents = Q.events, realStop = Q.stop; let release;
+    Q.events = () => new Promise(r => { release = r; });
+    Q.stop = async () => ({ _status: 503, error: "temporarily busy" });
+    const following = followTurn(9002, "slow", "edit");
+    const disabled = document.querySelector('[data-undo="8000"]').disabled;
+    await stopTurn(); const retryable = !C.stopping && $("#chat-send").textContent === "Stop";
+    release({ _status: 200, done: true, events: [{ t: "done", turn: 9002, outcome: "ok", exit: 0, changed: [] }] });
+    await following; Q.events = realEvents; Q.stop = realStop;
+    return disabled && retryable && !document.querySelector('[data-undo="8000"]').disabled;`));
+  check("a missing job reports an unknown result without offering Undo", await p.ev(`
+    const real = Q.events; Q.events = async () => ({ _status: 404, error: "unknown job" });
+    await followTurn(9003, "slow", "edit"); Q.events = real;
+    return $("#chat-log").textContent.includes("result is unknown") && !document.querySelector('[data-undo="9003"]');`));
+  check("turn lifecycle raises no page errors", p.errors.length === 0);
+} finally { await p.close(); }
 process.exitCode = failures ? 1 : 0;
