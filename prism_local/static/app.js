@@ -887,22 +887,9 @@ async function showBuild(r) {
   const st = $("#build-status");
   if (!r.cancelled) S.diagnostics = r.diagnostics || [];      // a stopped build keeps the last list
   $("#output").textContent = r.output || "";
-  const errs = S.diagnostics.filter((d) => d.severity === "error").length;
-  const warns = S.diagnostics.length - errs;
-  let text, cls = "err";
-  if (r.cancelled) [text, cls] = ["build stopped", "warn"];
-  else if (r.timed_out) text = "stopped: the build took too long";
-  else if (r.exit === 0 || r.pdf_updated) {
-    text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
-    cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
-  } else text = `FAILED (exit ${r.exit})`;
-  st.className = "status " + cls;
-  st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
-  // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
-  const how = [r.main, r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
-    r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
-    ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
-  st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
+  const description = Util.describeBuild(r, S.diagnostics), errs = description.errors;
+  st.className = "status " + description.cls; st.textContent = description.text;
+  st.title = description.title; $("#build-info").textContent = description.title ? "Last build: " + description.title : "";
   renderProblems();
   applyDiagnostics();
   if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");

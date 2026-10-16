@@ -409,6 +409,12 @@ check("message composition keeps commands first and scopes only mentioned files"
   assert.deepStrictEqual(Chat.compose({ text: "explain", refs: "REF", attached: "FILE", mode: "ask", mentions: [{ file: "a.tex" }] }),
     { prompt: "FILE\n\nREF\n\nexplain", scope: null });
 });
+check("build descriptions distinguish a stopped build from a PDF with errors", () => {
+  assert.strictEqual(Util.describeBuild({ cancelled: true, exit: 1, seconds: 2 }, []).cls, "warn");
+  const pdf = Util.describeBuild({ pdf_updated: true, exit: 1, seconds: 3 }, [{ severity: "error" }]);
+  assert.strictEqual(pdf.cls, "err"); assert.ok(pdf.text.includes("PDF built with 1 error"));
+  assert.strictEqual(Util.describeBuild({ exit: 0, seconds: 1 }, []).text, "OK · 1s");
+});
 
 // ---------------------------------------------------------------- mathtext.js
 const MathText = require("../prism_local/static/mathtext.js");

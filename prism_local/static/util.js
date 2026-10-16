@@ -108,7 +108,23 @@ const Util = (() => {
     }
     return { set(key, value) { pending.set(key, value); if (frame === null) frame = schedule(flush); }, flush };
   }
-  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog, frameBatch };
+  function describeBuild(r, diagnostics) {
+    const errs = diagnostics.filter((d) => d.severity === "error").length;
+    const warns = diagnostics.length - errs;
+    let text, cls = "err";
+    if (r.cancelled) [text, cls] = ["build stopped", "warn"];
+    else if (r.timed_out) text = "stopped: the build took too long";
+    else if (r.exit === 0 || r.pdf_updated) {
+      text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
+      cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
+    } else text = `FAILED (exit ${r.exit})`;
+    // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
+    const how = [r.main, r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
+      r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
+      ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
+    return { text: text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`, cls, title: how, errors: errs };
+  }
+  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog, frameBatch, describeBuild };
 })();
 
 if (typeof module !== "undefined") module.exports = Util;
