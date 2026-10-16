@@ -1214,7 +1214,7 @@ window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.p
 // OpenAI-compatible API; see backends.py). Conversation, model and effort are kept per
 // provider. P holds what /api/agent/info reports about each provider.
 const P = { list: [], byId: {}, projectKey: null };
-const C = { provider: store.get("chat.provider", null), job: null, cur: null };
+const C = { provider: store.get("chat.provider", null), job: null };
 const prov = () => P.byId[C.provider] || { id: C.provider, label: "Agent", models: [], efforts: [] };
 const provLabel = () => prov().label || "the agent";
 // Settings saved before providers existed belong to Claude Code.
@@ -1770,23 +1770,22 @@ async function sendMessage() {
 
 // A turn's events into the panel, until it is done: the one just sent, or one already
 // running when this page loaded (a reload), which is then shown and can be stopped.
+// What each event shows is turn.js's; here it is drawn.
 async function followTurn(job, provider, mode) {
-  C.job = job; C.cur = null; AV.hidden = false; AH.clear();   // last turn's marks go
+  C.job = job; AV.hidden = false; AH.clear();   // last turn's marks go
   C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
-  const tools = new Map();
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
-  let after = 0, done = false, buf = "", streamed = false, changed = [];
-  // A streamed message is drawn once per batch of events, not once per fragment, and the
-  // log follows it only while you have not scrolled up to read something.
+  const t = Turn.create();
   const log = $("#chat-log");
-  const flush = (stick) => { if (C.cur) { C.cur.innerHTML = renderMd(buf); if (stick) log.scrollTop = log.scrollHeight; } };
-  // What the agent is doing now, in the status line: thinking, writing a file, running a tool.
   const status = (s) => { $("#chat-status").textContent = s; };
+  const messages = new Map();    // message id -> element
+  const tools = new Map();       // tool id -> its row
   // Thinking and the text of a file being written stream into their own boxes, which close
-  // when that step ends (click to open them again). Drawn once per batch, like messages.
-  let think = null;              // {box, text} of the thinking being streamed
-  const live = new Map();        // tool id -> {box, pre, text, path, name}
+  // when that step ends (click to open them again). Their text is drawn once per batch of
+  // events, and the log follows only while you have not scrolled up to read something.
+  let think = null;              // {box, pre, text} of the thinking being streamed
+  const live = new Map();        // tool id -> {box, pre, text}
   const dirty = new Set();
   const draw = (stick) => {
     for (const x of dirty) {
@@ -1797,28 +1796,6 @@ async function followTurn(job, provider, mode) {
     AV.render();
     if (stick) log.scrollTop = log.scrollHeight;
   };
-  // Newer models (Opus) think without sending the text: the box then counts the seconds.
-  const endThinking = () => {
-    if (!think) return;
-    clearInterval(think.timer);
-    const secs = Math.round((Date.now() - think.t0) / 1000);
-    think.box.querySelector("summary").textContent = think.text
-      ? `Thought for ${secs}s` : `Thought for ${secs}s (this model does not show its thinking)`;
-    if (!think.text) think.pre.remove();
-    think.box.open = false; think = null;
-  };
-  const startThinking = () => {
-    C.cur = null;
-    if (think) return;
-    think = liveBox("thinking", "Thinking…"); think.t0 = Date.now();
-    const tick = () => {
-      const secs = Math.round((Date.now() - think.t0) / 1000);
-      think.box.querySelector("summary").textContent = `Thinking… ${secs}s`;
-      status(`thinking… ${secs}s`);
-    };
-    const t = think; think.timer = setInterval(() => { if (think === t) tick(); }, 1000);
-    tick();
-  };
   const liveBox = (cls, summary) => {
     const box = document.createElement("details");
     box.className = cls; box.open = true;
@@ -1827,9 +1804,71 @@ async function followTurn(job, provider, mode) {
     return { box, pre: box.querySelector("pre"), text: "" };
   };
   const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
+  // Newer models (Opus) think without sending the text: the box then counts the seconds.
+  const tick = () => {
+    if (!think || t.thinking() === null) return;
+    think.box.querySelector("summary").textContent = `Thinking… ${t.thinking()}s`;
+    status(t.status);
+  };
+  const timer = setInterval(tick, 1000);
+  const show = (steps, stick) => {
+    for (const s of steps) {
+      if (s.mark === "clear-read") AH.clear("read");          // a read stays marked until the agent's next step
+      else if (s.mark === "on") AH.on(s.path);
+      else if (s.mark === "read") AH.set(s.path, "read", s.from, s.to);
+      else if (s.view === "begin") AV.begin(s.id, s.name, s.path);
+      else if (s.view === "feed") AV.feed(s.event);
+      else if (s.view === "end") AV.end(s.id, s.ok);
+      else if (s.save === "session") {
+        // The session belongs to the provider that ran the turn, even if the menu changed since.
+        store.set(conversationKey("session", provider), s.id);
+        if (C.provider === provider) C.session = s.id;
+      } else if (s.draw === "thinking") { think = liveBox("thinking", "Thinking…"); tick(); }
+      else if (s.draw === "thinking-text") { think.text += s.text; dirty.add(think); }
+      else if (s.draw === "thinking-end") {
+        think.box.querySelector("summary").textContent = s.shown
+          ? `Thought for ${s.secs}s` : `Thought for ${s.secs}s (this model does not show its thinking)`;
+        if (!s.shown) think.pre.remove();
+        think.box.open = false; think = null;
+      } else if (s.draw === "message") {
+        let el = messages.get(s.id);
+        if (!el) messages.set(s.id, el = chatAppend("", "msg assistant"));
+        el.innerHTML = renderMd(s.text);
+        if (stick) log.scrollTop = log.scrollHeight;
+      } else if (s.draw === "tool") {
+        // Claude Code announced this call already (tool_start): fill in its summary.
+        const el = tools.get(s.id) || chatAppend("", "tool");
+        el.innerHTML = toolLabel(s.name, s.summary);
+        el.title = `${s.name} ${s.summary}`;
+        tools.set(s.id, el);
+      } else if (s.draw === "tool-result") {
+        const el = tools.get(s.id);
+        if (el) { el.querySelector(".st").textContent = s.ok ? "✓" : "✗"; if (!s.ok) { el.classList.add("err"); el.title += "\n" + s.preview; } }
+      } else if (s.draw === "live") live.set(s.id, liveBox("live-file", s.name));
+      else if (s.draw === "live-path") {
+        live.get(s.id).box.querySelector("summary").textContent = `${s.name} ${s.path}`;
+        const el = tools.get(s.id); if (el) el.innerHTML = toolLabel(s.name, s.path);
+      } else if (s.draw === "live-text") { const x = live.get(s.id); x.text += s.text; dirty.add(x); }
+      else if (s.draw === "live-close") {
+        const x = live.get(s.id);
+        if (x) { draw(false); x.box.open = false; live.delete(s.id); }
+      } else if (s.draw === "build") showBuild(s.event.result);         // the agent compiled
+      else if (s.draw === "error") chatAppend(`<div class="err">${esc(s.event.message)}</div>`, "card");
+      else if (s.draw === "context") {                                   // grows with each message
+        if (C.provider === provider) renderContext({ ...s.event, window: s.event.window || (provGet("context") || {}).window });
+      } else if (s.draw === "done") {
+        const e = s.event;
+        renderTurnCard(e); loadAccount();
+        if (e.context && C.provider === provider) {
+          const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
+          provSet("context", c); renderContext(c);
+        }
+      }
+    }
+  };
   try {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
-    let retry = 1000;
+    let retry = 1000, after = 0, done = false;
     while (!done) {
       // A hidden page asks every 5 s without the server waiting: a waiting request holds
       // one of the few connections the browser keeps to this server (see common.js).
@@ -1841,84 +1880,17 @@ async function followTurn(job, provider, mode) {
         retry = Math.min(retry * 2, 30000);
         continue;
       }
-      if (retry > 1000) { retry = 1000; status("working…"); }
+      retry = 1000;
       if (d._status !== 200) break;
       const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
-      let pending = false;
-      for (const e of d.events) {
-        if (e.t !== "delta" && pending) { flush(stick); pending = false; }
-        if (e.t !== "thinking" && e.t !== "thinking_start") endThinking();
-        if (e.t === "thinking_start") startThinking();
-        else if (e.t === "thinking") { startThinking(); think.text += e.text; dirty.add(think); }
-        else if (e.t === "tool_start") {
-          C.cur = null;
-          AH.clear("read");          // a read stays marked until the agent's next step
-          tools.set(e.id, chatAppend(toolLabel(e.name, ""), "tool"));
-          status(`${e.name}…`);
-        }
-        else if (e.t === "tool_live") {
-          let x = live.get(e.id);
-          if (!x) {
-            const name = tools.get(e.id) ? tools.get(e.id).textContent.slice(1).trim() : "Write";
-            x = liveBox("live-file", name); x.name = name; live.set(e.id, x);
-          }
-          if (e.path) {
-            x.path = e.path; x.box.querySelector("summary").textContent = `${x.name} ${e.path}`;
-            const el = tools.get(e.id); if (el) el.innerHTML = toolLabel(x.name, e.path);
-            AV.begin(e.id, x.name, e.path); AH.on(e.path);
-          }
-          if (e.text) { x.text += e.text; dirty.add(x); }
-          AV.feed(e);
-          status(`writing ${x.path || "a file"}… (${x.text.split("\n").length} lines)`);
-        }
-        else if (e.t === "init") {
-          // The session belongs to the provider that ran the turn, even if the menu changed since.
-          store.set(conversationKey("session", provider), e.session_id);
-          if (C.provider === provider) C.session = e.session_id;
-        }
-        else if (e.t === "message_start") { C.cur = null; buf = ""; streamed = false; }
-        else if (e.t === "delta") {
-          if (!C.cur) { C.cur = chatAppend("", "msg assistant"); buf = ""; status("writing a reply…"); }
-          streamed = true; buf += e.text; pending = true;
-        } else if (e.t === "text") {
-          if (!streamed) { C.cur = chatAppend("", "msg assistant"); buf = e.text; flush(stick); C.cur = null; }
-        } else if (e.t === "tool") {
-          C.cur = null;
-          // Claude Code announced this call already (tool_start): fill in its summary.
-          const el = tools.get(e.id) || chatAppend("", "tool");
-          el.innerHTML = toolLabel(e.name, e.summary);
-          el.title = `${e.name} ${e.summary || ""}`;
-          tools.set(e.id, el);
-          AH.clear("read");          // (backends without tool_start)
-          if (e.path) AH.on(e.path);
-          if (e.path && e.lines) AH.set(e.path, "read", e.lines[0] - 1, e.lines[1] - 1);
-          status(`${e.name} ${e.summary || ""}`.trim().slice(0, 80) + "…");
-        } else if (e.t === "tool_result") {
-          const el = tools.get(e.id);
-          if (el) { el.querySelector(".st").textContent = e.error ? "✗" : "✓"; if (e.error) { el.classList.add("err"); el.title += "\n" + e.preview; } }
-          const x = live.get(e.id);
-          if (x) { draw(false); x.box.open = false; live.delete(e.id); }
-          AV.end(e.id, !e.error);
-          status("working…");
-        } else if (e.t === "build") showBuild(e.result);         // the agent compiled
-        else if (e.t === "error") chatAppend(`<div class="err">${esc(e.message)}</div>`, "card");
-        else if (e.t === "context") {                          // grows with each message
-          if (C.provider === provider) renderContext({ ...e, window: e.window || (provGet("context") || {}).window });
-        }
-        else if (e.t === "done") {
-          renderTurnCard(e); loadAccount(); changed = (e.changed || []).map((c) => c.path);
-          if (e.context && C.provider === provider) {
-            const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
-            provSet("context", c); renderContext(c);
-          }
-        }
-      }
-      if (pending) flush(stick);
+      show(t.feed(d.events), stick);
       draw(stick);
+      status(t.status);
       after += d.events.length; done = d.done;
     }
   } finally {            // whatever happened above, the panel and saving work again
-    endThinking(); draw(false); live.forEach((x) => { x.box.open = false; }); AV.end(null, false); AH.on(null); AH.clear("read");
+    clearInterval(timer);
+    show(t.end(), false); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
     C.job = null; C.editTurn = false;
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
@@ -1926,10 +1898,8 @@ async function followTurn(job, provider, mode) {
     await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
     flushSaves();        // … then save what you typed meanwhile
     // Auto-compile the agent's changes too, unless its own last build already has them.
-    if ($("#auto-compile").checked && changed.some((path) => {
-      const f = S.files.find((x) => x.path === path);
-      return !f || !S.pdfMtime || f.mtime > S.pdfMtime;
-    })) scheduleCompile(null);     // the document the agent edited, whichever tab is open
+    if ($("#auto-compile").checked && Turn.needsCompile(t.changed, S.files, S.pdfMtime))
+      scheduleCompile(null);     // the document the agent edited, whichever tab is open
   }
 }
 

@@ -308,6 +308,100 @@ check("closing tabs", () => {
   assert.deepStrictEqual([s.tabs.map((t) => t.path), s.get("sec/b.tex")], [["a.tex"], null]);
 });
 
+// ---------------------------------------------------------------- turn.js
+const Turn = require("../prism_local/static/turn.js");
+// A clock the test moves; steps as short strings, to compare whole turns at once.
+function clock() { const c = { ms: 0, now: () => c.ms }; return c; }
+const brief = (steps) => steps.map((s) => {
+  if (s.mark) return `mark ${s.mark}${s.path ? " " + s.path : ""}${s.mark === "read" ? ` ${s.from}-${s.to}` : ""}`;
+  if (s.view) return `view ${s.view}${s.view === "feed" ? "" : " " + s.id}`;
+  if (s.save) return `session ${s.id}`;
+  const x = { message: `${s.id} ${JSON.stringify(s.text)}`, tool: `${s.id} ${s.name} ${s.summary}`,
+    "tool-result": `${s.id} ${s.ok ? "ok" : "failed"}`, live: `${s.id} ${s.name}`, "live-path": `${s.id} ${s.path}`,
+    "live-text": `${s.id} ${JSON.stringify(s.text)}`, "live-close": s.id, "thinking-text": JSON.stringify(s.text),
+    "thinking-end": `${s.secs}s ${s.shown ? "shown" : "not shown"}` }[s.draw];
+  return x === undefined ? s.draw : `${s.draw} ${x}`;
+});
+
+check("a Claude Code turn: thinking, a streamed reply, an Edit written live, then the reply", () => {
+  const c = clock(), t = Turn.create({ now: c.now });
+  assert.deepStrictEqual(brief(t.feed([{ t: "init", session_id: "s1" }, { t: "message_start" }, { t: "thinking_start" }])),
+    ["session s1", "thinking"]);
+  c.ms = 3400;
+  assert.strictEqual(t.status, "thinking… 3s");
+  assert.strictEqual(t.thinking(), 3);
+  assert.deepStrictEqual(brief(t.feed([{ t: "thinking", text: "hmm" }, { t: "delta", text: "I will " }, { t: "delta", text: "edit." },
+    { t: "tool_start", id: "u1", name: "Edit" }])),
+    ['thinking-text "hmm"', "thinking-end 3s shown", 'message 1 "I will edit."', "mark clear-read", "tool u1 Edit "]);
+  assert.strictEqual(t.status, "Edit…");
+  assert.strictEqual(t.thinking(), null);
+  assert.deepStrictEqual(brief(t.feed([{ t: "tool_live", id: "u1", path: "a.tex" }, { t: "tool_live", id: "u1", old: "x", old_done: true },
+    { t: "tool_live", id: "u1", text: "one\ntwo\n" }])),
+    ["live u1 Edit", "live-path u1 a.tex", "view begin u1", "mark on a.tex", "view feed", "view feed", 'live-text u1 "one\\ntwo\\n"', "view feed"]);
+  assert.strictEqual(t.status, "writing a.tex… (3 lines)");
+  assert.deepStrictEqual(brief(t.feed([{ t: "tool", id: "u1", name: "Edit", summary: "a.tex", path: "a.tex" },
+    { t: "tool_result", id: "u1", error: false, preview: "" }])),
+    ["tool u1 Edit a.tex", "mark clear-read", "mark on a.tex", "tool-result u1 ok", "live-close u1", "view end u1"]);
+  assert.strictEqual(t.status, "working…");
+  // The reply streams, then comes whole (text): drawn once, as one message.
+  assert.deepStrictEqual(brief(t.feed([{ t: "message_start" }, { t: "delta", text: "Done" }])), ['message 2 "Done"']);
+  assert.strictEqual(t.status, "writing a reply…");
+  assert.deepStrictEqual(brief(t.feed([{ t: "delta", text: "." }, { t: "text", text: "Done." }, { t: "context", used: 9 },
+    { t: "rate", rate: {} }, { t: "done", changed: [{ path: "a.tex" }] }])),
+    ['message 2 "Done."', "context", "done"]);
+  assert.deepStrictEqual([t.session, t.changed, brief(t.end())], ["s1", ["a.tex"], []]);
+});
+
+check("a Codex turn: whole messages, and tools announced only when they ran", () => {
+  const t = Turn.create({ now: clock().now });
+  assert.deepStrictEqual(brief(t.feed([{ t: "init", session_id: "th" }, { t: "message_start" }, { t: "text", text: "Looking." },
+    { t: "tool", id: "c1", name: "Read", summary: "a.tex", path: "a.tex", lines: [3, 5] },
+    { t: "tool_result", id: "c1", error: true, preview: "denied" },
+    { t: "message_start" }, { t: "text", text: "Could not." }, { t: "error", message: "x" }, { t: "done", changed: [] }])),
+    ["session th", 'message 1 "Looking."', "tool c1 Read a.tex", "mark clear-read", "mark on a.tex", "mark read a.tex 2-4",
+      "tool-result c1 failed", "view end c1", 'message 2 "Could not."', "error", "done"]);
+  assert.strictEqual(t.status, "working…");
+});
+
+check("an OpenAI-compatible turn: reasoning and reply both streamed, across batches", () => {
+  const c = clock(), t = Turn.create({ now: c.now });
+  assert.deepStrictEqual(brief(t.feed([{ t: "init", session_id: "o" }, { t: "message_start" }, { t: "thinking", text: "a" }])),
+    ["session o", "thinking", 'thinking-text "a"']);
+  c.ms = 1600;
+  assert.deepStrictEqual(brief(t.feed([{ t: "thinking", text: "b" }, { t: "delta", text: "Hi" }])),
+    ['thinking-text "b"', "thinking-end 2s shown", 'message 1 "Hi"']);
+  assert.deepStrictEqual(brief(t.feed([{ t: "delta", text: " there" }])), ['message 1 "Hi there"']);
+  assert.deepStrictEqual(brief(t.feed([])), [], "nothing new: nothing drawn");
+});
+
+check("a model that thinks without showing it (Deep Code, Opus) counts the seconds", () => {
+  const c = clock(), t = Turn.create({ now: c.now });
+  t.feed([{ t: "thinking_start" }]);
+  c.ms = 12000;
+  assert.strictEqual(t.status, "thinking… 12s");
+  assert.deepStrictEqual(brief(t.feed([{ t: "init", session_id: "d" }, { t: "message_start" }, { t: "text", text: "Ok" }])),
+    ["thinking-end 12s not shown", "session d", 'message 1 "Ok"']);
+});
+
+check("a turn stopped or cut off closes what is still open", () => {
+  const c = clock(), t = Turn.create({ now: c.now });
+  t.feed([{ t: "tool_live", id: "w", text: "abc" }]);
+  assert.strictEqual(t.status, "writing a file… (1 lines)");
+  t.feed([{ t: "thinking_start" }]);
+  c.ms = 2000;
+  assert.deepStrictEqual(brief(t.end()), ["thinking-end 2s not shown", "live-close w"]);
+  assert.deepStrictEqual(brief(t.end()), [], "once");
+});
+
+check("needsCompile: a changed file newer than the PDF, or not listed yet", () => {
+  const files = [{ path: "a.tex", mtime: 10 }, { path: "b.tex", mtime: 30 }];
+  assert.strictEqual(Turn.needsCompile([], files, 20), false);
+  assert.strictEqual(Turn.needsCompile(["a.tex"], files, 20), false, "its own build has it");
+  assert.strictEqual(Turn.needsCompile(["b.tex"], files, 20), true);
+  assert.strictEqual(Turn.needsCompile(["new.tex"], files, 20), true);
+  assert.strictEqual(Turn.needsCompile(["a.tex"], files, null), true, "no PDF yet");
+});
+
 Promise.all(pending).then(() => {
   if (failures.length) {
     console.error(failures.join("\n"));
