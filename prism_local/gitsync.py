@@ -43,7 +43,7 @@ import keepboth
 import registry
 import gitenv
 import sources
-from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, shared_marker  # noqa: F401
+from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
 import synctarget
@@ -176,6 +176,7 @@ class GitSync:
         self.last_push = 0.0
         self.ahead = self.behind = 0
         self.has_remote = False
+        self._remote_stamp = None             # _remote_state's answers are for this (refs_stamp)
         self.upstream: str | None = None
         self.target: dict | None = None
         self.blocked_reason: str | None = None
@@ -390,6 +391,13 @@ class GitSync:
 
     def _remote_state(self) -> None:
         self.validate_target()
+        # git is asked again only when the branches, the remotes or the configuration
+        # changed on the disk, or the target did: an idle push check every few seconds
+        # then runs no git at all.
+        stamp = refs_stamp(self.git_dir)
+        key = None if stamp is None else (stamp, json.dumps(self.target, sort_keys=True, default=str))
+        if key is not None and key == self._remote_stamp:
+            return
         # A target names one of the repository's remotes (_target checked it, and looks
         # again when the configuration changes): only without one is git asked.
         self.has_remote = bool(self.target) or bool(self.git("remote", timeout=20).stdout.strip())
@@ -404,6 +412,7 @@ class GitSync:
         else:
             n = self.git("rev-list", "--count", "HEAD", timeout=20).stdout.strip()
             self.ahead, self.behind = (int(n) if n.isdigit() else 0), 0
+        self._remote_stamp = key
 
     @one_at_a_time
     def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> Outcome:

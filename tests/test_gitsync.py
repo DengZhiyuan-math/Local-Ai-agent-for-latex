@@ -63,6 +63,24 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_an_idle_push_check_runs_no_git(self):
+        """The push due every few seconds, with nothing new, asks git nothing: what it would
+        answer changes only with the refs, the index or the configuration (refs_stamp)."""
+        import proc
+        self.assertEqual(self.g.push(manual=True).state, "synced")
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            for _ in range(3):
+                self.assertEqual(self.g.push(manual=True).state, "synced")
+        self.assertEqual(run.call_count, 0, [c.args[0] for c in run.call_args_list])
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Saved")
+        self.assertEqual((self.g.push(manual=True).state, self.g.ahead), ("synced", 0))
+        self.assertEqual(git(self.remote, "log", "-1", "--format=%s", "main"), "Saved: main.tex", "a new commit is pushed")
+        git(self.root, "remote", "add", "spare", str(self.remote))     # the configuration changed
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.g.push(manual=True)
+        self.assertGreater(run.call_count, 0, "a changed configuration is looked at again")
+
     def test_your_edits_are_committed_while_a_push_is_on_the_network(self):
         """A push on a slow network takes minutes: the commit of your edits before an agent's
         turn (in the request that starts the turn) does not wait for it."""

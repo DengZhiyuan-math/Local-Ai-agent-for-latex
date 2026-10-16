@@ -23,6 +23,7 @@ A command that takes the index outside changing() is a bug, and raises at once.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 import time
@@ -182,6 +183,38 @@ def shared_marker(top: Path) -> bool:
         return bool(json.loads((top / SHARED_MARKER).read_text(encoding="utf-8")).get("shared"))
     except (OSError, ValueError, AttributeError):
         return False
+
+
+def refs_stamp(git_dir: Path | None) -> tuple | None:
+    """What changes on the disk whenever git's answer about the branches could: a
+    commit, a checkout, a fetch, a change of remotes or of the configuration rewrite one
+    of HEAD, the branch HEAD names, packed-refs, the remotes' refs, FETCH_HEAD, the index
+    or config. The same stamp twice: the answers are the same, and need no git (which
+    costs a process each time, some 20 ms on Windows and the antivirus's look).
+    None when the git dir cannot be looked at: then git is asked."""
+    if git_dir is None:
+        return None
+
+    def st(p: Path):
+        try:
+            s = p.stat()
+            return s.st_mtime_ns, s.st_size
+        except OSError:
+            return None
+    try:
+        git_dir = Path(git_dir)
+        common = git_dir
+        if (git_dir / "commondir").is_file():               # a worktree: refs live in the common dir
+            common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        branch = common / head[5:].strip() if head.startswith("ref:") else None
+        remotes = []
+        for folder, _, names in os.walk(common / "refs" / "remotes"):
+            remotes += [(folder, n, st(Path(folder) / n)) for n in sorted(names)]
+        return (head, st(git_dir / "HEAD"), st(branch) if branch else None, st(common / "packed-refs"),
+                st(git_dir / "index"), st(common / "config"), st(git_dir / "FETCH_HEAD"), tuple(sorted(remotes)))
+    except (OSError, ValueError):
+        return None
 
 
 @dataclass(frozen=True)
