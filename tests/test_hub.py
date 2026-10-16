@@ -531,6 +531,35 @@ class FolderSync(TempState):
         self.assertTrue((repo / hub.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
         self.assertFalse((repo / "prism-repo.json").exists())
 
+    def test_back_to_separate_repositories_failing_half_way_leaves_the_shared_one_whole(self):
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(r["ok"], r["report"])
+        repo = Path(hub.sync_plan(self.top["id"])["repo"])
+        real, fetched = hub.run_git, []
+
+        def second_fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                fetched.append(Path(cwd).name)
+                if len(fetched) == 2:
+                    raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(hub, "run_git", side_effect=second_fetch_fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        self.assertIn("the disk is full", " ".join(r["report"]))
+        self.assertTrue((repo / ".git").is_dir(), "the shared repository is in place")
+        self.assertFalse((repo / hub.SHARED_BACKUP).exists())
+        for p in hub.list_projects()["projects"]:
+            self.assertEqual(hub.repo_kind(Path(p["path"]))[0], "shared", p["name"])
+            self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
+        self.assertEqual(self.git(repo, "status", "--porcelain"), "", "nothing was left in the shared one")
+        # Tried again, it goes through, with the history.
+        r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertTrue(r["ok"], r["report"])
+        for name in ("练习/exam", "练习/ex 1"):
+            self.assertIn("in one repository", self.git(repo / name, "log", "--format=%s"), name)
+
     def test_rename_project_and_folder(self):
         old = self.projects / "ex 1"
         r = hub.rename_project(self.ids["ex 1"], "Exercise: one", folder=True)

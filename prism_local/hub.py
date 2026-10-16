@@ -594,6 +594,20 @@ def _init_own(root: Path) -> None:
         write_bytes(exclude, ("\n".join(lines) + "\n").encode("utf-8"))
 
 
+def _remove(p: Path) -> None:
+    """A file or folder this operation made, taken back (git's read-only objects too)."""
+    def writable(fn, path, _):
+        os.chmod(path, 0o700)
+        fn(path)
+    try:
+        if p.is_dir() and not p.is_symlink():
+            shutil.rmtree(p, onerror=writable)
+        elif p.exists():
+            p.unlink()
+    except OSError:
+        pass
+
+
 def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
     rows = [r for r in plan["projects"] if r["action"] in ("keeps", "splits", "new")]
     tops: dict[str, list[dict]] = {}
@@ -625,19 +639,33 @@ def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
                     continue
                 report.append(f"{Path(r['path']).name}: history not carried over "
                               f"({(e.stderr or '').strip()[-200:]}); it starts afresh")
-        os.replace(top / ".git", top / SHARED_BACKUP)
+        # Every project gets its repository and its history (from the shared one, still in
+        # place) before the shared one is set aside: a step failing for one of them takes
+        # back what was made for all, and the folder stays shared and whole. (Setting it
+        # aside first left the projects after the failing one with no repository, and
+        # their history only in the set-aside .git, which a retry did not use.)
+        made: list[Path] = []
+        try:
+            for r in members:
+                root = Path(r["path"])
+                made += [p for p in (root / ".git", root / ".gitignore", root / ".gitattributes") if not p.exists()]
+                _init_own(root)
+                if r.get("split"):
+                    run_git(root, "fetch", "-q", "--no-tags", str(top), r["split"], timeout=300)
+                    run_git(root, "reset", "-q", "FETCH_HEAD")
+            os.replace(top / ".git", top / SHARED_BACKUP)
+        except BaseException:
+            for p in reversed(made):
+                _remove(p)
+            raise
         try:
             (top / gitsync.SHARED_MARKER).unlink()
         except OSError:
             pass
         report.append(f"The shared repository in {top} is set aside as {SHARED_BACKUP}")
         for r in members:
-            root = Path(r["path"])
-            _init_own(root)
-            if r.get("split"):
-                run_git(root, "fetch", "-q", "--no-tags", str(top / SHARED_BACKUP), r["split"], timeout=300)
-                run_git(root, "reset", "-q", "FETCH_HEAD")
-            report.append(f"{root.name}: a repository of its own" + (", with its history" if r.get("split") else ""))
+            report.append(f"{Path(r['path']).name}: a repository of its own"
+                          + (", with its history" if r.get("split") else ""))
     for r in rows:
         if r["action"] == "new":
             _init_own(Path(r["path"]))
