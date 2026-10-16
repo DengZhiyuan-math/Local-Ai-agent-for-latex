@@ -140,6 +140,21 @@ class Run(unittest.TestCase):
         self.assertEqual((r.returncode, r.stdout.strip()), (4, "started"))
         self.assertTrue(gone(int(pidfile.read_text())), "what the command left still runs")
 
+    def test_a_daemon_the_command_started_on_its_own_carries_on(self):
+        """git's fsmonitor daemon, gpg-agent: started apart from the command's pipes, they
+        outlive it under subprocess.run, and did not once the command's job handle closed."""
+        import gc
+        pidfile = tmpdir() / "daemon.pid"
+        self.addCleanup(lambda: pidfile.exists() and pidfile.read_text() and kill_pid(int(pidfile.read_text())))
+        apart = "creationflags=0x208" if os.name == "nt" else "start_new_session=True"   # DETACHED, NEW_GROUP
+        code = ("import subprocess, sys; d = subprocess.DEVNULL; "
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=d, stdout=d, stderr=d, {apart}); "
+                f"open({str(pidfile)!r}, 'w').write(str(p.pid))")
+        self.assertEqual(proc.run([sys.executable, "-c", code], timeout=30).returncode, 0)
+        gc.collect()
+        time.sleep(1)
+        self.assertTrue(running(int(pidfile.read_text())), "the daemon was ended with the command")
+
     def test_output_input_exit_code_and_check_are_subprocess_runs(self):
         echo = [sys.executable, "-c", "import sys; d = sys.stdin.read(); print(d.upper()); "
                                       "print('e', file=sys.stderr); sys.exit(2)"]

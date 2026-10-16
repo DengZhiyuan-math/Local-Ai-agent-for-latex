@@ -64,7 +64,8 @@ def run(cmd, *, timeout: float, input=None, check: bool = False, **popen) -> sub
     still pending is given up. Raises subprocess.TimeoutExpired then, OSError when the
     program cannot start, and subprocess.CalledProcessError on failure with check=True.
     A program that exited but left a program of its own holding the pipes is done: what it
-    left is ended (end_group) and its own result returned.
+    left is ended (end_group) and its own result returned. What it started apart from its
+    pipes (git's fsmonitor daemon, gpg-agent) carries on, as under subprocess.run (release).
     Without `input`, stdin is empty (popen may say otherwise); popen is Popen's (text,
     encoding, cwd, env …)."""
     popen.setdefault("stdout", subprocess.PIPE)
@@ -92,6 +93,7 @@ def run(cmd, *, timeout: float, input=None, check: bool = False, **popen) -> sub
             raise subprocess.TimeoutExpired(cmd, timeout)
     if given_up_at is not None:
         raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    release(proc)
     if check and proc.returncode:
         raise subprocess.CalledProcessError(proc.returncode, cmd, out, err)
     return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
@@ -134,6 +136,20 @@ def end_group(proc: subprocess.Popen) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def release(proc: subprocess.Popen) -> None:
+    """After `proc` (started by start()) has exited: what it left running carries on (on
+    Windows its job no longer ends them when its handle closes). Only for short commands
+    (run): what an agent CLI or a build leaves is ended with it."""
+    holder = getattr(proc, "_prism_job", None)
+    with _jobs:
+        job = holder[0] if holder else None
+        if not job:
+            return
+        holder[0] = None
+    _set_limits(job, JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+    _win()[0].CloseHandle(job)
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -186,8 +202,7 @@ def _win():
     return _api
 
 
-def _win_job():
-    """A new job whose processes end when its last handle closes; None if none can be made."""
+def _set_limits(job, flags: int) -> bool:
     import ctypes
 
     class Basic(ctypes.Structure):
@@ -201,6 +216,14 @@ def _win_job():
         _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_uint64 * 6),
                     ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
                     ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    info = Extended()
+    info.BasicLimitInformation.LimitFlags = flags
+    return bool(_win()[0].SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                                                  ctypes.byref(info), ctypes.sizeof(info)))
+
+
+def _win_job():
+    """A new job whose processes end when its last handle closes; None if none can be made."""
     try:
         k32, _ = _win()
         job = k32.CreateJobObjectW(None, None)
@@ -208,10 +231,7 @@ def _win_job():
         return None
     if not job:
         return None
-    info = Extended()
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
-    if not k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                                       ctypes.byref(info), ctypes.sizeof(info)):
+    if not _set_limits(job, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK):
         k32.CloseHandle(job)
         return None
     return job
