@@ -132,11 +132,32 @@ const MathText = (() => {
         be === "begin" ? `\\begin{${ENV_MAP[env]}}` : `\\end{${ENV_MAP[env].split("}")[0]}}`);
   }
 
+  // The macro set's part of a formula's key: a short id, the same for equal sets, worked
+  // out once per macros object (the page replaces the object when the set changes; it
+  // never changes one in place). Ids are never reused, so forgetting the sets seen only
+  // costs a formula typeset again.
+  const macroIds = new WeakMap(), idsBySet = new Map();
+  let lastMacroId = 0;
+  function macroId(macros) {
+    if (!macros) return "";
+    let id = macroIds.get(macros);
+    if (id === undefined) {
+      const set = JSON.stringify(Object.entries(macros).sort());
+      id = idsBySet.get(set);
+      if (id === undefined) {
+        if (idsBySet.size >= 64) idsBySet.clear();
+        id = String(++lastMacroId); idsBySet.set(set, id);
+      }
+      macroIds.set(macros, id);
+    }
+    return id;
+  }
+
   const caches = new WeakMap();
   function texHtml(katex, f, macros) {
     let cache = caches.get(katex);
     if (!cache) { cache = { entries: new Map(), size: 0 }; caches.set(katex, cache); }
-    const key = JSON.stringify([f.tex, f.display, Object.entries(macros || {}).sort()]);
+    const key = JSON.stringify([f.tex, f.display, macroId(macros)]);
     if (cache.entries.has(key)) {
       const html = cache.entries.get(key); cache.entries.delete(key); cache.entries.set(key, html); return html;
     }

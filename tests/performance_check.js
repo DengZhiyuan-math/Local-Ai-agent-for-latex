@@ -22,6 +22,20 @@ render(); render();
 assert.strictEqual(formulas, 1, "the same formula is typeset once across streamed redraws");
 render({ "\\R": "R" });
 assert.strictEqual(formulas, 2, "a changed project macro invalidates the formula");
+// A project with many macros: its formulas are cached all the same, and the set is read
+// once, not once per formula. The same set loaded again keeps them; a changed one does not.
+const many = () => Object.fromEntries(Array.from({ length: 3000 }, (_, i) => ["\\m" + i, "\\mathrm{macro number " + i + "}"]));
+const big = many();
+let entries = 0;
+const counted = new Proxy(big, { ownKeys: (t) => { entries++; return Reflect.ownKeys(t); } });
+formulas = 0; render(counted);
+const read = entries; render(counted);
+assert.strictEqual(formulas, 1, "a formula is cached in a project with many macros");
+assert.strictEqual(entries, read, "a cached formula does not read the macro set again");
+render(many());
+assert.strictEqual(formulas, 1, "the same macros, loaded again, keep the cached formulas");
+render({ ...many(), "\\m0": "\\mathbf{changed}" });
+assert.strictEqual(formulas, 2, "a changed macro in a large set invalidates the formula");
 const Util = require("../prism_local/static/util.js"), frames = [], drawn = [];
 const batch = Util.frameBatch((key, value) => drawn.push([key, value]), { schedule: fn => { frames.push(fn); return frames.length; }, cancel: () => {} });
 for (let i = 0; i < 1000; i++) batch.set("reply", i);
