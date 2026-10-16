@@ -196,8 +196,15 @@ class AgentManager:
         except Exception:  # noqa: BLE001 — a failed commit must not stop the turn
             pass
         try:
-            job.before = self._snapshot(job)
-            job.metadata_before = self._metadata(job)
+            # Not while an Undo writes the files (it saw no turn, and its writes are not this
+            # turn's); a hold that cannot be had in time does not stop the turn.
+            held = self.writes.acquire(timeout=UNDO_WAIT)
+            try:
+                job.before = self._snapshot(job)
+                job.metadata_before = self._metadata(job)
+            finally:
+                if held:
+                    self.writes.release()
             threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
         except Exception as e:  # noqa: BLE001 — a turn that cannot start must not stay "running"
             with job.cond:
@@ -392,6 +399,8 @@ class AgentManager:
         if not self.writes.acquire(timeout=UNDO_WAIT):
             return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
         try:
+            if self.busy():                  # a turn began while Undo waited for the files
+                return {"busy": True, "error": "The agent is working: undo the earlier turn once this one has ended"}
             restored = snapshot.restore(past.root, past.before, past.after, rels)
         finally:
             self.writes.release()
