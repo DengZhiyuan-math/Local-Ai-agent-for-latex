@@ -771,6 +771,7 @@ prism_local/proc.py        starting and stopping programs (process trees on Wind
 prism_local/httpbase.py    what both servers share: request checks, presence, idle exit
 prism_local/fsutil.py      project files: which ones are shown, safe writes, line endings
 prism_local/hub.py         Home page server: project list, templates, starting editors
+prism_local/sharedrepo.py  a folder's projects in one shared repository, or one each, and back
 prism_local/registry.py    shared state: project list, running instances, ports
 prism_local/presence.py    which pages are open, for --exit-when-idle
 prism_local/agent.py       agent turns for every provider: scope, per-turn diffs and undo
