@@ -28,7 +28,7 @@ import uuid
 from pathlib import Path
 
 import mcp_compile
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, attachment_type
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, attachment_type, file_place
 from fsutil import project_path, with_line_ends_of, write_bytes
 
 MAX_READ = 200_000        # characters of one read_file result
@@ -335,7 +335,8 @@ class OpenAICompat(Backend):
         except ValueError:
             args = None
         summary = (args or {}).get("path") or (args or {}).get("pattern") or ""
-        job.tool(c["id"], TOOL_LABELS.get(name, name), summary)
+        path, lines = file_place(name, args or {})
+        job.tool(c["id"], TOOL_LABELS.get(name, name), summary, path=path, lines=lines)
         try:
             if args is None:
                 raise ToolError("the arguments are not a JSON object")

@@ -434,7 +434,8 @@ class DeepCodeBackend(unittest.TestCase):
         evs = self.m.jobs[done["turn"]].events
         sid = next(e["session_id"] for e in evs if e["t"] == "init")
         self.assertEqual(done["session_id"], sid)
-        self.assertIn({"t": "tool", "id": "call_1", "name": "write_file", "summary": "main.tex"}, evs)
+        self.assertIn({"t": "tool", "id": "call_1", "name": "write_file", "summary": "main.tex",
+                       "path": "main.tex"}, evs)
         self.assertIn({"t": "text", "text": "Changed main.tex."}, evs)
         self.assertEqual([c["path"] for c in done["changed"]], ["main.tex"])
         c = self.call()

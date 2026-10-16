@@ -122,6 +122,32 @@ def find_bin(env: str, name: str, extra: tuple[str, ...] = ()) -> str | None:
         or next((p for p in extra if Path(p).exists()), None)
 
 
+FILE_TOOLS = ("read", "write", "edit", "str_replace", "create", "view", "open")
+
+
+def file_place(name: str, args: dict) -> tuple[str | None, tuple[int, int] | None]:
+    """Which file a tool call of a backend's own vocabulary (read_file, edit_file,
+    write_file, str_replace_editor …) works on, and for a read of part of it which lines,
+    from its arguments: (path as given, (first, last) from 1), for Job.tool."""
+    low = str(name or "").lower()
+    path = args.get("path") or args.get("file_path") or args.get("filename")
+    if not path or not isinstance(path, str) or not any(w in low for w in FILE_TOOLS):
+        return None, None
+    lines = None
+    try:
+        if "read" in low or "view" in low:
+            first = args.get("offset") or args.get("start_line") or args.get("line")
+            count = args.get("limit")
+            last = args.get("end_line")
+            if first or count or last:
+                first = max(1, int(first or 1))
+                last = int(last) if last else first + max(1, int(count or 2000)) - 1
+                lines = (first, max(first, last))
+    except (TypeError, ValueError):
+        lines = None
+    return path, lines
+
+
 def shut_down(resp) -> None:
     """End an HTTP response another thread is reading (an API turn's stream, on Stop).
     Closing it would wait for the lock that reader holds until the next chunk comes, and
@@ -193,12 +219,36 @@ class Job:
         """Whether the turn has the editor's compile tool: an Edit turn, with the editor's server."""
         return self.mode == "edit" and bool(self.server_url)
 
-    def tool(self, tid, name, summary="", **place) -> None:
+    def tool(self, tid, name, summary="", path=None, lines=None) -> None:
         """A tool the agent called (the event's form is kept here, whatever shape the
-        backend's own output had): its id, its name, a summary of its input, and where it
-        works when that is known (`place`: "path", "line")."""
-        self.emit({"t": "tool", "id": "" if tid is None else str(tid), "name": str(name or "tool"),
-                   "summary": str(summary or "")[:200], **place})
+        backend's own output had): its id, its name, a summary of its input, and, for a
+        file tool, the file (`path`, as the backend has it: absolute or relative to the
+        project; made project-relative here, and left out when it is outside) and for a
+        read of part of it the lines (`lines`: first and last, from 1). The editor shows
+        the agent there (turn.js: its marks), whichever backend runs."""
+        ev = {"t": "tool", "id": "" if tid is None else str(tid), "name": str(name or "tool"),
+              "summary": str(summary or "")[:200]}
+        rel = self.relative(path) if path else None
+        if rel:
+            ev["path"] = rel
+            if lines:
+                try:
+                    first, last = (int(x) for x in lines)
+                    if 1 <= first <= last:
+                        ev["lines"] = [first, last]
+                except (TypeError, ValueError):
+                    pass
+        self.emit(ev)
+
+    def relative(self, path) -> str | None:
+        """A path the agent gave, relative to the project; None when it is outside."""
+        try:
+            p = Path(str(path))
+            p = p if p.is_absolute() else self.root / p
+            rel = p.resolve().relative_to(Path(self.root).resolve()).as_posix()
+        except (ValueError, OSError, RuntimeError):
+            return None
+        return rel if rel not in ("", ".") else None
 
     def tool_result(self, tid, error, preview="") -> None:
         """How the tool call `tid` ended: whether it failed, the start of its output."""

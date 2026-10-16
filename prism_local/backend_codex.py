@@ -252,10 +252,10 @@ class Codex(CliBackend):
         iid = str(item.get("id") or "")
         seen: set = st.setdefault("tools", set())
 
-        def tool(name: str, summary: str) -> None:
+        def tool(name: str, summary: str, path: str | None = None) -> None:
             if iid not in seen:
                 seen.add(iid)
-                job.tool(iid, name, summary)
+                job.tool(iid, name, summary, path=path)
 
         if kind == "agent_message" and completed and item.get("text"):
             job.emit({"t": "message_start"})
@@ -269,7 +269,7 @@ class Codex(CliBackend):
         elif kind == "file_change":
             changes = item.get("changes") if isinstance(item.get("changes"), list) else []
             paths = [_rel(c.get("path", ""), job.root) for c in changes if isinstance(c, dict)]
-            tool("Edit", ", ".join(paths))
+            tool("Edit", ", ".join(paths), paths[0] if len(paths) == 1 else None)
             if completed:
                 job.tool_result(iid, item.get("status") == "failed")
         elif kind == "mcp_tool_call":

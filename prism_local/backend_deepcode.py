@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from contextlib import contextmanager
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, agent_env, cli_process, executable, find_bin
+from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, agent_env, cli_process, executable, file_place, find_bin
 from fsutil import project_path, write_bytes
 from gitenv import selects_repository
 import mcp_compile
@@ -383,11 +383,12 @@ class DeepCode(Backend):
                     args = json.loads(fn.get("arguments") or "{}")
                 except (TypeError, ValueError):
                     args = {}
-                summary = ""
+                summary, path, lines = "", None, None
                 if isinstance(args, dict):
                     summary = str(args.get("path") or args.get("file_path") or args.get("command")
                                   or args.get("pattern") or args.get("query") or "")
-                job.tool(cid, name, summary)
+                    path, lines = file_place(name, args)
+                job.tool(cid, name, summary, path=path, lines=lines)
             if m.get("role") == "tool":
                 content = m.get("content")
                 try:

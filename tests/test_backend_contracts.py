@@ -139,6 +139,41 @@ class ChangeCoverage(unittest.TestCase):
             self.assertEqual((root / "large.bin").read_bytes(), b"new-content")
 
 
+class ToolPlace(unittest.TestCase):
+    """Every backend says which file a file tool works on, project-relative, so the editor
+    shows the agent there (turn.js's marks): not Claude Code's alone."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "sec").mkdir()
+        (self.root / "sec" / "a.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    def places(self, job):
+        return [(e["name"], e.get("path"), e.get("lines")) for e in job.events if e["t"] == "tool"]
+
+    def test_codex_deep_code_and_the_api_name_the_file(self):
+        job = job_for(root=self.root)
+        Codex("codex").handle({"type": "item.started", "item": {
+            "type": "file_change", "id": "1", "changes": [{"path": str(self.root / "sec" / "a.tex")}]}}, job, {})
+        OpenAICompat("ds", {"base_url": "http://x"})._call(job, {"id": "2", "name": "read_file", "arguments":
+                                                               json.dumps({"path": "sec/a.tex", "offset": 2, "limit": 2})}, [])
+        job.tool("3", "edit_file", "outside", path=str(self.root.parent / "elsewhere.tex"))
+        self.assertEqual(self.places(job), [("Edit", "sec/a.tex", None), ("Read", "sec/a.tex", [2, 3]),
+                                            ("edit_file", None, None)])
+
+    def test_the_marks_follow(self):
+        """What turn.js makes of such an event: the file marked, the lines read."""
+        node = subprocess.run(["node", "-e", """
+const Turn = require(process.argv[1]);
+const t = Turn.create({ now: () => 0 });
+const steps = t.feed([{t: "tool", id: "2", name: "Read", summary: "sec/a.tex", path: "sec/a.tex", lines: [2, 3]}]);
+console.log(JSON.stringify(steps.filter((s) => s.mark)));""",
+                               str(Path(__file__).resolve().parents[1] / "prism_local" / "static" / "turn.js")],
+                              capture_output=True, text=True)
+        self.assertEqual(json.loads(node.stdout), [{"mark": "clear-read"}, {"mark": "on", "path": "sec/a.tex"},
+                                                   {"mark": "read", "path": "sec/a.tex", "from": 1, "to": 2}])
+
+
 class DefaultModel(unittest.TestCase):
     def test_missing_executable_cannot_start_a_turn(self):
         with tempfile.TemporaryDirectory() as tmp:
