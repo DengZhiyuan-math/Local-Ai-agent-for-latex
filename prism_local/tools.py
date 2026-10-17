@@ -104,20 +104,36 @@ def install(name: str) -> dict:
     Refused, saying how to install it by hand, where Prism cannot."""
     if name not in PACKAGES:
         raise Refused("unknown program")
+    # Claimed with the same look that finds it free: two clicks at once start one install.
     with _lock:
         if INSTALL.get(name, {}).get("state") == "running":
             return dict(INSTALL[name])
-    if find(name):
-        with _lock:
-            INSTALL[name] = {"state": "done", "error": None, "details": None}
-            return dict(INSTALL[name])
-    exe = winget()
-    if not exe:
-        raise Refused(how_to(name))
-    with _lock:
+        before = INSTALL.get(name)
         INSTALL[name] = {"state": "running", "error": None, "details": None, "at": time.time()}
+        running = dict(INSTALL[name])
+    try:
+        if find(name):
+            with _lock:
+                INSTALL[name] = {"state": "done", "error": None, "details": None}
+                return dict(INSTALL[name])
+        exe = winget()
+    except BaseException:
+        _give_back(name, before)
+        raise
+    if not exe:
+        _give_back(name, before)
+        raise Refused(how_to(name))
     threading.Thread(target=_install, args=(name, exe), daemon=True).start()
-    return dict(INSTALL[name])
+    return running
+
+
+def _give_back(name: str, before: dict | None) -> None:
+    """Nothing was started after all: `name`'s state as it was before install() claimed it."""
+    with _lock:
+        if before is None:
+            INSTALL.pop(name, None)
+        else:
+            INSTALL[name] = before
 
 
 def _install(name: str, exe: str) -> None:

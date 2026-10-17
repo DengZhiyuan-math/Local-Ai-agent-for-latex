@@ -3,6 +3,7 @@ installed for real: winget is a stand-in that puts a program where its installer
 import os
 import subprocess
 import sys
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -72,6 +73,36 @@ class Tools(unittest.TestCase):
         self.assertEqual(tools.install("git")["state"], "done", "there already: nothing to run")
         self.assertEqual(len(calls), 1)
 
+    def test_two_clicks_at_once_start_one_install(self):
+        calls, go = [], threading.Event()
+
+        def winget(cmd, **kw):
+            calls.append(cmd)
+            go.wait(5)                                              # still installing
+            program(self.base / "Git" / "cmd", "git")
+            return subprocess.CompletedProcess(cmd, 0, "Successfully installed", "")
+
+        def looked_up_slowly():                                     # the moment between two clicks, held open
+            time.sleep(0.1)
+            return "winget"
+        both, said = threading.Barrier(2), []
+
+        def click():
+            both.wait(5)
+            said.append(tools.install("git")["state"])
+        with mock.patch.object(tools, "winget", side_effect=looked_up_slowly), \
+                mock.patch.object(tools.proc, "run", side_effect=winget):
+            clicks = [threading.Thread(target=click) for _ in range(2)]
+            for t in clicks:
+                t.start()
+            for t in clicks:
+                t.join(5)
+            time.sleep(0.1)                                         # a second winget would have started by now
+            go.set()
+            self.assertEqual(self.wait("git")["state"], "done")
+        self.assertEqual(said, ["running", "running"], "the second click sees the first one's install")
+        self.assertEqual(len(calls), 1)
+
     def test_a_failed_install_says_what_to_do_and_keeps_winget_apart(self):
         with mock.patch.object(tools, "winget", return_value="winget"), \
                 mock.patch.object(tools.proc, "run", return_value=subprocess.CompletedProcess(
@@ -88,6 +119,7 @@ class Tools(unittest.TestCase):
             with self.assertRaises(errors.Refused) as said:
                 tools.install("git")
         self.assertEqual(str(said.exception), tools.how_to("git"))
+        self.assertNotIn("git", tools.status()["installing"], "nothing left running")
         self.assertFalse(tools.status()["can_install"])
         with self.assertRaises(errors.Refused):
             tools.install("python")
