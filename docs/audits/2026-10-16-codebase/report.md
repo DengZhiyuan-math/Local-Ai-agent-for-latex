@@ -206,11 +206,22 @@
 
 随后做 2.1（`9b30df9`）：新模块 `repoview.py`，`place()` 是带失效判断的 `locate` 缓存（原 `hub.place_of`），`changes(root, seen)` 跑一次 `git status -b` 读成 `Changes`（branch、ahead、behind，树用的 `files()`，"N changed" 与提交用的 `recordable()`），在 refs、index、配置和调用方看到的文件都不变时直接复用。编辑器的 tree 照旧以列出文件的 mtime 为 `seen`；Home 以卡片目录遍历的时间戳为 `seen`，回到页面时未变的项目不再跑 git（原地被其他程序改写的文件最迟在遍历的一分钟周期内计入）；同步提交仍当场经自己的仓库询问。编辑器运行中新建或移走的仓库现在能被看到。三处各自的解析、`sources.recordable_changes`、`server.git_place` 删除；`GitSync._remote_state` 的 ahead/behind 是相对同步目标而非 upstream，未并入。测试：`test_repoview`（新增 4 项）、`test_hub`（新增 1 项，原"状态无缓存"断言改为 0 个进程）。回归：[591 项，31 跳过，无失败](frontend/repoview-tests.txt)；[浏览器 105 项通过](frontend/repoview-browser.txt)。
 
+## 第五轮：第四节其余结构项（2026-10-17）
+
+| 项 | 提交 | 结果 | 测试 |
+|---|---|---|---|
+| 2.2 | `d19feb1` | 实测一次 tree 请求（457 个文件、432 个 `\input`）：文档顺序 50 ms、文件 mtime 9 ms、目录遍历 4 ms、git 0.2 ms（已缓存）。`input_chain` 改为接收 tree 的 `{path: mtime}`，列出的文件不变且链中文件都未改时直接复用，50 ms → 0.6 ms。方案里的目录遍历缓存（4 ms）和 `{same: true}` 增量应答（本机 34 KB JSON）收益小、要改页面协议，不做；mtime 改取自遍历的 `DirEntry` 也不做：NTFS 的目录项时间可能滞后于文件本身，会让打开的标签页误报"磁盘上已改动" | `test_server`（新增 1 项） |
+| 4.2 | 无需提交 | 核对后关闭：前端按 Claude 工具名判断的地方（agent 编辑视图、越权提示）只会收到 Claude Code 自己的事件，以及 OpenAI 接口按同一套名字（`TOOL_LABELS`）给出的事件；Codex、Deep Code 不产生 denials 和 `tool_live`，文件标记已经走 `Job.tool` 的 path/lines，对四个后端都有效。加 `kind` 只是改名 | — |
+| 4.5 | `6cf5afc` | 合并成共享仓库时，若某项目的 `.git` 已移开而共享提交之前失败，重试时该项目已在共享仓库里、不再取历史，共享分支就没有它的历史；取历史失败也会照样移开 `.git`。现在共享提交把 `refs/prism/imported/*` 中分支还没有的历史全部作为父提交（这些 ref 就是续做的记录），报告说明带入了几个；取历史失败时在移开 `.git` 之前停止 | `test_hub.FolderSync`（新增 2 项，旧代码上均失败） |
+| 4.1 | `55d75e4` | `httpbase.App`：两个服务共用的命令行选项、实例（`instances.serving`）、`/api/ping`、"已更新"标记、重启检查与交接、空闲退出、信号、后台自更新；各自只保留路由及启动后/结束时要做的事。行为不变，只是 Home 的接任进程现在也保留 `python -u` | `test_httpbase.App`（新增 2 项）；生命周期测试（真实进程的重启、改名、交接）全部通过 |
+
+回归（`55d75e4` 导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[596 项，31 跳过，无失败](frontend/round5-tests.txt)；[浏览器 105 项通过](frontend/round5-browser.txt)。方案的四个阶段至此全部处理完。
+
 ## 待办（截至 `c154a6d`）
 
 来源：本报告"有意不改与剩余"、"其余后端整理"，以及复核时报告、尚未记录的条目。结构项的现状已对照代码核对；行为问题出自复核报告，未逐条重新复现。
 
-第一至三节已在第三、四轮处理完；第四节的现状按 `380fb0b` 更新。
+第一至三节已在第三、四轮处理完；第四节已在第四、五轮处理完，现状按 `55d75e4` 更新。
 
 ### 一、行为问题
 
@@ -244,13 +255,13 @@
 | 项 | 现状 |
 |---|---|
 | 2.1 `repoview.facts` | 完成（`9b30df9`），接口为 `repoview.place` 与 `repoview.changes`；同步目标与 GitHub 信息仍由 `hub.sync_facts` 按 refs 缓存，未并入 |
-| 2.2 `/api/tree` 增量 | 只做了"没变时不重跑 git status"；目录遍历缓存、签名加 `{same: true}` 的增量应答未做 |
+| 2.2 `/api/tree` 增量 | 完成（`d19feb1`），按实测只做了文档顺序缓存，见第五轮 |
 | 2.4 Home 扫描 | 完成（`41028ea`） |
-| 4.1 `httpbase.App` | 未做。编辑器服务与 Home 各自处理启动、交接、心跳和错误映射 |
-| 4.2 统一工具词汇 | 部分完成：`bbb8211` 让四个后端经 `Job.tool` 给出文件位置；工具事件没有 `kind`，前端仍按 Claude 的工具名判断（`app.js` 的 agent 编辑视图与越权提示：`"Edit"`、`"Write"`、`"MultiEdit"`、`"NotebookEdit"`） |
+| 4.1 `httpbase.App` | 完成（`55d75e4`） |
+| 4.2 统一工具词汇 | 核对后关闭，见第五轮 |
 | 4.3 提示词统一构造 | 完成（`42edd94`） |
 | 4.4 请求只校验一次 | 完成（`19c8965`） |
-| 4.5 `sharedrepo.py` | 部分完成（`79d6cda`）：已移出并分为 plan/apply；步骤日志与失败后续做未做 |
+| 4.5 `sharedrepo.py` | 完成（`79d6cda`、`6cf5afc`）：plan/apply 分开；失败后重试会接着完成 |
 | 4.6 `GitSync` 结果对象 | 完成（`380fb0b`） |
 
 ### 建议顺序
