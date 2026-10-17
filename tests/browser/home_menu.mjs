@@ -72,6 +72,15 @@ const damaged = await ev(`
   api = real; window.confirm = ask; await load();
   return { said, restored, gone: !document.querySelector("#state-damaged") };`);
 check("a damaged project list says so and can be put back", damaged.said && damaged.restored === "projects.json" && damaged.gone, JSON.stringify(damaged));
+const pin = await ev(`
+  const real = api, id = "${ids[0]}", before = !!byId(id).pinned;
+  api = async (path, body) => path === "/api/projects/update"
+    ? { _status: 409, error: "fixture: another window is writing the list" } : real(path, body);
+  await setPinned(id, !before);
+  api = real;
+  const back = await T.until(() => !!byId(id).pinned === before);
+  return { back, toast: T.toast() };`);
+check("a pin that could not be saved says so and goes back", pin.back && pin.toast.includes("another window"), JSON.stringify(pin));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 await closeSocket(ws);

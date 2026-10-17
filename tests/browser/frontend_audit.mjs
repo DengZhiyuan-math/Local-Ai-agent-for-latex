@@ -59,6 +59,12 @@ try {
     const saved = await TABS.save(t);
     Q.tree = realTree; Q.saveFile = realSave;
     return saved.reason === "gone" && writes === 0 && t.doc.getValue() === "keep these edits" && $("#banner").textContent.includes("deleted");`));
+  check("“server not reachable” goes once the server answers again", await p.ev(`
+    const realTree = Q.tree, st = $("#build-status");
+    Q.tree = async () => ({ _status: 0, error: "fixture: offline" });
+    await poll(); const said = st.textContent, red = st.classList.contains("err");
+    Q.tree = realTree; await poll();
+    return said === "server not reachable" && red && st.textContent === "" && !st.classList.contains("err");`));
   check("a reused port stops polling and saving without replacing edits", await p.ev(`
     let polls = 0; Q.tree = async () => { polls++; return { ...S.watch, _status: 200, project_key: "another-paper" }; };
     await poll(); await poll(); const t = activeTab(), text = t.doc.getValue();
