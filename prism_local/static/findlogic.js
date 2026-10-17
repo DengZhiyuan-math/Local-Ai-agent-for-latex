@@ -1,11 +1,11 @@
 /* The editor's plain decisions about finding text: what a query matches (match case, whole
    word, regular expression), what a replacement becomes ($1, $&), where the matches are
-   in a file's lines, and how many words a file has. No page: app.js draws, these decide;
-   checked under Node (tests/frontend_check.js).
+   in a file's lines, and which parts of a LaTeX file are formulas and comments. No page:
+   app.js draws, these decide; checked under Node (tests/frontend_check.js).
 
      FindLogic.matches("a cat, a Cat", { query: "cat" })        // {list: [{from: 2, to: 5, m}, …]}
      FindLogic.expand("<$1>", m, { regex: true })               // the replacement of one match
-     FindLogic.wordCount(text, "tex")                           // words outside math and commands */
+     FindLogic.regions(text)                                    // {comments, math}: [from, to) spans */
 "use strict";
 
 const FindLogic = (() => {
@@ -168,59 +168,7 @@ const FindLogic = (() => {
     return { line: Math.max(0, +m[1] - 1), ch: m[2] ? Math.max(0, +m[2] - 1) : 0 };
   }
 
-  /* ---------------------------------------------------------------- words */
-  // Environments whose content is mathematics, not words (with or without *).
-  const MATH_ENVS = "equation|align|alignat|flalign|gather|multline|eqnarray|math|displaymath|split|dmath|IEEEeqnarray";
-  // Commands whose argument is a name, a key or a file, not words; for \href only the URL.
-  const NAME_ARG_COMMANDS = "label|ref|eqref|cref|Cref|crefrange|autoref|pageref|nameref|vref|cite[a-zA-Z]*|nocite|"
-    + "input|include|includeonly|subfile|includegraphics|includepdf|usepackage|RequirePackage|documentclass|"
-    + "bibliography|bibliographystyle|addbibresource|begin|end|newcommand|renewcommand|providecommand|"
-    + "DeclareMathOperator|newenvironment|renewenvironment|newtheorem|theoremstyle|url|href|hypersetup|"
-    + "setlength|addtolength|setcounter|addtocounter|pagestyle|thispagestyle|numberwithin|graphicspath|color|textcolor";
-  // Han, Hiragana and Katakana: each character is a word.
-  const CJK = /[぀-ヿ㐀-䶿一-鿿豈-﫿]/g;
-  const WORD = /[\p{L}\p{N}]+(?:['’-][\p{L}\p{N}]+)*/gu;
-
-  // The text of a LaTeX source that is read as words: no comments, no preamble (when the
-  // file has \begin{document}; `body: false` for a piece of a file, a selection), no math,
-  // no command names, no labels, keys and file names.
-  function texWords(src, body = true) {
-    let t = src.replace(/(^|[^\\])((?:\\\\)*)%.*$/gm, "$1$2");
-    if (body) {
-      const b = t.indexOf("\\begin{document}");
-      if (b !== -1) {
-        t = t.slice(b + "\\begin{document}".length);
-        const e = t.indexOf("\\end{document}");
-        if (e !== -1) t = t.slice(0, e);
-      }
-    }
-    t = t.replace(new RegExp(`\\\\begin\\{((?:${MATH_ENVS})\\*?)\\}[\\s\\S]*?\\\\end\\{\\1\\}`, "g"), " ");
-    t = t.replace(/\\\\\*?(?:\s*\[[^\]\n]*\])?/g, " ").replace(/\\\$/g, " ");   // a line break (\\[2pt]); a dollar sign
-    t = t.replace(/\$\$[\s\S]*?\$\$/g, " ").replace(/\$[^$]*\$/g, " ")
-      .replace(/\\\[[\s\S]*?\\\]/g, " ").replace(/\\\([\s\S]*?\\\)/g, " ");
-    t = t.replace(new RegExp(`\\\\(?:${NAME_ARG_COMMANDS})\\*?(?:\\s*\\[[^\\]]*\\])*\\s*\\{[^{}]*\\}`, "g"), " ");
-    return t.replace(/\\[A-Za-z@]+\*?/g, " ").replace(/\\./g, " ");
-  }
-
-  function markdownWords(src) {
-    return src.replace(/^(```|~~~)[\s\S]*?^\1/gm, " ").replace(/`[^`\n]*`/g, " ")
-      .replace(/\$\$[\s\S]*?\$\$/g, " ").replace(/\$[^$\n]*\$/g, " ")
-      .replace(/\]\([^)]*\)/g, "] ").replace(/<[^>\n]*>/g, " ");
-  }
-
-  // How many words a text has. kind: "tex" or "md" (others are counted as they are).
-  function wordCount(text, kind = "tex", { body = true } = {}) {
-    const t = kind === "tex" ? texWords(text, body) : kind === "md" ? markdownWords(text) : text;
-    const cjk = (t.match(CJK) || []).length;
-    return cjk + (t.replace(CJK, " ").match(WORD) || []).length;
-  }
-
-  // The kind wordCount() reads a file as, from its name; null: words are not counted.
-  function wordKind(path) {
-    return /\.(tex|ltx)$/i.test(path) ? "tex" : /\.(md|markdown)$/i.test(path) ? "md" : /\.txt$/i.test(path) ? "txt" : null;
-  }
-
-  return { pattern, matches, expand, replaceAll, lines, excerpt, regions, scoped, lineSpec, wordCount, wordKind, MAX_MATCHES };
+  return { pattern, matches, expand, replaceAll, lines, excerpt, regions, scoped, lineSpec, MAX_MATCHES };
 })();
 
 if (typeof module !== "undefined") module.exports = FindLogic;

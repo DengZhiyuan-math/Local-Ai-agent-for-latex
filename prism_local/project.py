@@ -41,7 +41,7 @@ UPLOAD_WAIT = 10        # seconds an upload or a menu action waits for git befor
 # saved in the project, so the agent reads them with its file tools.
 UPLOAD_DIR = "prism-uploads"
 MAX_UPLOAD = 25 * 1024 * 1024
-MAX_TEXT = 2 * 1024 * 1024       # larger files are not read for the page's search and word counts
+MAX_TEXT = 2 * 1024 * 1024       # larger files are not read for the page's search
 
 
 class Project:
@@ -476,9 +476,9 @@ class Project:
         return {"ok": True, "mtime": mtime(p)}, 200
 
     def texts(self, rels: list[str]) -> list[dict]:
-        """Editable files' text for the page's project search and word counts: {path, mtime,
-        content} each (line ends as /api/file gives them), or {path, mtime, skipped} for one
-        larger than MAX_TEXT or not UTF-8. A path that is no editable file of the project
+        """Editable files' text for the page's project search: {path, mtime, content} each
+        (line ends as /api/file gives them), or {path, mtime, skipped} for one larger than
+        MAX_TEXT or not UTF-8. A path that is no editable file of the project
         (gone since the tree listed it, outside, excluded) is left out."""
         out = []
         for rel in rels[:MAX_FILES]:

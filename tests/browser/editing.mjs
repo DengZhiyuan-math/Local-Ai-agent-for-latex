@@ -230,26 +230,14 @@ await key("Escape");
 g = await at();
 check("Esc goes back to the editor where it was", !g.open && g.editor && g.line === g.last, JSON.stringify(g));
 
-/* ---------------------------------------------------------------- the status line: place and words */
-writeFileSync(join(root, "main.tex"), "\\documentclass{article}\n\\begin{document}\nHi there\n\\input{sec/w}\n\\end{document}\n");
-writeFileSync(join(root, "sec", "w.tex"), "Three more words % not these\n$x + y$\n");
-writeFileSync(join(root, "refs.bib"), "@book{k, title={Some words}}\n");
-await ev(`await T.until(async () => { await poll(); return S.document.includes("sec/w.tex") && S.files.some((f) => f.path === "refs.bib"); });
-  await openFile("sec/w.tex"); return true`);
-const sb = () => ev(`return { shown: !$("#statusbar").hidden, pos: $("#sb-pos").textContent, words: $("#sb-words").hidden ? null : $("#sb-words").textContent }`);
-const until = (text) => ev(`return T.until(() => $("#sb-words").textContent === ${JSON.stringify(text)})`);
-check("a file of the document: its words and the document's", await until("3 words · 5 in the document"), JSON.stringify(await sb()));
-await ev(`cm.setCursor({ line: 0, ch: 16 }); cm.replaceRange(" four", { line: 0, ch: 16 }); return true`);
-check("typing counts again, the document too", await until("4 words · 6 in the document"), JSON.stringify(await sb()));
-await ev(`cm.setSelection({ line: 0, ch: 0 }, { line: 0, ch: 10 }); return true`);
+/* ---------------------------------------------------------------- the status line: the cursor's place */
+await ev(`await openFile("find.tex"); cm.setCursor({ line: 1, ch: 3 }); return true`);
+const sb = () => ev(`return { shown: !$("#statusbar").hidden, pos: $("#sb-pos").textContent, words: !!document.getElementById("sb-words") }`);
 let s = await sb();
-check("a selection: its words and its length", await until("2 of 4 words · 6 in the document")
-  && (await sb()).pos === "Ln 1, Col 11 (10 selected)", JSON.stringify(await sb()));
-await ev(`await openFile("find.tex"); return true`);
-check("a file outside the document: its words only", await until("7 words"), JSON.stringify(await sb()));
-await ev(`await openFile("refs.bib"); return true`);
+check("the status line shows the line and column, and no word count", s.shown && s.pos === "Ln 2, Col 4" && !s.words, JSON.stringify(s));
+await ev(`cm.setSelection({ line: 0, ch: 0 }, { line: 0, ch: 10 }); return true`);
 s = await sb();
-check("no words for a file that is not text (.bib)", s.shown && s.words === null && s.pos.startsWith("Ln "), JSON.stringify(s));
+check("a selection: its length", s.pos === "Ln 1, Col 11 (10 selected)", JSON.stringify(s));
 await ev(`$("#sb-pos").click(); return true`);
 check("a click on the line and column asks for a line", await ev(`return !$("#goto").hidden && document.activeElement.id === "goto-q"`));
 await key("Escape");

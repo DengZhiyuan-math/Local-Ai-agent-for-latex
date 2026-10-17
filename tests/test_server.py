@@ -579,7 +579,7 @@ class Routes(unittest.TestCase):
 
     def test_the_tree_names_the_documents_files(self):
         """The tree lists every .tex file in document order, and apart the document's own
-        files (the main file and what it \\input's), whose words the editor counts."""
+        files (the main file and what it \\input's), which a search with the agent names to it."""
         project({"main.tex": "\\documentclass{article}\\begin{document}\\input{sec/a}\\end{document}\n",
                  "sec/a.tex": "A\n", "other.tex": "not in it\n"})
         status, r = self.ask("/api/tree")

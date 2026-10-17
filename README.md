@@ -5,7 +5,7 @@ stays in sync with the source, an AI agent that edits your project, and a Home p
 your papers, each kept in git and on GitHub.
 
 - **Editor**: tabs, LaTeX highlighting, find and replace in a file or the whole project, go to
-  line, a word count of the file and the document, folding of sections and environments, and
+  line, search with the agent's help, folding of sections and environments, and
   completion of `\cref{…}`, `\cite{…}` and your own `\newcommand`s. Edits save themselves.
 - **Files**: drag files onto the sidebar to add them to the project (up to 25 MB each).
   Different files with the same name get a number; existing files are kept. Text files
@@ -407,10 +407,8 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘B / Ctrl-B | Show/hide the file sidebar |
 | Ctrl-Space | Completion |
 
-Under the editor, the status line shows the cursor's line and column and the words of the
-file, of the selection, and of the whole document when the file is part of it (the main file
-and what it `\input`s). Comments, mathematics, the preamble, command names, labels, citations
-and file names are not counted; Chinese and Japanese characters count one each.
+Under the editor, the status line shows the cursor's line and column (and how many characters
+are selected); a click there asks for a line to go to.
 
 In a regular expression, the replacement may use `$1`, `$2` … for its groups and `$&` for the
 whole match. Search in the project includes unsaved edits of open files. Its Replace all

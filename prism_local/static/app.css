@@ -311,12 +311,11 @@ button.flip .ico { transform: rotate(180deg); }
 .tab.dirty .name::after { content: " ●"; color: var(--accent); }
 #banner { padding: 6px 10px; background: var(--hl); display: flex; gap: 10px; align-items: center; flex: none; }
 #editor { flex: 1; min-height: 0; }
-/* Below the editor (app.js status line): the cursor's place, the words. */
+/* Below the editor (app.js status line): the cursor's place. */
 #statusbar { display: flex; align-items: center; gap: 14px; height: 22px; flex: none; padding: 0 8px; font-size: 11.5px; color: var(--muted);
   background: var(--panel2); border-top: 1px solid var(--border); font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; }
 #statusbar[hidden] { display: none; }
 #sb-pos { height: 18px; padding: 0 5px; font-size: 11.5px; color: inherit; }
-#sb-words { margin-left: auto; overflow: hidden; text-overflow: ellipsis; }
 /* The file the agent is writing, live (AV in app.js). */
 #agent-view { position: absolute; inset: var(--bar-h) 0 0 0; z-index: 5; display: flex; flex-direction: column; background: var(--cm-bg); }
 #agent-view[hidden] { display: none; }

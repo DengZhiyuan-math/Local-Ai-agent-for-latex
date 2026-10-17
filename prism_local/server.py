@@ -323,7 +323,7 @@ class Handler(httpbase.Handler):
                                "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": PROJECT.document_order(editable, stamps),
-                               # the files of the document (the main file and what it \input's): its word count
+                               # the document's files (the main file and what it \input's), for the agent's search
                                "document": PROJECT.input_chain(cfg.main, stamps),
                                "pdf_main": cfg.main, "pdf_mtime": PROJECT.pdf_state(cfg),
                                "updated": APP.updated(), "server": STARTED_AT,
@@ -475,7 +475,7 @@ class Handler(httpbase.Handler):
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
         if path == "/api/texts":
-            # Many files at once, for search and word counts; a POST, as their names may be long.
+            # Many files at once, for search; a POST, as their names may be long.
             paths = body.get("paths")
             if not isinstance(paths, list) or not all(isinstance(f, str) for f in paths):
                 return self._err(400, "paths: a list of the project's files")

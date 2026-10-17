@@ -244,62 +244,15 @@ $("#btn-find").onclick = () => findOpen(false);
 cm.on("changes", () => {
   if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
   if (PS.open) psSchedule(400);
-  clearTimeout(WORDS.timer); WORDS.timer = setTimeout(statusWords, 300);
-  clearTimeout(WORDS.docTimer); WORDS.docTimer = setTimeout(documentWords, 1000);
 });
-cm.on("cursorActivity", () => {
-  statusPos();
-  if (cm.somethingSelected() || WORDS.selected) { clearTimeout(WORDS.timer); WORDS.timer = setTimeout(statusWords, 150); }
-});
+cm.on("cursorActivity", () => statusPos());
 $("#sb-pos").onclick = () => gotoOpen();
 
 /* ------------------------------------------------------------------ status line */
-// Below the editor: where the cursor is (a click asks for a line to go to), and how many
-// words the selection, the file and the whole document have (findlogic.js counts them).
-const WORDS = { timer: null, docTimer: null, doc: null, docStamp: "", selected: false, counted: new Map() };
+// Below the editor: where the cursor is; a click asks for a line to go to.
 function statusPos() {
   const c = cm.getCursor(), n = cm.getSelection().length;
   $("#sb-pos").textContent = `Ln ${c.line + 1}, Col ${c.ch + 1}` + (n ? ` (${n.toLocaleString()} selected)` : "");
-}
-const WORDS_RULES = $("#sb-words").title;
-const words = (n) => `${n.toLocaleString()} ${n === 1 ? "word" : "words"}`;
-function statusWords() {
-  clearTimeout(WORDS.timer);
-  const t = activeTab(), kind = t && FindLogic.wordKind(t.path), el = $("#sb-words");
-  el.hidden = !kind;
-  if (!kind) return;
-  const file = FindLogic.wordCount(cm.getValue(), kind);
-  WORDS.selected = cm.somethingSelected();
-  const sel = WORDS.selected ? FindLogic.wordCount(cm.getSelection(), kind, { body: false }) : null;
-  const inDoc = kind === "tex" && WORDS.doc !== null && S.document.length > 1 && S.document.includes(t.path);
-  el.textContent = (sel !== null ? `${sel.toLocaleString()} of ` : "") + words(file)
-    + (inDoc ? ` · ${WORDS.doc.toLocaleString()} in the document` : "");
-  el.title = el.textContent + ".\n" + WORDS_RULES;      // all of it, also where the line is cut
-}
-// What the document's count depends on: its files and their mtimes (an open file's edits
-// count it again too, from the editor's "changes").
-const docStamp = () => {
-  const mtimes = new Map(S.files.map((f) => [f.path, f.mtime]));
-  return S.document.map((p) => p + ":" + mtimes.get(p)).join("\n");
-};
-async function documentWords() {
-  clearTimeout(WORDS.docTimer);
-  WORDS.docStamp = docStamp();
-  const paths = S.document;
-  if (paths.length < 2 || !paths.includes(S.active)) { WORDS.doc = null; return statusWords(); }
-  const texts = await projectTexts(paths);
-  let n = 0;
-  for (const p of paths) {
-    const f = texts.get(p);
-    if (!f || f.skipped) continue;
-    const c = WORDS.counted.get(p);
-    if (c && c.text === f.content) { n += c.words; continue; }
-    const w = FindLogic.wordCount(f.content, "tex");
-    WORDS.counted.set(p, { text: f.content, words: w });
-    n += w;
-  }
-  WORDS.doc = n;
-  statusWords();
 }
 
 /* ------------------------------------------------------------------ go to line */
@@ -331,7 +284,7 @@ gotoQ.addEventListener("input", () => gotoQ.classList.remove("bad"));
 gotoQ.addEventListener("blur", () => gotoClose(false));
 
 /* ------------------------------------------------------------------ the project's text */
-// The text of the project's files, for search and word counts: an open tab's as you see it
+// The text of the project's files, for search: an open tab's as you see it
 // (unsaved edits too), the others' from disk (/api/texts), kept here while the tree shows
 // the same mtime for them. {path -> {content} or {skipped: why}}; files that cannot be read are left out.
 const TEXTS = new Map();               // path -> {mtime, content | skipped}, as the server gave it
@@ -883,7 +836,7 @@ async function openFile(path, line, following = false) {
   cm.swapDoc(t.doc);
   AH.apply(path);
   findRun(false);                    // the find bar, open, counts in this file
-  $("#statusbar").hidden = false; statusPos(); statusWords(); documentWords();
+  $("#statusbar").hidden = false; statusPos();
   cm.getWrapperElement().style.display = "";
   $("#empty-editor").hidden = true;
   applyDiagnostics();
@@ -1377,7 +1330,6 @@ async function pollOnce() {
   S.server = r.server;
   if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
   if (PS.open && psQ.value && psStamp() !== PS.stamp) psSchedule(0);   // a file changed: search it again
-  if (activeTab() && docStamp() !== WORDS.docStamp) documentWords();   // the document's words, the same
 }
 
 /* ------------------------------------------------------------------ GitHub sync */

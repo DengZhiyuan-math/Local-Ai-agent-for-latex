@@ -604,27 +604,6 @@ check("go to line: a line, or a line and a column, from 1", () => {
   assert.deepStrictEqual(FindLogic.lineSpec("0"), { line: 0, ch: 0 });
   for (const bad of ["", "x", "12:", "-3", "1.5"]) assert.strictEqual(FindLogic.lineSpec(bad), null, bad);
 });
-check("words: comments, the preamble, math and commands are not words", () => {
-  const W = (s, o) => FindLogic.wordCount(s, "tex", o);
-  assert.strictEqual(W("\\documentclass{article}\n\\usepackage{amsmath}\nPreamble words\n\\begin{document}\nOne two\n\\end{document}\nafter"), 2);
-  assert.strictEqual(W("One % two three\nfour 50\\% five"), 4, "a comment to the line's end; \\% is not one");
-  assert.strictEqual(W("a line\\\\% comment\nnext"), 3, "\\\\ then % is a comment");
-  assert.strictEqual(W("Let $x^2 + y$ be \\(z\\) and \\[ w \\] or $$ v $$ done"), 5);
-  assert.strictEqual(W("Text \\begin{align*} a &= b \\\\ c \\end{align*} more \\begin{equation}\\label{e} x \\end{equation} end"), 3);
-  assert.strictEqual(W("\\section{Main result}\\label{sec:main} By \\cref{thm:a} and \\cite[p.~3]{knuth} we \\emph{see}."), 6);
-  assert.strictEqual(W("\\href{https://example.com/a-b}{the site} \\includegraphics[width=3cm]{fig/one.pdf}"), 2);
-  assert.strictEqual(W("\\begin{theorem}[Fermat] It's well-known.\\end{theorem}"), 3, "inner ' and - keep a word whole");
-  assert.strictEqual(W("Line one\\\\[2pt] line two"), 4, "\\\\[2pt] is a line break, not \\[");
-  assert.strictEqual(W("Price \\$5 and \\$6"), 4);
-  assert.strictEqual(W("Preamble \\begin{document} body"), 1);
-  assert.strictEqual(W("Preamble \\begin{document} body", { body: false }), 2, "a selection has no preamble");
-});
-check("words: CJK characters each count; Markdown without code and math", () => {
-  assert.strictEqual(FindLogic.wordCount("中文字数 and English", "tex"), 6);
-  assert.strictEqual(FindLogic.wordCount("# Title\n\nSome `code here` text $x+y$ [link](http://a.b/c d).\n```\nnot words\n```\nend", "md"), 5);
-  assert.strictEqual(FindLogic.wordCount("plain % text", "txt"), 2);
-  assert.deepStrictEqual(["a.tex", "b.md", "c.txt", "d.bib", "e.sty"].map(FindLogic.wordKind), ["tex", "md", "txt", null, null]);
-});
 
 Promise.all(pending).then(() => {
   if (failures.length) {
