@@ -887,7 +887,8 @@ class Handler(httpbase.Handler):
             return self._json({**list_projects(),
                                "updated": APP.updated()})
         if path == "/api/tools":                  # Getting started: git, the GitHub CLI, the login
-            return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1")})
+            return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
+                               "login": github.GITHUB.login_state()})
         if path == "/api/settings":
             return self._json({"settings": settings.load(),
                                "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
@@ -924,6 +925,11 @@ class Handler(httpbase.Handler):
             return self._json(settings.save_snippets(body.get("content")))
         if path == "/api/tools/install":
             return self._json(tools.install(str(body["name"])))
+        if path == "/api/github/login":           # GitHub's device login, in the browser
+            return self._json(github.GITHUB.login())
+        if path == "/api/github/login/cancel":
+            github.GITHUB.cancel_login()
+            return self._json(github.GITHUB.login_state())
         if path == "/api/projects/add":
             return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
         if path == "/api/projects/create":

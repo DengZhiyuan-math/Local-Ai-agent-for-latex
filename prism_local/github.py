@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 import time
 from pathlib import Path
 
@@ -28,6 +29,10 @@ class GhCli:
 
     def __init__(self):
         self._status: tuple[float, dict] | None = None
+        self._login_lock = threading.Lock()
+        self._login: dict = {"state": None}          # see login()
+        self._login_proc: subprocess.Popen | None = None
+        self._login_stop: str | None = None          # why it was ended: "cancelled", "expired"
 
     def status(self, refresh: bool = False) -> dict:
         """Whether gh is installed and logged in, and as whom."""
@@ -77,6 +82,92 @@ class GhCli:
         if "Upgrade to GitHub Pro" in (r.stdout + r.stderr):
             return "not available for private repositories on GitHub's free plan"
         return "not set: " + (r.stderr or r.stdout).strip()[-200:]
+
+    # ------------------------------------------------------------ logging in, from Home
+    LOGIN_TIME = 900            # seconds the browser's authorization is waited for
+
+    def login(self) -> dict:
+        """Log in to GitHub in the browser, for someone who has never used a terminal: gh's
+        device flow (`gh auth login --web`) in the background. Its one-time code is shown
+        on the page (login_state: "code", "url"), which opens GitHub's page to enter it;
+        once it is authorized, git is set to push with this login too (`gh auth setup-git`:
+        no second login window on the first push). Its state at once."""
+        exe = tools.find("gh")
+        if not exe:
+            raise NotInstalled("gh")
+        with self._login_lock:
+            if self._login.get("state") in ("starting", "waiting"):
+                return dict(self._login)
+            self._login = {"state": "starting", "code": None, "url": None, "error": None, "details": None}
+        threading.Thread(target=self._log_in, args=(exe,), daemon=True).start()
+        return self.login_state()
+
+    def login_state(self) -> dict:
+        with self._login_lock:
+            return dict(self._login)
+
+    def cancel_login(self) -> None:
+        with self._login_lock:
+            p = self._login_proc
+            self._login_stop = "cancelled"
+        if p is not None:
+            proc.kill_tree(p)
+
+    def _expire_login(self, p: subprocess.Popen) -> None:
+        with self._login_lock:
+            self._login_stop = "expired"
+        proc.kill_tree(p)
+
+    def _log_in(self, exe: str) -> None:
+        lines: list[str] = []
+        try:
+            p = proc.start([exe, "auth", "login", "--web", "--hostname", "github.com",
+                            "--git-protocol", "https", "--skip-ssh-key"],
+                           stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, encoding="utf-8", errors="replace", env=git_env())
+        except OSError as e:
+            return self._login_ended("failed", "GitHub's login could not be started.", str(e))
+        with self._login_lock:
+            self._login_proc, self._login_stop = p, None
+        try:
+            p.stdin.write("\n")          # "Press Enter to open github.com in your browser"
+            p.stdin.close()
+        except OSError:
+            pass
+        timer = threading.Timer(self.LOGIN_TIME, self._expire_login, args=(p,))
+        timer.start()
+        try:
+            for line in p.stdout:
+                lines.append(line.rstrip())
+                code = re.search(r"\b([A-Z0-9]{4}-[A-Z0-9]{4})\b", line)
+                url = re.search(r"https://\S*github\.com/login/device\S*", line)
+                with self._login_lock:
+                    if code:
+                        self._login.update(state="waiting", code=code.group(1))
+                    if url:
+                        self._login["url"] = url.group(0).rstrip(".")
+            p.wait()
+        finally:
+            timer.cancel()
+            with self._login_lock:
+                self._login_proc = None
+        said = "\n".join(lines)[-600:]
+        if p.returncode != 0:
+            return self._login_ended("failed", {
+                "cancelled": "Logging in to GitHub was cancelled.",
+                "expired": f"GitHub's page was not confirmed within {self.LOGIN_TIME // 60} minutes. Try again.",
+            }.get(self._login_stop, "Logging in to GitHub did not work. Try again."), said)
+        try:
+            r = self._gh(exe, "auth", "setup-git", "--hostname", "github.com", timeout=60)
+            setup = None if r.returncode == 0 else (r.stderr or r.stdout).strip()[-300:]
+        except (OSError, subprocess.SubprocessError) as e:
+            setup = str(e)
+        self.status(refresh=True)
+        self._login_ended("done", None, said + ("\nsetup-git: " + setup if setup else ""))
+
+    def _login_ended(self, state: str, error: str | None, details: str | None) -> None:
+        with self._login_lock:
+            self._login.update(state=state, error=error, details=details or None)
 
     @staticmethod
     def _gh(exe, *args, cwd=None, timeout=60, env=None, input=None) -> subprocess.CompletedProcess:
