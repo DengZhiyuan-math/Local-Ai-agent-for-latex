@@ -534,6 +534,25 @@ check("find: lines and columns of the matches, and a long line's excerpt", () =>
   assert.ok(e.before.startsWith("…") && e.after.endsWith("…") && e.before.length + e.after.length < 90, JSON.stringify(e));
   assert.deepStrictEqual(FindLogic.excerpt("  short cat", 8, 3), { before: "short ", hit: "cat", after: "" });
 });
+check("regions: formulas of every kind, comments, and what only looks like them", () => {
+  const text = "Let $x_i$ be \\(y_i\\), cost \\$5 and \\$6; 50\\% i.\n"
+    + "$$a_i$$ \\[b_i\\] % c_i here\n"
+    + "\\begin{align*}\n d_i &= 1 % e_i\n\\end{align*}\n"
+    + "\\begin{theorem} f_i \\end{theorem} line\\\\[2pt] g_i $ lone\n\nnot $ math";
+  const r = FindLogic.regions(text);
+  const spansOf = (list) => list.map(([a, b]) => text.slice(a, b));
+  assert.deepStrictEqual(spansOf(r.math), ["$x_i$", "\\(y_i\\)", "$$a_i$$", "\\[b_i\\]",
+    "\\begin{align*}\n d_i &= 1 % e_i\n\\end{align*}"]);
+  assert.deepStrictEqual(spansOf(r.comments), ["% c_i here", "% e_i"]);
+  const hits = (where) => FindLogic.scoped(FindLogic.matches(text, { query: "[a-gxy]_i", regex: true }).list, r, where)
+    .map((x) => text.slice(x.from, x.to));
+  assert.deepStrictEqual(hits("math"), ["x_i", "y_i", "a_i", "b_i", "d_i"], "not in a comment inside a display");
+  assert.deepStrictEqual(hits("text"), ["f_i", "g_i"]);
+  assert.strictEqual(hits("anywhere").length, 9);
+  // a match that runs out of its formula is not "in mathematics"
+  assert.deepStrictEqual(FindLogic.scoped(FindLogic.matches("$a$ b", { query: "a\\$ b", regex: true }).list,
+    FindLogic.regions("$a$ b"), "math"), []);
+});
 check("go to line: a line, or a line and a column, from 1", () => {
   assert.deepStrictEqual(FindLogic.lineSpec("120"), { line: 119, ch: 0 });
   assert.deepStrictEqual(FindLogic.lineSpec(" 12:5 "), { line: 11, ch: 4 });

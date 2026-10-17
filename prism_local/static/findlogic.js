@@ -92,6 +92,75 @@ const FindLogic = (() => {
     return { before, hit, after };
   }
 
+  /* ---------------------------------------------------------------- where in a LaTeX file */
+  const MATH_ENV_NAMES = new Set(["equation", "align", "alignat", "flalign", "gather", "multline", "eqnarray",
+    "math", "displaymath", "dmath"]);
+  // Where the closer `close` starts, from `i` on, past escapes (\x) and comments; -1 if none.
+  function findClose(text, i, close) {
+    while (i < text.length) {
+      if (text.startsWith(close, i)) return i;
+      const c = text[i];
+      if (c === "\\") i += 2;
+      else if (c === "%") { const nl = text.indexOf("\n", i); if (nl === -1) return -1; i = nl + 1; }
+      else i++;
+    }
+    return -1;
+  }
+  // A LaTeX source's comments (% to the line's end) and mathematics ($…$, $$…$$, \(…\),
+  // \[…\], and the equation-like environments, starred too): {comments, math}, each a
+  // sorted list of [from, to). \$ and \% are text.
+  function regions(text) {
+    const comments = [], math = [];
+    let i = 0;
+    while (i < text.length) {
+      const c = text[i];
+      if (c === "%") {
+        const nl = text.indexOf("\n", i), end = nl === -1 ? text.length : nl;
+        comments.push([i, end]); i = end;
+      } else if (c === "$") {
+        const display = text[i + 1] === "$", open = display ? 2 : 1;
+        const end = findClose(text, i + open, display ? "$$" : "$");
+        // An inline formula does not go past an empty line: a lone $ is not one.
+        if (end === -1 || (!display && /\n\s*\n/.test(text.slice(i, end)))) { i += open; continue; }
+        math.push([i, end + open]); i = end + open;
+      } else if (c === "\\") {
+        const n = text[i + 1];
+        let close = n === "[" ? "\\]" : n === "(" ? "\\)" : null;
+        const env = !close && /^\\begin\{([A-Za-z]+)(\*?)\}/.exec(text.slice(i, i + 40));
+        if (env && MATH_ENV_NAMES.has(env[1])) close = `\\end{${env[1]}${env[2]}}`;
+        const from = env ? i + env[0].length : i + 2;
+        const end = close ? findClose(text, from, close) : -1;
+        if (end === -1) { i += 2; continue; }
+        math.push([i, end + close.length]); i = end + close.length;
+        // comments inside a display: still comments
+        for (let k = text.indexOf("%", from); k !== -1 && k < end; k = text.indexOf("%", k + 1)) {
+          if (text[k - 1] === "\\" && text[k - 2] !== "\\") continue;
+          const nl = text.indexOf("\n", k), e = nl === -1 || nl > end ? end : nl;
+          comments.push([k, e]); k = e;
+        }
+      } else i++;
+    }
+    comments.sort((a, b) => a[0] - b[0]);
+    return { comments, math };
+  }
+  // Whether [from, to) lies inside one of the sorted spans; whether it touches any.
+  function within(spans, from, to) {
+    let lo = 0, hi = spans.length - 1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1, s = spans[mid];
+      if (s[1] <= from) lo = mid + 1; else if (s[0] > from) hi = mid - 1; else return to <= s[1];
+    }
+    return false;
+  }
+  const touches = (spans, from, to) => spans.some((s) => s[0] < to && from < s[1]);
+  // Matches kept by where they are: "math" (inside one formula, not in a comment), "text"
+  // (in neither), anything else everywhere.
+  function scoped(list, regs, where) {
+    if (where !== "math" && where !== "text") return list;
+    return list.filter((x) => !touches(regs.comments, x.from, x.to)
+      && (where === "math" ? within(regs.math, x.from, x.to) : !touches(regs.math, x.from, x.to)));
+  }
+
   // "120", "120:5" or "120,5" (line, column from 1) as {line, ch} from 0; null if it is none.
   function lineSpec(text) {
     const m = /^\s*(\d+)\s*(?:[:,]\s*(\d+)\s*)?$/.exec(text);
@@ -151,7 +220,7 @@ const FindLogic = (() => {
     return /\.(tex|ltx)$/i.test(path) ? "tex" : /\.(md|markdown)$/i.test(path) ? "md" : /\.txt$/i.test(path) ? "txt" : null;
   }
 
-  return { pattern, matches, expand, replaceAll, lines, excerpt, lineSpec, wordCount, wordKind, MAX_MATCHES };
+  return { pattern, matches, expand, replaceAll, lines, excerpt, regions, scoped, lineSpec, wordCount, wordKind, MAX_MATCHES };
 })();
 
 if (typeof module !== "undefined") module.exports = FindLogic;
