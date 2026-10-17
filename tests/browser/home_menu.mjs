@@ -81,6 +81,35 @@ const pin = await ev(`
   const back = await T.until(() => !!byId(id).pinned === before);
   return { back, toast: T.toast() };`);
 check("a pin that could not be saved says so and goes back", pin.back && pin.toast.includes("another window"), JSON.stringify(pin));
+const setup = await ev(`
+  // Getting started, from nothing: git and the GitHub CLI installed, the login's code shown.
+  const real = api, seen = {}, st = { git: null, gh: null, can_install: true, installing: {}, how: { git: "by hand", gh: "by hand" },
+                                      github: { logged_in: false }, login: { state: null } };
+  api = async (path, body) => {
+    if (path === "/api/tools") return { _status: 200, ...JSON.parse(JSON.stringify(st)) };
+    if (path === "/api/tools/install") { st.installing[body.name] = { state: "running" }; return { _status: 200, state: "running" }; }
+    if (path === "/api/github/login") { st.login = { state: "waiting", code: "AB12-CD34", url: "https://github.com/login/device" }; return { _status: 200 }; }
+    return real(path, body);
+  };
+  const panel = () => document.querySelector("#setup");
+  await loadSetup();
+  seen.shown = !!panel() && panel().querySelectorAll("li").length === 3 && panel().querySelectorAll('[data-setup^="install-"]').length === 2;
+  panel().querySelector('[data-setup="install-git"]').click();
+  seen.installing = await T.until(() => (panel()?.textContent || "").includes("Installing"));
+  st.installing.git = { state: "done" }; st.git = "C:/git.exe"; await loadSetup();
+  seen.gitDone = panel().querySelector("li").classList.contains("done");
+  st.installing.gh = { state: "failed", error: "The GitHub CLI could not be installed. Try again, or: by hand", details: "exit 1602" };
+  await loadSetup();
+  seen.failure = panel().textContent.includes("could not be installed") && !!panel().querySelector("details");
+  st.installing.gh = { state: "done" }; st.gh = "C:/gh.exe"; await loadSetup();
+  panel().querySelector('[data-setup="login"]').click();
+  seen.code = await T.until(() => panel()?.querySelector(".setup-code")?.textContent === "AB12-CD34");
+  seen.link = panel().querySelector('a[href="https://github.com/login/device"]') !== null;
+  st.login = { state: "done" }; st.github = { logged_in: true, account: "me" }; await loadSetup();
+  seen.gone = !panel();
+  clearTimeout(SETUP.timer); api = real;
+  return seen;`);
+check("getting started installs git and the GitHub CLI and shows the login's code", Object.values(setup).every(Boolean), JSON.stringify(setup));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 await closeSocket(ws);

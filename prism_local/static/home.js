@@ -983,7 +983,7 @@ function updateGithubRow() {
   $("#gh-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
   const note = f.querySelector(".gh-note");
   note.hidden = !!gh.logged_in;
-  note.textContent = gh.logged_in ? "" : (gh.error || "GitHub is not connected.") + " See Settings (top right).";
+  note.textContent = gh.logged_in ? "" : (gh.error || "GitHub is not connected.");
 }
 $("#form-new").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1247,7 +1247,7 @@ async function openPublish(id) {
   if (r.github) { $("#pub-note").innerHTML = `Already on GitHub: <a href="${esc(r.github)}" target="_blank" rel="noopener">${esc(r.github)}</a>`; return; }
   $("#pub-note").textContent = {
     nested: `This folder is inside another repository (${r.top}); move the project out of it first.`,
-    login: (gh.error || "The GitHub CLI is not logged in.") + " See Settings (top right).",
+    login: gh.error || "You are not logged in to GitHub. Log in from the Home page (Getting started).",
     shared: `It is part of the repository in ${r.top}: that whole repository goes to GitHub.`,
     ok: (r.kind === "none" ? "A git repository is created first. " : "") + "Build output and LaTeX's auxiliary files stay out (.gitignore). Its editor then saves and pushes changes automatically.",
   }[pub.why];
@@ -1524,7 +1524,81 @@ async function watchFetch() {
 
 /* ------------------------------------------------------------------ start */
 load().then(loadAllGit).then(watchFetch);
+/* ------------------------------------------------------------------ getting started */
+// git, the GitHub CLI and a GitHub login (tools.py, github.py): until all three are
+// there, a panel above the list does each with one button, for someone who has never
+// used a terminal. What went wrong is said in a sentence; the installer's or gh's own
+// words are folded under Details.
+const SETUP = { st: null, timer: null };
+async function loadSetup() {
+  const r = await api("/api/tools");
+  if (r._status !== 200) return;
+  SETUP.st = r; H.github = r.github;
+  renderSetup();
+  const busy = Object.values(r.installing || {}).some((x) => x.state === "running")
+    || ["starting", "waiting"].includes(r.login && r.login.state);
+  clearTimeout(SETUP.timer);
+  if (busy) SETUP.timer = setTimeout(loadSetup, 1500);
+  else if (r.github && r.github.logged_in) { renderGhStatus(); }
+}
+function setupFailure(x, retry) {
+  return `<span class="setup-err">${esc(x.error || "It did not work.")}</span> <button type="button" data-setup="${retry}">Try again</button>`
+    + (x.details ? `<details><summary>Details</summary><pre>${esc(x.details)}</pre></details>` : "");
+}
+function setupInstall(r, name) {
+  const x = (r.installing || {})[name] || {};
+  if (x.state === "running") return `<span class="setup-busy">Installing… Windows may ask for your permission.</span>`;
+  if (x.state === "failed") return setupFailure(x, "install-" + name);
+  if (!r.can_install) return `<span class="setup-how">${esc(r.how[name])}</span> <button type="button" data-setup="recheck">Check again</button>`;
+  return `<button type="button" class="primary" data-setup="install-${name}">Install</button>`;
+}
+function setupLogin(r) {
+  const x = r.login || {};
+  if (!r.gh) return `<span class="setup-how">Install the GitHub CLI first.</span>`;
+  if (x.state === "starting") return `<span class="setup-busy">Starting…</span>`;
+  if (x.state === "waiting" && x.code) return `Enter this code on GitHub: <code class="setup-code">${esc(x.code)}</code>
+    <a class="btn primary" href="${esc(x.url || "https://github.com/login/device")}" target="_blank" rel="noopener">Open GitHub</a>
+    <button type="button" data-setup="login-cancel">Cancel</button>`;
+  if (x.state === "failed") return setupFailure(x, "login");
+  return `<button type="button" class="primary" data-setup="login">Log in to GitHub</button>`;
+}
+function renderSetup() {
+  const r = SETUP.st;
+  if (!r) return;
+  const loggedIn = !!(r.github && r.github.logged_in);
+  let el = $("#setup");
+  if (r.git && r.gh && loggedIn) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("section");
+    el.id = "setup"; el.setAttribute("aria-label", "Getting started");
+    $("#home-main").before(el);
+  }
+  const row = (done, what, why, action) => `<li class="${done ? "done" : ""}"><span class="setup-mark">${done ? "✓" : "○"}</span>
+    <span class="setup-what"><b>${what}</b> <small>${why}</small></span><span class="setup-do">${done ? "" : action}</span></li>`;
+  const html = `<h2>Getting started</h2><p>Prism keeps every version of your papers and saves them to your own private
+    GitHub repositories. It needs two free programs and your GitHub account; each takes one click.</p><ol>`
+    + row(!!r.git, "git", "keeps every version of your papers", setupInstall(r, "git"))
+    + row(!!r.gh, "GitHub CLI", "lets Prism create repositories on GitHub for you", setupInstall(r, "gh"))
+    + row(loggedIn, loggedIn ? `GitHub: ${esc(r.github.account || "")}` : "Your GitHub account",
+          "a free account at github.com; your papers stay private", setupLogin(r))
+    + `</ol>`;
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-setup]");
+  if (!b) return;
+  const what = b.dataset.setup;
+  b.disabled = true;
+  const r = what.startsWith("install-") ? await api("/api/tools/install", { name: what.slice(8) })
+    : what === "login" ? await api("/api/github/login", {})
+    : what === "login-cancel" ? await api("/api/github/login/cancel", {})
+    : { _status: 200 };
+  if (r._status !== 200) toast(r.error || "It did not work", true);
+  await loadSetup();
+});
+
 loadSettings();
+loadSetup();
 // Every 10 s while the page is shown and no dialog is open (see poller).
 load.start(() => !document.querySelector("dialog[open]"));
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load().then(loadOpenedGit); });
