@@ -185,9 +185,30 @@
 
 回归（`0438e75` 导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[562 项，31 跳过，无失败](frontend/review3-tests.txt)；[浏览器 104 项通过](frontend/review3-browser.txt)。
 
+## 第四轮：待办第一节 7–9 与第四节（2026-10-16 至 17）
+
+每项一个提交：
+
+| 待办 | 提交 | 修复后的行为 | 测试 |
+|---|---|---|---|
+| 8 | `ae95edd` | Deep Code 一轮按会话文件记住读到哪一整行，只解析新追加的部分；文件变短或已读部分被改写时从头重读 | `test_agent.DeepCodeBackend` |
+| 9 | `98b9e55` | 长轮询收到 `done` 事件立即返回，不再等 40 ms 合并窗口 | `test_agent.EventBatches` |
+| 4.4 | `19c8965` | 回合请求只在 `AgentManager.start` 校验一次；Deep Code 与 OpenAI 接口的 `run` 不再重复 preflight 与会话检查。回合中仍会变化的设置在使用处检查，Git 仓库变量的检查移入 `injected_git` | `test_agent` |
+| 4.3 | `42edd94`、`47e75b0` | `Backend.system_text` 统一拼接指令，各适配器只声明 `file_tool_rule`；四个后端的文本与原构造逐字节一致 | `test_backend_contracts` |
+| 2.4 | `41028ea` | Home 文件数到上限时显示"≥ 3000"；项目摘要按文件夹与最新文件的 stat 缓存，最长一分钟重扫一次 | `test_hub` |
+| 4.5 | `79d6cda`、`c4ef116` | 共享仓库逻辑移入 `sharedrepo.py`，分为 `plan()`（不改任何东西）与 `apply()`；行为不变，报告补充共享仓库提交的时刻。步骤日志与失败后续做未做 | `test_hub.FolderSync` |
+| 7 | `162dcdb` | 移除附件时服务端撤回已到达的上传：只删本次上传写入、之后未改、且没有已发消息引用的文件；已提交的由下次自动提交记录删除，不改写历史 | `test_server`、浏览器 |
+| 9 | `13f906d` | KaTeX 缓存键用宏集合的短 id，宏多时公式也能缓存 | `frontend_check.js` |
+| 9 | `e7bfb54` | `/pdf`、`/api/asset`、新标签页与弹出 PDF、重启后的等待都带项目标识，不匹配即拒绝 | `test_server`、浏览器 |
+| 4.6 | `380fb0b` | `pull()`、`resolve_mine()`、`now()` 返回 `Outcome`，按钮的应答是这次点击自己的错误，不受工作线程同时写入的影响；`status()` 不再在 GET 中绑定同步目标 | `test_gitsync`、`test_git_target`、`test_sync_buttons.ButtonAnswer` |
+
+回归（`380fb0b` 导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[586 项，31 跳过，无失败](frontend/round4-tests.txt)；[浏览器 105 项通过](frontend/round4-browser.txt)。
+
 ## 待办（截至 `c154a6d`）
 
 来源：本报告"有意不改与剩余"、"其余后端整理"，以及复核时报告、尚未记录的条目。结构项的现状已对照代码核对；行为问题出自复核报告，未逐条重新复现。
+
+第一至三节已在第三、四轮处理完；第四节的现状按 `380fb0b` 更新。
 
 ### 一、行为问题
 
@@ -222,13 +243,13 @@
 |---|---|
 | 2.1 `repoview.facts` | 未做。`git status` 仍在三处各跑一次（`server.py:106`、`hub.py:236`、`gitsync.py:302`，解析共用 `sources.parse_status`）；`locate` 多处调用 |
 | 2.2 `/api/tree` 增量 | 只做了"没变时不重跑 git status"；目录遍历缓存、签名加 `{same: true}` 的增量应答未做 |
-| 2.4 Home 扫描 | 抓取已并行（`hub.py:318`），标题已缓存；文件数到 `MAX_SCAN = 3000` 时直接截断，不显示"≥ N"；项目摘要未按 mtime 缓存 |
+| 2.4 Home 扫描 | 完成（`41028ea`） |
 | 4.1 `httpbase.App` | 未做。编辑器服务与 Home 各自处理启动、交接、心跳和错误映射 |
-| 4.2 统一工具词汇 | 部分完成：`bbb8211` 让四个后端经 `Job.tool` 给出文件位置；前端是否仍写死 Claude 的工具名未核对 |
-| 4.3 提示词统一构造 | 未做。各适配器仍自行替换 `FILE_TOOL_RULE` |
-| 4.4 请求只校验一次 | 部分完成：`3d7f00c` 把 Deep Code 配置检查移入 preflight；`DeepCode.run` 仍重复 preflight 与会话检查（`backend_deepcode.py:329`） |
-| 4.5 `sharedrepo.py` | 未做。约 330 行共享仓库逻辑仍在 `hub.py`，"计划 → 执行"与步骤日志未做 |
-| 4.6 `GitSync` 结果对象 | 未做。`pull()`、`resolve_mine()` 仍通过共享的 `self.error` 传结果 |
+| 4.2 统一工具词汇 | 部分完成：`bbb8211` 让四个后端经 `Job.tool` 给出文件位置；工具事件没有 `kind`，前端仍按 Claude 的工具名判断（`app.js` 的 agent 编辑视图与越权提示：`"Edit"`、`"Write"`、`"MultiEdit"`、`"NotebookEdit"`） |
+| 4.3 提示词统一构造 | 完成（`42edd94`） |
+| 4.4 请求只校验一次 | 完成（`19c8965`） |
+| 4.5 `sharedrepo.py` | 部分完成（`79d6cda`）：已移出并分为 plan/apply；步骤日志与失败后续做未做 |
+| 4.6 `GitSync` 结果对象 | 完成（`380fb0b`） |
 
 ### 建议顺序
 
