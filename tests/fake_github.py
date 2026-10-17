@@ -23,7 +23,7 @@ class FakeGitHub:
     def status(self, refresh: bool = False) -> dict:
         if not self.logged_in:
             return {"gh": "gh", "logged_in": False, "account": None,
-                    "error": "GitHub CLI is not logged in. Run: gh auth login"}
+                    "error": "You are not logged in to GitHub. Log in from the Home page (Getting started)."}
         return {"gh": "gh", "logged_in": True, "account": self.account}
 
     def create(self, root: Path, full: str) -> str | None:

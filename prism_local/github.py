@@ -11,13 +11,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
+from errors import NotInstalled
 from gitenv import git_env
 import proc
+import tools
 
 STATUS_TTL = 120         # seconds gh's login is not asked again
 
@@ -32,10 +33,10 @@ class GhCli:
         """Whether gh is installed and logged in, and as whom."""
         if self._status and not refresh and time.time() - self._status[0] < STATUS_TTL:
             return self._status[1]
-        exe = shutil.which("gh")
+        exe = tools.find("gh")              # also one installed since Prism started
         status = {"gh": exe, "logged_in": False, "account": None}
         if not exe:
-            status["error"] = "GitHub CLI not found. Install it from https://cli.github.com, then run: gh auth login"
+            status["error"] = "The GitHub CLI is not installed. Install it from the Home page (Getting started)."
         else:
             try:
                 r = self._gh(exe, "auth", "status", "--hostname", "github.com", timeout=20)
@@ -43,7 +44,7 @@ class GhCli:
                 if m and r.returncode == 0:
                     status.update(logged_in=True, account=m.group(1).strip("()"))
                 else:
-                    status["error"] = "GitHub CLI is not logged in. Run: gh auth login"
+                    status["error"] = "You are not logged in to GitHub. Log in from the Home page (Getting started)."
             except (OSError, subprocess.SubprocessError) as e:
                 status["error"] = f"gh auth status failed: {e}"
         self._status = (time.time(), status)
@@ -80,7 +81,7 @@ class GhCli:
     @staticmethod
     def _gh(exe, *args, cwd=None, timeout=60, env=None, input=None) -> subprocess.CompletedProcess:
         if not exe:
-            raise OSError("GitHub CLI not found")
+            raise NotInstalled("gh")
         return proc.run([exe, *args], cwd=cwd, input=input, text=True, encoding="utf-8",
                         errors="replace", timeout=timeout,
                         env={**(env or os.environ), "GH_PROMPT_DISABLED": "1"})

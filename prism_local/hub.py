@@ -34,6 +34,7 @@ import gitsync  # noqa: E402
 import github  # noqa: E402
 import settings  # noqa: E402
 import synctarget  # noqa: E402
+import tools  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from publish import (create_github_repo, git_init, github_of, project_sync, publish_info,  # noqa: E402
                      publish_project, repo_kind)
@@ -885,6 +886,8 @@ class Handler(httpbase.Handler):
         if path == "/api/projects":
             return self._json({**list_projects(),
                                "updated": APP.updated()})
+        if path == "/api/tools":                  # Getting started: git, the GitHub CLI, the login
+            return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1")})
         if path == "/api/settings":
             return self._json({"settings": settings.load(),
                                "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
@@ -919,6 +922,8 @@ class Handler(httpbase.Handler):
                                "claude": claude_status()})
         if path == "/api/snippets":
             return self._json(settings.save_snippets(body.get("content")))
+        if path == "/api/tools/install":
+            return self._json(tools.install(str(body["name"])))
         if path == "/api/projects/add":
             return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
         if path == "/api/projects/create":

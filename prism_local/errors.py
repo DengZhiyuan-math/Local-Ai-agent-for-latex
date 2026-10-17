@@ -30,6 +30,21 @@ class NotFound(Refused):
     status = 404
 
 
+class NotInstalled(FileNotFoundError):
+    """A program Prism needs (git, the GitHub CLI) is not on this computer: said in plain
+    words, and where to get it (the Home page installs it: tools.py), not as Windows'
+    "[WinError 2] The system cannot find the file specified"."""
+    LABELS = {"git": "git", "gh": "The GitHub CLI"}
+
+    def __init__(self, program: str):
+        super().__init__(2, f"{program} not found")
+        self.program = program
+
+    def __str__(self) -> str:
+        label = self.LABELS.get(self.program, self.program)
+        return f"{label[0].upper() + label[1:]} is not installed on this computer. Install it from the Home page."
+
+
 class Conflict(Refused):
     """Not now: something else holds what it needs (a build, an agent's turn, git)."""
     status = 409

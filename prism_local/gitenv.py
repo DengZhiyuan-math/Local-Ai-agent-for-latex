@@ -10,10 +10,12 @@ timeout, and its output is UTF-8 whatever the system's code page (paths like 练
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
 import proc
+from errors import NotInstalled
 
 SELECTORS = frozenset(("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE",
                       "GIT_OBJECT_DIRECTORY", "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -51,5 +53,11 @@ def git(cwd: str | Path, *args: str, timeout: float = 60, binary: bool = False,
     credential helper ask you to log in."""
     text = {} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}
     env = git_env() if interactive else {**git_env(), **NO_PROMPTS}
-    return proc.run(["git", "--no-optional-locks", *args], cwd=cwd, stdin=subprocess.DEVNULL,
-                    timeout=timeout, check=check, env=env, **text)
+    try:
+        return proc.run(["git", "--no-optional-locks", *args], cwd=cwd, stdin=subprocess.DEVNULL,
+                        timeout=timeout, check=check, env=env, **text)
+    except FileNotFoundError as e:
+        # Not a folder that went (its cwd): git itself is missing.
+        if shutil.which("git") is None:
+            raise NotInstalled("git") from e
+        raise

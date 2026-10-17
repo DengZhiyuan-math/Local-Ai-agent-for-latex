@@ -18,7 +18,7 @@ def result(code=0, stdout="", stderr=""):
 class GitHubCLI(unittest.TestCase):
     def setUp(self):
         self.gh = github.GhCli()
-        patch = mock.patch.object(github.shutil, "which", return_value="fixture-gh")
+        patch = mock.patch.object(github.tools, "find", return_value="fixture-gh")
         patch.start()
         self.addCleanup(patch.stop)
 
@@ -43,10 +43,11 @@ class GitHubCLI(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
 
     def test_missing_cli_is_reported_without_starting_a_process(self):
-        with mock.patch.object(github.shutil, "which", return_value=None), \
+        with mock.patch.object(github.tools, "find", return_value=None), \
                 mock.patch.object(github.proc, "run") as run:
-            self.assertIn("not found", self.gh.status()["error"])
-            self.assertIn("not found", self.gh.create(Path("."), "owner/paper"))
+            self.assertIn("not installed", self.gh.status()["error"])
+            self.assertIn("Home page", self.gh.status()["error"], "where to install it, not a command")
+            self.assertIn("not installed", self.gh.create(Path("."), "owner/paper"))
         run.assert_not_called()
 
     def test_create_uses_the_project_and_sanitizes_inherited_git_selectors(self):
