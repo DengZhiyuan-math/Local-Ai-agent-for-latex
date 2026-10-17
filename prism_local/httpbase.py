@@ -30,7 +30,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from errors import Conflict, LockBusy, Params, Refused, say
+from errors import Conflict, LockBusy, NotInstalled, Params, Refused, say
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -161,8 +161,9 @@ class Handler(BaseHTTPRequestHandler):
         """handle(path, Params(arg)). Whatever it raises that it did not answer itself
         becomes a JSON error the page can show, instead of a connection dropped without an
         answer, unless part of an answer has already gone out. The one place where errors
-        become statuses: a Refused says its own (not logged); anything not expected (a
-        bug) is a 500 with its traceback in the log."""
+        become statuses: a Refused says its own (not logged), a program that is not
+        installed (NotInstalled) is a 424 that says where to get it; anything not expected
+        (a bug) is a 500 with its traceback in the log."""
         self._answered = False
         try:
             return handle(path, Params(arg))
@@ -178,6 +179,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(504, said if said.startswith("GitHub") else said + "; try again")
             if isinstance(e, UnicodeDecodeError):
                 return self._err(415, "This file is not UTF-8 text; prism-local edits UTF-8 files only.")
+            if isinstance(e, NotInstalled):     # a FileNotFoundError too: say which program, not 404
+                return self._err(424, str(e))
             if isinstance(e, FileNotFoundError):
                 return self._err(404, "file not found")
             if isinstance(e, ValueError):

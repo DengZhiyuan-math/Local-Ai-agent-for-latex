@@ -41,6 +41,10 @@ class Failing(httpbase.Handler):
             return self._json({}[path])                     # a bug's KeyError
         if path == "/value":
             raise ValueError("not a name")
+        if path == "/no-gh":
+            raise errors.NotInstalled("gh")
+        if path == "/no-file":
+            raise FileNotFoundError(2, "No such file or directory")
         if path == "/locked":
             with registry.FileLock(Path(q["lock"]), timeout=0.2):
                 return self._json({"ok": True})
@@ -107,6 +111,17 @@ class Answers(unittest.TestCase):
             self.assertIn("Traceback", log.call_args.args[0])
             self.assertEqual(self.ask("/value"), (400, {"error": "not a name"}))
             self.assertIn("refused GET /value", log.call_args.args[0])
+
+    def test_a_program_not_installed_says_so_not_file_not_found(self):
+        """NotInstalled is a FileNotFoundError (callers catch OSError), but the page gets
+        its sentence: which program, and where to install it."""
+        with mock.patch.object(httpbase, "log") as log:
+            status, r = self.ask("/no-gh")
+            self.assertEqual(status, 424)
+            self.assertEqual(r["error"], "The GitHub CLI is not installed on this computer. "
+                                         "Install it from the Home page.")
+            self.assertEqual(self.ask("/no-file"), (404, {"error": "file not found"}))
+            log.assert_not_called()
 
 
 class CodeStamp(unittest.TestCase):
