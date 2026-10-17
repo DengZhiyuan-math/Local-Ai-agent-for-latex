@@ -26,12 +26,43 @@ to `pip install`, no npm, and it works offline.
 
 ## Install
 
-### 1. Prerequisites
+### One line
+
+**Windows**: open **PowerShell** (Start menu → type PowerShell), paste this and press Enter:
+
+```powershell
+irm https://raw.githubusercontent.com/DengZhiyuan-math/Local-Ai-agent-for-latex/main/install.ps1 | iex
+```
+
+**macOS and Linux**: open **Terminal**, paste this and press Enter:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DengZhiyuan-math/Local-Ai-agent-for-latex/main/install.sh | sh
+```
+
+It finds or installs Python and git (Windows: for you only, with winget; macOS: Apple's
+developer tools, one click in the window that opens; Linux: it names the one command to
+run), puts Prism in a folder of its own (`%LOCALAPPDATA%\Prism\prism-local`,
+`~/Library/Application Support/Prism/prism-local`, `~/.local/share/prism/prism-local`),
+adds **Prism** to the Start menu, Applications or the application menu, and opens the Home
+page. Running it again updates Prism. `PRISM_DIR` chooses another folder.
+
+On the Home page, **Getting started** does the rest, one click each: the GitHub CLI, your
+GitHub login, LaTeX and, if you want it, the AI assistant. For LaTeX, **Quick start**
+downloads [Tectonic](https://tectonic-typesetting.github.io/) (one program; packages come
+on the first compile, which needs the internet), and **Full LaTeX** installs MiKTeX
+(Windows); a TeX you already have is used as it is. Settings lists the same programs later.
+
+### By hand
+
+The steps the one line does, for those who want to choose.
+
+#### 1. Prerequisites
 
 Python 3.9 or newer and a TeX distribution. Prism also uses git (every version of your
-papers) and the GitHub CLI (your papers on GitHub): you do not need to know either, and on
-Windows the Home page installs both for you (**Getting started**, one click each). To
-install everything yourself instead:
+papers) and the GitHub CLI (your papers on GitHub): you do not need to know either, and
+the Home page installs them for you (**Getting started**, one click each). To install
+everything yourself instead:
 
 | System | One command |
 |---|---|
@@ -47,7 +78,7 @@ install everything yourself instead:
   is used.
 - Open a new terminal afterwards, so that the new programs are on `PATH`.
 
-### 2. Get prism-local
+#### 2. Get prism-local
 
 ```sh
 git clone https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git prism-local
@@ -58,7 +89,7 @@ choose **Code → Download ZIP** and unpack it into a folder named `prism-local`
 with git updates itself; a downloaded one does not (download it again for a new version).
 That is the whole installation: there is nothing to build.
 
-### 3. Start it
+#### 3. Start it
 
 **Windows**: make a **Prism** shortcut in the Start menu and on the desktop, then click it:
 
@@ -99,9 +130,10 @@ The Home page opens. Create a project (**+ New project**) or add a folder you al
   Projects can then get a private repository each (or one per folder), and every change is
   saved there by itself. On another computer, **From GitHub…** copies a project of yours
   there and keeps it in sync. (In a terminal, `gh auth login` does the same login.)
-- **Claude Code** for the agent panel: install it
-  (`irm https://claude.ai/install.ps1 | iex` on Windows,
-  `curl -fsSL https://claude.ai/install.sh | bash` elsewhere) and run `claude` once to log in.
+- **Claude Code** for the agent panel: **Getting started** (or Settings → Programs)
+  installs it and opens a window where you log in once. In a terminal:
+  `irm https://claude.ai/install.ps1 | iex` on Windows,
+  `curl -fsSL https://claude.ai/install.sh | bash` elsewhere, then run `claude` once to log in.
   [Codex](https://github.com/openai/codex), DeepSeek's
   [Deep Code](https://github.com/lessweb/deepcode-cli) (`npm install -g @vegamo/deepcode-cli`)
   or an API key work too; see
@@ -698,7 +730,7 @@ python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop    
 ```
 
 - **Options.** `make-shortcut.ps1` takes `-Name`, `-NoDesktop`, `-Folder` (where to put the
-  shortcut) and `-Browser`; `make_desktop_entry.py` takes `--name`, `--browser`, `--desktop`
+  shortcut), `-Browser` and `-Python` (the Python whose `pythonw.exe` runs it); `make_desktop_entry.py` takes `--name`, `--browser`, `--desktop`
   and `--remove`. To remove a Windows shortcut, delete its `.lnk` file.
 - **Browser modes.** `window` (the default): a Chrome or Edge window with a tab strip, holding
   only Prism. `app`: an app window without tabs or address bar; the pop-out PDF gets its own
@@ -778,6 +810,7 @@ python launcher/prism_launcher.pyw [project | --home] [--browser window|app|defa
 ## Layout
 
 ```
+install.ps1, install.sh    the one-line install (Windows; macOS and Linux)
 bin/prism-local            command-line launcher
 bin/prism-home             command-line launcher for the Home page
 launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1 (Windows),
@@ -798,6 +831,7 @@ prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
 prism_local/repoview.py    where a project is in git and what changed in it, asked again only on a change
 prism_local/selfupdate.py  updates prism-local itself from GitHub when a server starts
+prism_local/tools.py       git, the GitHub CLI, LaTeX and Claude Code: found, or installed from Home
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs,
                            marked 12.0.2 (MIT) and KaTeX 0.16.11 (MIT) for the agent's replies
