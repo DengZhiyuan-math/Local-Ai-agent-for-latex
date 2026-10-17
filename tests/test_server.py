@@ -807,7 +807,7 @@ class UploadsToGitHub(unittest.TestCase):
         rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
-        self.assertIn("no remote", server.UPLOAD_SYNC[rel]["message"])
+        self.assertIn("not on GitHub yet", server.UPLOAD_SYNC[rel]["message"])
         self.assertEqual(self.git(root, "show", "--name-only", "--format=", "HEAD"), "prism-uploads/a.txt")
 
     def test_never_in_a_surrounding_repository(self):

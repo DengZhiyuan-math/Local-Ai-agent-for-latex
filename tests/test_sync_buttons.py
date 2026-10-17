@@ -219,7 +219,7 @@ class SyncButtons(unittest.TestCase):
         self.coauthor_pushes("main.tex", "\\maketitle", "\\maketitle % from Alice")
         st = self.button("pull")
         self.assertIsNone(st["error"])
-        self.assertIn("Pulled 1 commit", st["notice"] or "")
+        self.assertIn("Brought in 1 change from GitHub", st["notice"] or "")
         self.assertIn("from Alice", self.read("main.tex"))
         st = self.button("pull")                       # nothing new
         self.assertIsNone(st["error"])

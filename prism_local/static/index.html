@@ -26,7 +26,7 @@
       <div id="sync-menu" class="dropdown" role="menu" hidden>
         <div class="dd-head">GitHub</div>
         <div class="dd-note" id="sync-detail"></div>
-        <button type="button" class="dd-item" id="sync-bind" data-sync="bind" hidden>Confirm sync target</button>
+        <button type="button" class="dd-item" id="sync-bind" data-sync="bind" hidden>Sync with the new one</button>
         <div id="sync-kept" hidden></div>
         <div id="sync-clash" hidden></div>
         <form id="sync-publish" class="dd-publish" hidden>
@@ -37,12 +37,12 @@
           <p class="dd-note" id="pub-note"></p>
           <button type="submit" class="primary" id="pub-go">Create private GitHub repository</button>
         </form>
-        <button type="button" class="dd-item" data-sync="commit">Save to GitHub now <small>commit &amp; push</small></button>
-        <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub <small>pull</small></button>
+        <button type="button" class="dd-item" data-sync="commit">Save to GitHub now</button>
+        <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub</button>
         <button type="button" class="dd-item" data-sync="history">History of this file…</button>
         <a class="dd-item" id="sync-github" target="_blank" rel="noopener" hidden>Open the repository on GitHub</a>
         <hr>
-        <label class="dd-item" title="Commit a moment after you stop editing and after each agent turn, push every commit, and pull what changed on GitHub"><input type="checkbox" id="sync-auto"> Record and sync automatically</label>
+        <label class="dd-item" title="Save your changes to GitHub a moment after you stop editing and after each agent turn, and get what changed on GitHub"><input type="checkbox" id="sync-auto"> Save to GitHub by itself</label>
       </div>
     </div>
     <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This editor still runs the old version: restart it to use the new one (your files are saved first)">Update: restart</button>

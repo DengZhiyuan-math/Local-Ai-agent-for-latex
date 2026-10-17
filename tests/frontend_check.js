@@ -57,23 +57,29 @@ check("publishState", () => {
 
 // ---------------------------------------------------------------- syncstate.js
 const SyncState = require("../prism_local/static/syncstate.js");
-check("describeSync: paused shows the bound and the current target", () => {
+check("describeSync: paused says so in plain words, the bound and current target under details", () => {
   const bound = { repository_identity: "github.com/owner/paper", branch_ref: "refs/heads/main" };
   const d = SyncState.describeSync({ own: true, enabled: true, remote: true, state: "idle", target: null,
                                      bound_target: bound, blocked_reason: "Fetch and push differ" }, () => "now");
-  assert.strictEqual(d.text, "Sync paused");
+  assert.strictEqual(d.text, "Upload paused");
   assert.strictEqual(d.cls, "warn");
-  assert.ok(d.detail.includes("github.com/owner/paper, branch main"), d.detail);
-  assert.ok(d.detail.includes("Current target: unavailable"), d.detail);
+  assert.ok(d.detail.includes("your edits are saved on this computer"), d.detail);
+  assert.ok(!/target|branch|Fetch/.test(d.detail), d.detail);
+  assert.ok(d.tech.includes("github.com/owner/paper, branch main"), d.tech);
+  assert.ok(d.tech.includes("Current target: unavailable"), d.tech);
+  const said = SyncState.describeSync({ own: true, enabled: true, remote: true, state: "idle", blocked_reason: "x",
+                                         blocked_plain: "Uploading to GitHub is paused; because." }, () => "");
+  assert.strictEqual(said.detail, "Uploading to GitHub is paused; because.");
 });
 check("describeSync: what is due, and synced", () => {
   const base = { own: true, enabled: true, remote: true, state: "idle" };
   assert.match(SyncState.describeSync({ ...base, pending: true, next_autosave: 90 }, () => "").detail, /in about 2 min/);
-  assert.strictEqual(SyncState.describeSync({ ...base, ahead: 2 }, () => "").text, "2 to push");
-  assert.strictEqual(SyncState.describeSync({ ...base, state: "pulling" }, () => "").text, "Pulling…");
+  assert.strictEqual(SyncState.describeSync({ ...base, ahead: 2 }, () => "").text, "Not uploaded yet");
+  assert.strictEqual(SyncState.describeSync({ ...base, state: "pulling" }, () => "").text, "Getting changes…");
   const ok = SyncState.describeSync({ ...base, last_push: 5, target: { repository_identity: "github.com/o/p", branch_ref: "refs/heads/main" } },
                                     () => "3 min ago");
-  assert.deepStrictEqual([ok.text, ok.detail], ["Saved to GitHub", "Synced to github.com/o/p, branch main, 3 min ago."]);
+  assert.deepStrictEqual([ok.text, ok.detail, ok.tech], ["Saved to GitHub", "Everything is on GitHub, 3 min ago.",
+                                                       "Synced to github.com/o/p, branch main."]);
   assert.strictEqual(SyncState.describeSync({ own: false }, () => "").text, "Not on GitHub");
 });
 

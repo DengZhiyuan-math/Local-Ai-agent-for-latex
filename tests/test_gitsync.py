@@ -80,7 +80,7 @@ class GitSyncTest(unittest.TestCase):
                     "local", "The agent is working: merged once its turn ends.")):
             out = self.g.push(manual=True)
         self.assertNotIn("resolve host", out.message or "")
-        self.assertIn("pull first", out.message)
+        self.assertIn("newer changes", out.message)
 
     def test_a_push_that_timed_out_says_what_to_do(self):
         """Not "Command '['git', '--no-optional-locks', 'push', …]' timed out after 180 seconds"."""
@@ -435,7 +435,7 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual((done.state, done.error), ("synced", None))
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "from the other computer\n")
         self.assertEqual(self.g.behind, 0)
-        self.assertIn("Pulled 1 commit", self.g.notice)
+        self.assertIn("Brought in 1 change from GitHub", self.g.notice)
 
     def test_a_pull_and_a_button_say_what_they_did(self):
         """What a pull or a button met is returned to whoever asked; status() keeps it too,
@@ -446,7 +446,11 @@ class GitSyncTest(unittest.TestCase):
         done = self.g.pull()
         self.assertEqual(done.state, "failed")
         self.assertIn("Could not reach GitHub", done.error)
-        self.assertEqual(self.g.status()["error"], done.error)
+        st = self.g.status()                                             # plain words, git's apart
+        self.assertEqual(st["error"], gitsync.said(done.error))
+        self.assertNotIn("\n", st["error"])
+        self.assertEqual(st["error_details"], gitsync.details(done.error))
+        self.assertTrue(st["error_details"], "git's own message is kept for Details")
         clicked = self.g.now("pull")
         self.assertIn("Could not reach GitHub", clicked.error)
         (self.root / "main.tex").write_text("two\n", encoding="utf-8")
@@ -489,7 +493,7 @@ class GitSyncTest(unittest.TestCase):
         g.stop.set()                      # run() does its start-up work, then no ticks
         g.run()
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "written elsewhere\n")
-        self.assertIn("Pulled 1 commit", g.notice)
+        self.assertIn("Brought in 1 change from GitHub", g.notice)
 
     def test_diverged_histories_are_merged_not_rewritten(self):
         """Both sides moved on (a co-author pushed while you wrote): a merge keeps both; no

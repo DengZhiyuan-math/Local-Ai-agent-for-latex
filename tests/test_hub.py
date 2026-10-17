@@ -1006,7 +1006,10 @@ class CheckGitHub(TempState):
             self.assertIsNone(hub.git_info(root)["github"])
             (xdg / "git" / "config").write_text('[url "https://github.com/"]\n\tinsteadOf = mygh:\n', encoding="utf-8")
             # The rewrite makes another target, which the page must have you confirm.
-            self.assertIn("Sync target changed", hub.git_info(root)["fetch_error"] or "", "the rewrite is seen")
+            info = hub.git_info(root)
+            self.assertIn("Sync target changed", info["paused_details"] or "", "the rewrite is seen")
+            self.assertIn("Uploading to GitHub is paused", info["paused"], "in plain words")
+            self.assertIsNone(info["fetch_error"], "GitHub was not unreachable")
 
     def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
         """A page that asks then must keep watching, or it never shows what was found."""

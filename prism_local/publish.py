@@ -130,7 +130,8 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
     try:
         git_init(root)
         if run_git(root, "remote").stdout.strip():
-            return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
+            return {"error": "This project is already connected to a repository online, and Prism syncs with "
+                             "it; nothing new was created."}
         repo = Repository.find(root, files=(lambda: files_lock) if files_lock else None)
         if repo is None:
             return {"error": "git init failed"}

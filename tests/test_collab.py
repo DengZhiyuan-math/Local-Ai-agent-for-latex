@@ -669,7 +669,7 @@ class Collaboration(unittest.TestCase):
         rewritten = self.rewrite_remote()
         self.pull("B")
         _, gb = self.people["B"]
-        self.assertIn("rewrote the history", gb.notice or "")
+        self.assertIn("replaced the history on GitHub", gb.notice or "")
         self.assertIn("R", gb.notice or "")
         tip = git(self.remote, "rev-parse", "main")
         self.assertEqual(subprocess.run(["git", "merge-base", "--is-ancestor", rewritten, tip],
@@ -691,7 +691,7 @@ class Collaboration(unittest.TestCase):
         self.write("B", "main.tex", PAPER.replace("Second", "B's second"))     # not recorded yet
         self.pull("B")
         self.assertIsNone(gb.error, gb.error)
-        self.assertIn("rewrote the history", gb.notice or "")
+        self.assertIn("replaced the history on GitHub", gb.notice or "")
         text = self.read("B", "main.tex")
         for part in ("A's third", "B's second", "Rewritten first"):
             self.assertIn(part, text)
@@ -727,7 +727,7 @@ class Collaboration(unittest.TestCase):
         calls.clear()
         self.pull("B")
         self.assertGreater(calls.count("cat-file -e"), 3, "after a rewrite: every position")
-        self.assertIn("rewrote the history", gb.notice or "")
+        self.assertIn("replaced the history on GitHub", gb.notice or "")
         self.assertIn("A's last", self.remote_file("main.tex"))
         self.assertSafe()
 
@@ -754,7 +754,7 @@ class Collaboration(unittest.TestCase):
         self.rewrite_remote()
         self.pull("B")
         self.assertNotIn("A's secret", self.remote_file("main.tex"))
-        self.assertIn("rewritten on purpose", gb.error or "")
+        self.assertIn("set to leave that alone", gb.error or "")
         self.write("B", "refs.bib", "% refs\n% later\n")
         self.save("B")                        # and B's later saves do not bring it back either
         self.assertNotIn("A's secret", self.remote_file("main.tex"))

@@ -185,7 +185,7 @@ check("sync menu drops a stale GitHub link", await ed.ev(`
                bound_target: { repository_identity: "github.com/owner/paper", branch_ref: "refs/heads/main" },
                blocked_reason: "Fetch and push differ" });
   return S.githubUrl === "" && $("#sync-github").hidden && !$("#sync-github").hasAttribute("href")
-    && $("#sync-label").textContent === "Sync paused" && $("#sync-detail").innerHTML.includes("github.com/owner/paper");`));
+    && $("#sync-label").textContent === "Upload paused" && $("#sync-detail details").textContent.includes("github.com/owner/paper");`));
 check("completion of a label", await ed.ev(`
   for (let i = 0; i < 50 && !S.tabs.length; i++) await new Promise((r) => setTimeout(r, 100));
   S.symbols = { ...S.symbols, labels: [{ label: "thm:main", kind: "theorem", file: "main.tex", line: 1 }], env_titles: { theorem: "Theorem" } };

@@ -148,6 +148,8 @@ button.flip .ico { transform: rotate(180deg); }
 .dropdown button.dd-item { width: 100%; height: auto; border: none; background: none; justify-content: flex-start; line-height: 1.4; }
 .dropdown .dd-note { font-size: 11px; color: var(--muted); padding: 4px 9px 5px; max-width: 290px; white-space: normal; }
 .dropdown .dd-note:empty { display: none; }
+.dropdown .sync-tech { margin-top: 4px; overflow-wrap: anywhere; }
+.dropdown .sync-tech summary { cursor: pointer; }
 /* GitHub sync (renderSync in app.js). */
 #sync-box { position: relative; }
 #sync-box[hidden] { display: none; }

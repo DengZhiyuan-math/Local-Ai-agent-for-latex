@@ -197,35 +197,43 @@ The list and settings live in `%LOCALAPPDATA%\prism-local` on Windows,
 
 ## History and sync with GitHub
 
-Open the Git menu and **Confirm sync target** for an existing repository before its first
-remote sync. The menu shows the repository and branch used by both fetch and push. A changed
-remote, branch, push URL or URL rewrite pauses remote sync and keeps your local edits and
-commits. Correct the configuration or confirm the new target in that menu. A repository
-created by Prism is bound to its known target when it is created.
+You do not need to know git. Create a private GitHub repository for a project from the
+GitHub button (or **+ GitHub** on the Home page), and from then on Prism saves every change
+there by itself:
 
-The automatic sync switch controls autosave commits, uploads and closing sync. The explicit
-**Save to GitHub now** and **Get changes from GitHub** actions still work with the switch
-off. They use the same target checks.
-
-In a project with a repository (its own, or its folder's shared one):
-
-- your changes are committed two minutes after you stop editing (at the latest ten minutes
-  after the first), and every agent turn gets a commit of its own with your request as the
-  message;
-- every commit is pushed, and changes on GitHub (another computer) are pulled in: right when
-  the project opens, then every five minutes. Histories that diverged are reported, never
-  merged for you;
-- when the Home page starts, it checks GitHub for every project in the background (a fetch:
-  no file changes) and marks the projects with new commits *↓ N new on GitHub*; opening the
+- your changes are saved to the project's history two minutes after you stop editing (at
+  the latest ten minutes after the first), and every agent turn is saved on its own, with
+  your request as its description;
+- everything saved is uploaded to GitHub, and what changed on GitHub (another computer, a
+  co-author) is brought in: right when the project opens, then every five minutes. Where
+  you and a co-author changed the same lines, both versions are kept for you to choose;
+- when the Home page starts, it looks at GitHub for every project in the background (no
+  file changes) and marks the projects with new changes *↓ N new on GitHub*; opening the
   project brings them in;
-- the GitHub button at the top says where things stand, and has *Save to GitHub now*, *Get
-  changes from GitHub* and a switch;
+- the GitHub button at the top says where things stand, and has **Save to GitHub now**,
+  **Get changes from GitHub** and a switch, **Save to GitHub by itself**. The two actions
+  work with the switch off too;
 - the **History** tab lists every version of the open file, shows what each changed, and
-  restores one; the **Diff** tab shows what is not committed yet, or what the last commit
-  changed.
+  restores one; the **Diff** tab shows what is not saved to the history yet, or what the
+  last save changed.
 
-Files changed on disk by other programs (Claude Code in a terminal, `git checkout`, another
-editor) reload by themselves, and a save never silently overwrites a newer version on disk.
+Prism keeps the repositories it set up in order itself. If another program changes how
+such a project is connected to GitHub, Prism puts it back and goes on. It never uploads
+somewhere other than the GitHub repository the project belongs to: if the project is
+pointed at a different repository, uploading pauses (your edits stay saved on this
+computer) and the GitHub button says so in plain words, and it goes on by itself once the
+project points back. **Sync with the new one** in that menu makes the new repository the
+project's.
+
+Files changed on disk by other programs (Claude Code in a terminal, another editor) reload
+by themselves, and a save never silently overwrites a newer version on disk.
+
+**For those who know git.** Each project syncs one branch with one remote branch, bound in
+`.git/prism-local.json` when Prism creates the repository or, for one you set up yourself,
+when it first syncs. In a repository you set up, Prism does not change your settings: a
+changed remote, branch, push URL, URL rewrite, pushRemote/pushDefault or mirror pauses
+upload until it names the bound target again, or you choose the new one. Details of every
+pause are under **Details** in the GitHub menu.
 
 ## Writing together
 

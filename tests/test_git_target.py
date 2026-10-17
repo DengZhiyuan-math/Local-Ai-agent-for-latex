@@ -248,7 +248,7 @@ class Targets(unittest.TestCase):
             git(self.root, "config", "remote.origin.pushurl", str(self.tool))
         t.join(30)
         self.assertEqual(pushed[0].state, "local")
-        self.assertIn("Sync paused", pushed[0].message)
+        self.assertIn("paused", pushed[0].message)
         self.assertEqual(git(self.tool, "for-each-ref"), "", "nothing reached the other repository")
         self.assertEqual(git(self.remote, "for-each-ref"), "")
         git(self.root, "config", "--unset", "remote.origin.pushurl")

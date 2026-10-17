@@ -192,6 +192,27 @@ def _resolve(repo: Repository) -> dict:
             "configuration_fingerprint": fingerprint}
 
 
+# Why sync waits (validate's reasons, in git's words, kept for the details), as someone who
+# does not know git can act on it: by the start of each reason this module gives.
+_PLAIN = (
+    ("Sync target changed", "This project now points to a different repository or branch on GitHub than "
+                            "before. If that is what you want, choose “Sync with the new one” in this menu."),
+    ("Project repository changed", "This project's folder was changed while it was open. Close this "
+                                   "window and open the project again from Home."),
+    ("Detached HEAD", "This project shows an older saved version, not its latest one."),
+)
+
+
+def plain(reason: str | None) -> str | None:
+    """`reason` (why validate pauses sync) in plain words: what happened and what to do."""
+    if not reason:
+        return None
+    says = next((text for start, text in _PLAIN if reason.startswith(start)),
+                "This project's connection to GitHub was set up outside Prism in a way Prism does "
+                "not change by itself.")
+    return "Uploading to GitHub is paused; your edits are saved on this computer. " + says
+
+
 def repair(repo: Repository, bound: dict) -> list[str]:
     """What sync needs of a repository Prism manages, put back as Prism set it up, so that
     it syncs with `bound` again: on its branch when it was left at that branch's last

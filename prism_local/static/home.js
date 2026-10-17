@@ -238,14 +238,18 @@ function gitChip(id) {
   if (g === null) return `<span class="gitchip"><button class="chip gh add" data-act="publish" title="Create a private GitHub repository for this project">+ GitHub</button></span>`;
   if (!g) return `<span class="gitchip"></span>`;
   if (g.nested) return `<span class="gitchip chip muted" title="No repository of its own: this folder is inside ${esc(g.toplevel_path)}">inside ${esc(g.toplevel)} repo</span>`;
-  const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : ""].filter(Boolean).join(" · ");
-  // New commits on GitHub (fetched when the Home page started): opening the project pulls them.
-  const news = g.behind ? ` <span class="chip news" title="${g.behind} new commit${g.behind === 1 ? "" : "s"} on GitHub (another computer, GitHub's editor). Opening the project brings them in.">↓ ${g.behind} new on GitHub</span>`
-    : g.fetch_error ? ` <span class="chip err" title="${esc(g.fetch_error)}">GitHub not reached</span>` : "";
+  // In plain words: where its work is, not git's (the branch and counts are in the title).
+  const saved = !g.github ? "saved on this computer" : (g.changes || g.ahead) ? "not all on GitHub yet" : "all on GitHub";
+  const extra = [g.shared ? `in ${g.shared}` : "", saved].filter(Boolean).join(" · ");
+  // New changes on GitHub (fetched when the Home page started): opening the project brings them in.
+  const news = g.paused ? ` <span class="chip err" title="${esc(g.paused + "\n\nDetails: " + (g.paused_details || ""))}">Upload paused</span>`
+    : g.behind ? ` <span class="chip news" title="${g.behind} new change${g.behind === 1 ? "" : "s"} on GitHub (from another computer, or GitHub's editor). Opening the project brings them in.">↓ ${g.behind} new on GitHub</span>`
+    : g.fetch_error ? ` <span class="chip err" title="${esc("Could not reach GitHub; Prism tries again later.\n\nDetails: " + g.fetch_error)}">GitHub not reached</span>` : "";
   const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>`
     : ` <button class="chip gh add" data-act="publish" title="Create a private GitHub repository for ${g.shared ? "the repository it is in" : "this project"}">+ GitHub</button>`;
   const where = g.shared ? `, in the repository shared by its folder (${g.toplevel_path})` : "";
-  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${news}${gh}</span>`;
+  const tech = `git: branch ${g.branch || "—"}, ${g.changes} changed file${g.changes === 1 ? "" : "s"} not committed, ${g.ahead} commit${g.ahead === 1 ? "" : "s"} not pushed${where}`;
+  return `<span class="gitchip"><span class="chip ${g.changes || g.ahead ? "dirty" : ""}" title="${esc(tech)}">${esc(extra)}</span>${news}${gh}</span>`;
 }
 function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);

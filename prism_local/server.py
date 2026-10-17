@@ -490,7 +490,8 @@ class Handler(httpbase.Handler):
                 return self._err(400, "unknown action")
             st = GITSYNC.status()
             if done is not None and done.error:
-                st["error"] = done.error        # this click's, whatever the worker met meanwhile
+                # this click's, whatever the worker met meanwhile
+                st["error"], st["error_details"] = gitsync.said(done.error), gitsync.details(done.error)
             return self._json({**st, "github": github_url()})
         if path == "/api/agent":
             scope = body.get("scope") or None

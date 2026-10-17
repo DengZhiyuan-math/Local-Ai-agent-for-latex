@@ -253,7 +253,8 @@ def git_info(root: Path) -> dict | None:
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
     return {"branch": found.branch, "changes": len(changed), "ahead": found.ahead, "behind": found.behind,
-            "github": web, "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"],
+            "github": web, "fetch_error": fetch_error, "paused": synctarget.plain(sync["blocked_reason"]),
+            "paused_details": sync["blocked_reason"], "sync_target": sync["target"],
             **(shared or {})}
 
 

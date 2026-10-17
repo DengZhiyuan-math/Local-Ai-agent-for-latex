@@ -661,12 +661,13 @@ function renderSync(st) {
   $("#sync-github").hidden = !S.githubUrl;
   if (S.githubUrl) $("#sync-github").href = S.githubUrl;
   else $("#sync-github").removeAttribute("href");
-  const { text, cls, detail } = SyncState.describeSync(st, ago);     // syncstate.js
+  const { text, cls, detail, tech } = SyncState.describeSync(st, ago);     // syncstate.js
   label.textContent = text;
   b.className = "ghost sync-" + cls;
   b.title = detail.replace(/<[^>]+>/g, "");
-  const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
-  htmlIfChanged("#sync-detail", esc(detail) + last);
+  const last = st.last_commit ? `<br>Last saved ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
+  // What git says, for those who want to know: folded away.
+  htmlIfChanged("#sync-detail", esc(detail) + last + (tech ? `<details class="sync-tech"><summary>Details</summary>${esc(tech)}</details>` : ""));
   $("#sync-auto").checked = SYNC_TOGGLE.value(st.enabled);
   // Where you and a co-author changed the same lines, both versions were kept: list them.
   const kept = (st.own && st.kept) || [];
@@ -707,7 +708,7 @@ $("#sync-menu").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-sync]"); if (!b) return;
   syncMenu(false);
   if (b.dataset.sync === "history") return showHistory();
-  if (b.dataset.sync === "bind" && !confirm(`Sync this project to ${S.sync.target.repository_identity}\nBranch: ${S.sync.target.branch_ref}\nFetch: ${S.sync.target.fetch_url}\nPush: ${S.sync.target.push_url}?`)) return;
+  if (b.dataset.sync === "bind" && !confirm(`Sync this project with ${S.sync.target.repository_identity} on GitHub from now on?\n\nDetails: branch ${S.sync.target.branch_ref}, fetch ${S.sync.target.fetch_url}, push ${S.sync.target.push_url}`)) return;
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
