@@ -164,10 +164,22 @@ def tex_dirs() -> list[Path]:
     return [p for p in cands if p.is_dir()]
 
 
+def own_bin() -> Path:
+    """The folder of programs Prism downloads itself (a Tectonic installed from the Home
+    page: tools.bin_dir)."""
+    import registry
+    return registry.state_dir() / "bin"
+
+
 def build_env() -> dict:
-    """The environment builds run in: this process's, with the first TeX distribution
-    folder added to PATH when no TeX engine can be found on PATH itself."""
+    """The environment builds run in: this process's, with Prism's own bin folder (own_bin)
+    added to PATH, and the first TeX distribution folder when no TeX engine can be found
+    on PATH itself."""
     env = dict(os.environ)
+    own = own_bin()
+    have = {os.path.normcase(p.rstrip("\\/")) for p in env.get("PATH", "").split(os.pathsep) if p}
+    if own.is_dir() and os.path.normcase(str(own).rstrip("\\/")) not in have:
+        env["PATH"] = env.get("PATH", "") + os.pathsep + str(own)
     if not any(shutil.which(e) for e in ("pdflatex", "xelatex", "lualatex")):
         found = next((d for d in tex_dirs() if shutil.which("pdflatex", path=str(d))), None)
         if found:
@@ -658,7 +670,9 @@ class Build:
         want = str(self.want_builder or "auto").lower()
         if want in ("latexmk", "tectonic"):
             if not self._which(want):
-                raise BuildError(f"prism.json asks for {want}, which was not found on PATH.")
+                raise BuildError(f"prism.json asks for {want}, which was not found on PATH."
+                                 + (" Install it from the Home page (Getting started: LaTeX, Quick start)."
+                                    if want == "tectonic" else ""))
             return want
         if want not in ("auto", "builtin"):
             raise BuildError(f"prism.json: unknown builder {self.want_builder!r} "
@@ -668,8 +682,9 @@ class Build:
         if self._which("tectonic"):
             self.notes.append(f"{self.engine} was not found, so Tectonic builds this project.")
             return "tectonic"
-        raise BuildError(f"{self.engine} was not found. Install MiKTeX (miktex.org) or TeX Live, "
-                         "or add its bin folder to PATH, then restart Prism.")
+        raise BuildError(f"{self.engine} was not found. Install LaTeX from the Home page (Getting started), "
+                         "or install MiKTeX (miktex.org) or TeX Live yourself, or add its bin folder to PATH, "
+                         "then restart Prism.")
 
     def _step(self, name: str, argv: list[str], cwd: Path, env: dict | None = None,
               keep: bool = True, tool: bool = False) -> tuple[int, str]:

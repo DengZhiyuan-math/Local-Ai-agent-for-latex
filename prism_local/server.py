@@ -42,6 +42,7 @@ import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
 import settings  # noqa: E402
+import tools  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -612,6 +613,9 @@ def main():
     ap.add_argument("--moved-from", type=Path, help=argparse.SUPPRESS)   # see rename_project
     a = ap.parse_args()
     project = Path(a.root or a.project).resolve()
+    # Programs installed since this computer's PATH was read, and those Prism downloaded
+    # itself (Tectonic, in its own bin folder), are found by the builds.
+    tools.refresh_path()
 
     def start(life):
         at = project

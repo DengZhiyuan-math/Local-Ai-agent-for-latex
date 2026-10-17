@@ -32,7 +32,7 @@ class Tools(unittest.TestCase):
         self.base = tmpdir()
         self.bin = self.base / "bin"
         self.bin.mkdir()
-        env = mock.patch.dict(os.environ, {"PATH": str(self.bin)})
+        env = mock.patch.dict(os.environ, {"PATH": str(self.bin), "PRISM_STATE_DIR": str(self.base / "state")})
         env.start()
         self.addCleanup(env.stop)
         tools.INSTALL.clear()
@@ -40,6 +40,7 @@ class Tools(unittest.TestCase):
         # Nothing from this computer's own installs or registry.
         for patch in (mock.patch.object(tools, "KNOWN_DIRS", {"git": [str(self.base / "Git" / "cmd")],
                                                                "gh": [str(self.base / "GitHub CLI")]}),
+                      mock.patch.object(tools, "USER_BIN", self.base / "home" / ".local" / "bin"),
                       mock.patch.object(tools, "_registry_path", return_value=[])):
             patch.start()
             self.addCleanup(patch.stop)
@@ -120,7 +121,7 @@ class Tools(unittest.TestCase):
                 tools.install("git")
         self.assertEqual(str(said.exception), tools.how_to("git"))
         self.assertNotIn("git", tools.status()["installing"], "nothing left running")
-        self.assertFalse(tools.status()["can_install"])
+        self.assertFalse(tools.status()["can_install"]["git"])
         with self.assertRaises(errors.Refused):
             tools.install("python")
 

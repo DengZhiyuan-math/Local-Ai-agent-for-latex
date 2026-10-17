@@ -989,7 +989,7 @@ class Handler(httpbase.Handler):
                                "updated": APP.updated()})
         if path == "/api/github/repos":
             return self._json({"repos": github.GITHUB.repos()})
-        if path == "/api/tools":                  # Getting started: git, the GitHub CLI, the login
+        if path == "/api/tools":                  # Getting started: git, gh, LaTeX, Claude Code, the login
             return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
                                "login": github.GITHUB.login_state()})
         if path == "/api/settings":
@@ -1026,8 +1026,10 @@ class Handler(httpbase.Handler):
                                "claude": claude_status()})
         if path == "/api/snippets":
             return self._json(settings.save_snippets(body.get("content")))
-        if path == "/api/tools/install":
+        if path == "/api/tools/install":          # git, gh, tectonic, tex, claude
             return self._json(tools.install(str(body["name"])))
+        if path == "/api/tools/claude-login":     # a terminal window running claude, to log in once
+            return self._json(tools.claude_login())
         if path == "/api/github/open":            # a project of yours on GitHub, on this computer
             return self._json(open_from_github(str(body["full"])))
         if path == "/api/github/login":           # GitHub's device login, in the browser
