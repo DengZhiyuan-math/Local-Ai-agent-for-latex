@@ -231,8 +231,18 @@ class RepoSettings:
         return bool(self.read().get("sync", True))
 
     def bind(self, target: dict) -> None:
-        """Called only after the author confirmed `target`, or after creating a known repo."""
+        """Called after the author confirmed `target`, when Prism creates a repository (the
+        one it creates: publish.create_github_repo), and by validate for one not bound yet.
+        Only repository_identity, branch_ref and local_branch decide whether a target is
+        this one; validate fills in the rest."""
         self.update(sync_target=target)
+
+    def unbind(self) -> None:
+        """No target bound (a repository Prism set out to create was not created)."""
+        with registry.FileLock(self.file.with_name(self.file.name + ".lock"), timeout=10):
+            data = self.read()
+            data.pop("sync_target", None)
+            write_bytes(self.file, json.dumps(data).encode())
 
     def validate(self, fresh: bool = False) -> tuple[dict | None, str | None]:
         """(the target, None) when syncing may go on; else (the target or None, why not).

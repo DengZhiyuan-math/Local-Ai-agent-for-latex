@@ -55,6 +55,15 @@ class Publish(unittest.TestCase):
         path = self.root / ".git/prism-local.json"
         self.assertNotIn("sync_target", json.loads(path.read_text()) if path.exists() else {})
 
+    def assert_bound_to_the_created_one(self):
+        """Bound to the repository created, whatever the configuration names: a look (the
+        Home page, the editor's sync) pauses, and binds nothing else."""
+        sync = publish.project_sync(self.root)
+        self.assertFalse(sync.validate_target(fresh=True))
+        bound = json.loads((self.root / ".git/prism-local.json").read_text())["sync_target"]
+        self.assertEqual(bound["repository_identity"], "github.com/me/paper")
+        self.assertEqual(self.git(self.gh.repositories["me/paper"], "for-each-ref"), "")
+
     def test_default_owner_is_used_and_a_second_publish_does_not_create_again(self):
         settings.save({"github_owner": "my-org"})
         result = publish.publish_project(self.root)
@@ -80,6 +89,7 @@ class Publish(unittest.TestCase):
         self.gh.fail = "fixture offline"
         result = publish.publish_project(self.root)
         self.assertEqual(result, {"error": "fixture offline", "created": False})
+        self.assert_unbound()
         self.assertEqual(self.git(self.root, "show", "HEAD:main.tex"), "original")
         self.assertEqual(self.git(self.root, "remote"), "")
         self.assertEqual(self.gh.protected, [])
@@ -98,21 +108,29 @@ class Publish(unittest.TestCase):
             result = publish.publish_project(self.root)
         self.assert_created_failure(result)
 
-    def test_wrong_created_target_reports_the_link_without_binding_or_pushing(self):
+    def test_wrong_created_target_waits_and_syncs_once_it_points_there_again(self):
         create = self.gh.create
 
         def redirected(root, full):
             error = create(root, full)
             self.git(root, "remote", "set-url", "origin", "https://github.com/me/other.git")
+            # The Home page looks right then: it binds nothing else.
+            self.assertFalse(publish.project_sync(root).validate_target(fresh=True))
             return error
 
         with mock.patch.object(self.gh, "create", redirected):
             result = publish.publish_project(self.root)
         self.assert_created_failure(result)
-        self.assertIn("differs from the effective", result["error"])
-        self.assert_unbound()
+        self.assertIn("send uploads elsewhere", result["error"])
+        self.assert_bound_to_the_created_one()
+        # Pointed back to it (by hand, say): it syncs by itself, nothing to confirm.
+        self.git(self.root, "remote", "set-url", "origin", "https://github.com/me/paper.git")
+        sync = publish.project_sync(self.root)
+        self.assertEqual(sync.push(manual=True).state, "synced")
+        self.assertEqual(self.git(self.gh.repositories["me/paper"], "rev-parse", "main"),
+                         self.git(self.root, "rev-parse", "HEAD"))
 
-    def test_wrong_remote_branch_reports_the_link_without_binding_or_pushing(self):
+    def test_wrong_remote_branch_waits_bound_to_the_created_one(self):
         create = self.gh.create
 
         def redirected(root, full):
@@ -124,8 +142,8 @@ class Publish(unittest.TestCase):
         with mock.patch.object(self.gh, "create", redirected):
             result = publish.publish_project(self.root)
         self.assert_created_failure(result)
-        self.assertIn("differs from the current branch", result["error"])
-        self.assert_unbound()
+        self.assertIn("send uploads elsewhere", result["error"])
+        self.assert_bound_to_the_created_one()
 
     def test_busy_first_push_reports_the_created_repository(self):
         with mock.patch.object(gitsync.GitSync, "push", side_effect=RepoBusy("fixture git is busy")):

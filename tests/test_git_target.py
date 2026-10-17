@@ -177,7 +177,13 @@ class Targets(unittest.TestCase):
         self.assertEqual(gh.created, ["owner/paper"])
         push.assert_not_called()
         self.assertEqual(gh.protected, [], "no protection asked for")
-        self.assertNotIn("sync_target", self.g.settings.read())
+        # Bound to the repository created: the redirected one is never bound by a look
+        # (the Home page, the editor's sync), which pauses until it points there again.
+        self.assertEqual(self.g.settings.read()["sync_target"]["repository_identity"], "github.com/owner/paper")
+        self.assertFalse(self.g.validate_target(fresh=True))
+        self.assertEqual(self.g.settings.read()["sync_target"]["repository_identity"], "github.com/owner/paper")
+        git(self.root, "remote", "set-url", "origin", "https://github.com/owner/paper.git")
+        self.assertTrue(self.g.validate_target(fresh=True), "pointed back: it goes on by itself")
         self.assertEqual((self.root / "main.tex").read_text(), "base\n")
 
     def test_publishing_commits_holding_the_files(self):
