@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # test_agent, from wherever it is run
 from backend_openai import OpenAICompat, ToolError
 from test_agent import job_for
 from test_agent import manager, wait_done

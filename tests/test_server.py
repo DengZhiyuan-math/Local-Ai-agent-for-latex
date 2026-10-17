@@ -234,7 +234,7 @@ class Files(unittest.TestCase):
     def test_save_while_another_program_reads_the_file(self):
         root = project({"main.tex": "old\n"})
         reader = subprocess.Popen([sys.executable, "-c", "import sys,time; f=open(sys.argv[1]); "
-                                   "print('open', flush=True); time.sleep(4)", str(root / "main.tex")],
+                                   "print('open', flush=True); time.sleep(4); f.close()", str(root / "main.tex")],
                                   stdout=subprocess.PIPE, text=True)
         self.addCleanup(reader.stdout.close)
         self.addCleanup(reader.wait)

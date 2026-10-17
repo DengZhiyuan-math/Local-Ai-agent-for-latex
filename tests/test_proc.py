@@ -15,9 +15,18 @@ from tmpdirs import tmpdir  # noqa: E402
 
 def running(pid: int) -> bool:
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                             capture_output=True, text=True, **proc.NO_WINDOW).stdout
-        return f'"{pid}"' in out
+        # Asked of Windows itself, not tasklist (which a restricted sandbox may not run, and
+        # whose failure read as "gone"): a process not yet ended is not signalled.
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x00100000 | 0x1000, False, pid)   # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5                # access denied: it is there
+        try:
+            return k32.WaitForSingleObject(ctypes.c_void_p(h), 0) == 0x102   # WAIT_TIMEOUT: still running
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

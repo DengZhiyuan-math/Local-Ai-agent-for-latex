@@ -194,7 +194,7 @@ class GitSyncTest(unittest.TestCase):
         lock = repository.FilesLock(lambda: self.root / ".git")
         code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import repository; "
                 "from pathlib import Path; l = repository.FilesLock(lambda: Path(sys.argv[2])); "
-                "l.acquire(); print('held', flush=True); time.sleep(1.5)")
+                "l.acquire(); print('held', flush=True); time.sleep(1.5); l.release()")
         p = subprocess.Popen([sys.executable, "-c", code, str(Path(gitsync.__file__).parent), str(self.root / ".git")],
                              stdout=subprocess.PIPE, text=True)
         self.addCleanup(p.wait)
