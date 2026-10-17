@@ -553,6 +553,50 @@ check("regions: formulas of every kind, comments, and what only looks like them"
   assert.deepStrictEqual(FindLogic.scoped(FindLogic.matches("$a$ b", { query: "a\\$ b", regex: true }).list,
     FindLogic.regions("$a$ b"), "math"), []);
 });
+// ---------------------------------------------------------------- agentsearch.js
+const AgentSearch = require("../prism_local/static/agentsearch.js");
+const block = (o) => "Here is my proposal.\n```prism-search\n" + JSON.stringify(o) + "\n```\n";
+check("agent search: the prompt names the request, the files and the answer's form", () => {
+  const p = AgentSearch.prompt("rename the index i to j", { main: "main.tex", documentFiles: ["main.tex", "sec/a.tex"] });
+  assert.ok(p.startsWith("[prism-search]") && p.includes("Request: rename the index i to j") && p.includes("main.tex, sec/a.tex"));
+  assert.ok(p.includes("```prism-search\n{") && p.includes('"\\\\\\\\sum"') && p.includes("Do not change, create or delete any file"), p);
+});
+check("agent search: the answer's last block is read; what cannot be used is said", () => {
+  const ok = AgentSearch.parse("```json\n{\"rules\": []}\n```\n" + block({ summary: "S", rules: [
+    { find: "_i\\b", replace: "_j", where: "math", note: "n" },
+    { find: "(a", replace: "b" },
+    { find: "x", replace: "y", where: "nowhere", caseSensitive: false },
+    { find: "z" }], edits: [{ file: "./a.tex", line: 2, old: "q", new: "r" }, { file: "a.tex", line: 0, old: "q", new: "r" }] }));
+  assert.strictEqual(ok.summary, "S");
+  assert.deepStrictEqual(ok.rules, [{ find: "_i\\b", replace: "_j", where: "math", caseSensitive: true, note: "n" },
+    { find: "x", replace: "y", where: "anywhere", caseSensitive: false, note: "" }]);
+  assert.deepStrictEqual(ok.edits, [{ file: "a.tex", line: 2, old: "q", new: "r", note: "" }]);
+  assert.strictEqual(ok.problems.length, 4, ok.problems.join(" | "));
+  assert.ok(ok.problems[0].startsWith("Rule 2 is not a valid regular expression"), ok.problems[0]);
+  assert.ok(AgentSearch.parse("no block at all").error.includes("no prism-search block"));
+  assert.ok(AgentSearch.parse("```prism-search\n{rules: []}\n```").error.startsWith("The agent's proposal is not valid JSON"));
+  assert.deepStrictEqual(AgentSearch.parse('{"rules": [], "edits": []}').rules, [], "bare JSON is read too");
+});
+check("agent search: rules where they may be, edits where they say, one change per place", () => {
+  const files = [["main.tex", "Let $x_i$ and \\(a_{i}\\) for i in I.\n% x_i\n$\\sum_{i=1}^n y_i$ in $\\int$\n"],
+    ["refs.bib", "x_i\n"], ["sec/b.tex", "nothing here\n"]];
+  const p = AgentSearch.parse(block({ rules: [{ find: "_\\{?i\\b", replace: "_j", where: "math" },
+    { find: "(_\\{)i(\\})", replace: "$1j$2", where: "math" }],
+    edits: [{ file: "main.tex", line: 3, old: "\\sum_{i=1}", new: "\\sum_{j=1}" },
+      { file: "main.tex", line: 1, old: "i", new: "j" }, { file: "main.tex", line: 9, old: "a", new: "b" },
+      { file: "gone.tex", line: 1, old: "a", new: "b" }, { file: "main.tex", line: 1, old: "zzz", new: "b" }] }));
+  const r = AgentSearch.changes(files, p);
+  assert.deepStrictEqual(r.files.map((f) => f.path), ["main.tex"], "math only: not the .bib, not a comment");
+  const c = r.files[0].changes;
+  assert.deepStrictEqual(c.map((x) => [x.by, x.line, files[0][1].slice(x.from, x.to), x.text]),
+    [["rule", 0, "_i", "_j"], ["rule", 0, "_{i", "_j"], ["edit", 2, "\\sum_{i=1}", "\\sum_{j=1}"], ["rule", 2, "_i", "_j"]]);
+  assert.deepStrictEqual(r.counts, { rules: [3, 0], edits: 1 }, "rule 2's matches overlap rule 1's: the first is kept");
+  assert.strictEqual(c[2].after, "$\\sum_{j=1}^n y_i$ in $\\int$");
+  assert.strictEqual(r.problems.length, 4, r.problems.join(" | "));
+  assert.ok(r.problems.some((x) => x.includes("more than once on line 1")) && r.problems.some((x) => x.includes("no line 9"))
+    && r.problems.some((x) => x.includes("gone.tex is not")) && r.problems.some((x) => x.includes("does not have “zzz”")));
+  assert.strictEqual(AgentSearch.apply(files[0][1], c.filter((x) => x.by === "edit")), files[0][1].replace("\\sum_{i=1}", "\\sum_{j=1}"));
+});
 check("go to line: a line, or a line and a column, from 1", () => {
   assert.deepStrictEqual(FindLogic.lineSpec("120"), { line: 119, ch: 0 });
   assert.deepStrictEqual(FindLogic.lineSpec(" 12:5 "), { line: 11, ch: 4 });
