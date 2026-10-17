@@ -4,7 +4,7 @@
 
 /* ------------------------------------------------------------------ state */
 const S = {
-  files: [], folders: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
+  files: [], folders: [], order: [], document: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
   ready: false, restoring: true, watch: null,
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
@@ -243,7 +243,63 @@ $("#btn-find").onclick = () => findOpen(false);
 cm.on("changes", () => {
   if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
   if (PS.open) psSchedule(400);
+  clearTimeout(WORDS.timer); WORDS.timer = setTimeout(statusWords, 300);
+  clearTimeout(WORDS.docTimer); WORDS.docTimer = setTimeout(documentWords, 1000);
 });
+cm.on("cursorActivity", () => {
+  statusPos();
+  if (cm.somethingSelected() || WORDS.selected) { clearTimeout(WORDS.timer); WORDS.timer = setTimeout(statusWords, 150); }
+});
+$("#sb-pos").onclick = () => gotoOpen();
+
+/* ------------------------------------------------------------------ status line */
+// Below the editor: where the cursor is (a click asks for a line to go to), and how many
+// words the selection, the file and the whole document have (findlogic.js counts them).
+const WORDS = { timer: null, docTimer: null, doc: null, docStamp: "", selected: false, counted: new Map() };
+function statusPos() {
+  const c = cm.getCursor(), n = cm.getSelection().length;
+  $("#sb-pos").textContent = `Ln ${c.line + 1}, Col ${c.ch + 1}` + (n ? ` (${n.toLocaleString()} selected)` : "");
+}
+const WORDS_RULES = $("#sb-words").title;
+const words = (n) => `${n.toLocaleString()} ${n === 1 ? "word" : "words"}`;
+function statusWords() {
+  clearTimeout(WORDS.timer);
+  const t = activeTab(), kind = t && FindLogic.wordKind(t.path), el = $("#sb-words");
+  el.hidden = !kind;
+  if (!kind) return;
+  const file = FindLogic.wordCount(cm.getValue(), kind);
+  WORDS.selected = cm.somethingSelected();
+  const sel = WORDS.selected ? FindLogic.wordCount(cm.getSelection(), kind, { body: false }) : null;
+  const inDoc = kind === "tex" && WORDS.doc !== null && S.document.length > 1 && S.document.includes(t.path);
+  el.textContent = (sel !== null ? `${sel.toLocaleString()} of ` : "") + words(file)
+    + (inDoc ? ` · ${WORDS.doc.toLocaleString()} in the document` : "");
+  el.title = el.textContent + ".\n" + WORDS_RULES;      // all of it, also where the line is cut
+}
+// What the document's count depends on: its files and their mtimes (an open file's edits
+// count it again too, from the editor's "changes").
+const docStamp = () => {
+  const mtimes = new Map(S.files.map((f) => [f.path, f.mtime]));
+  return S.document.map((p) => p + ":" + mtimes.get(p)).join("\n");
+};
+async function documentWords() {
+  clearTimeout(WORDS.docTimer);
+  WORDS.docStamp = docStamp();
+  const paths = S.document;
+  if (paths.length < 2 || !paths.includes(S.active)) { WORDS.doc = null; return statusWords(); }
+  const texts = await projectTexts(paths);
+  let n = 0;
+  for (const p of paths) {
+    const f = texts.get(p);
+    if (!f || f.skipped) continue;
+    const c = WORDS.counted.get(p);
+    if (c && c.text === f.content) { n += c.words; continue; }
+    const w = FindLogic.wordCount(f.content, "tex");
+    WORDS.counted.set(p, { text: f.content, words: w });
+    n += w;
+  }
+  WORDS.doc = n;
+  statusWords();
+}
 
 /* ------------------------------------------------------------------ go to line */
 // Ctrl+G (on a Mac too) or a click on the line and column below the editor: a line, or
@@ -365,7 +421,7 @@ function psRender() {
   psQ.classList.toggle("bad", !!info?.error);
   let html = "";
   results.forEach((r, i) => {
-    const name = r.path.split("/").pop(), dir = r.path.slice(0, r.path.length - name.length - 1);
+    const name = r.path.split("/").pop(), dir = parentDir(r.path);
     const closed = PS.closed.has(r.path);
     html += `<li class="ps-file${closed ? " closed" : ""}" data-r="${i}" title="${esc(r.path)}"><span class="caret">${icon("down")}</span>`
       + `<span>${esc(name)}</span><span class="dir">${esc(dir)}</span><span class="n">${r.list.length}</span></li>`;
@@ -553,6 +609,7 @@ async function openFile(path, line, following = false) {
   cm.swapDoc(t.doc);
   AH.apply(path);
   findRun(false);                    // the find bar, open, counts in this file
+  $("#statusbar").hidden = false; statusPos(); statusWords(); documentWords();
   cm.getWrapperElement().style.display = "";
   $("#empty-editor").hidden = true;
   applyDiagnostics();
@@ -567,6 +624,7 @@ async function openFile(path, line, following = false) {
 // The last tab closed: no file in the editor, nor a find bar over it.
 function showNoFile() {
   S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false;
+  $("#statusbar").hidden = true;
   if (!findBar.hidden) { findBar.hidden = true; findUnmark(); }
 }
 
@@ -1033,7 +1091,7 @@ async function pollOnce() {
   const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })), asked);
   if (action.foreign) return stopForProject();
   S.ready = true; S.watch = r;
-  S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];
+  S.files = r.files; S.order = r.order || []; S.folders = r.folders || []; S.document = r.document || [];
   if (action.treeChanged) renderTree();
   for (const path of action.gone) { const t = TABS.get(path); if (t) TABS.diskSeen(t, null); }
   for (const path of action.conflicts) { const t = TABS.get(path); if (t) TABS.diskSeen(t, r.files.find((f) => f.path === path).mtime); }
@@ -1045,6 +1103,7 @@ async function pollOnce() {
   S.server = r.server;
   if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
   if (PS.open && psQ.value && psStamp() !== PS.stamp) psSchedule(0);   // a file changed: search it again
+  if (activeTab() && docStamp() !== WORDS.docStamp) documentWords();   // the document's words, the same
 }
 
 /* ------------------------------------------------------------------ GitHub sync */

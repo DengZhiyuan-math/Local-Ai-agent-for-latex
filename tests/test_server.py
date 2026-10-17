@@ -577,6 +577,16 @@ class Routes(unittest.TestCase):
         self.assertEqual((server.PROJECT.root / "main.tex").read_text(), "original\n")
         self.assertEqual(self.ask("/api/tree", headers={"X-Prism-Project": key})[0], 200)
 
+    def test_the_tree_names_the_documents_files(self):
+        """The tree lists every .tex file in document order, and apart the document's own
+        files (the main file and what it \\input's), whose words the editor counts."""
+        project({"main.tex": "\\documentclass{article}\\begin{document}\\input{sec/a}\\end{document}\n",
+                 "sec/a.tex": "A\n", "other.tex": "not in it\n"})
+        status, r = self.ask("/api/tree")
+        self.assertEqual(status, 200)
+        self.assertEqual(r["document"], ["main.tex", "sec/a.tex"])
+        self.assertEqual(r["order"], ["main.tex", "sec/a.tex", "other.tex"])
+
     def test_a_pdf_or_asset_of_another_project_is_refused(self):
         """A pop-out PDF or a figure opened in a new tab names its project too (the query,
         where a page cannot add a header): another project on the port refuses them."""

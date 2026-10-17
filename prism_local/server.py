@@ -317,11 +317,15 @@ class Handler(httpbase.Handler):
             st = git_status([(f["path"], f["mtime"]) for f in files])
             for f in files:
                 f["git"] = st.get(f["path"], "")
+            stamps = {f["path"]: f["mtime"] for f in files}
+            cfg = PROJECT.config
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
-                               "order": PROJECT.document_order(editable, {f["path"]: f["mtime"] for f in files}),
-                               "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
+                               "order": PROJECT.document_order(editable, stamps),
+                               # the files of the document (the main file and what it \input's): its word count
+                               "document": PROJECT.input_chain(cfg.main, stamps),
+                               "pdf_main": cfg.main, "pdf_mtime": PROJECT.pdf_state(cfg),
                                "updated": APP.updated(), "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
