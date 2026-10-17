@@ -160,9 +160,14 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
         return {"error": failed}
     sync = project_sync(root)
     try:
+        def astray(c: dict) -> bool:
+            return c["repository_identity"] != f"github.com/{who}/{name}".lower() \
+                or c["branch_ref"] != c["local_branch"]
         candidate = sync.candidate()
-        if candidate["repository_identity"] != f"github.com/{who}/{name}".lower() \
-                or candidate["branch_ref"] != candidate["local_branch"]:
+        if astray(candidate):
+            sync.validate_target(fresh=True)        # what it set up here, it puts back (repair)
+            candidate = sync.candidate(fresh=True)
+        if astray(candidate):
             # Something on this computer sends it elsewhere (a URL rewrite in your git
             # settings, a change made meanwhile). It stays bound to the repository created
             # here: sync waits, and goes on by itself once they agree again.

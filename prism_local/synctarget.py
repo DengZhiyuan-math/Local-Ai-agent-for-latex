@@ -192,6 +192,57 @@ def _resolve(repo: Repository) -> dict:
             "configuration_fingerprint": fingerprint}
 
 
+def repair(repo: Repository, bound: dict) -> list[str]:
+    """What sync needs of a repository Prism manages, put back as Prism set it up, so that
+    it syncs with `bound` again: on its branch when it was left at that branch's last
+    commit, the remote there (a GitHub one added back by its address), the branch's
+    upstream that remote's bound branch, and no push elsewhere (pushRemote, pushDefault,
+    a mirror remote) in the repository's own settings. Which repository it syncs with
+    (its addresses) is never changed: that is the binding's to say, and a change waits.
+    Nor is another branch left (that would change your files), or your own git settings.
+    Returns what it put back, in a few words each; empty: nothing it could."""
+    local, branch_ref = str(bound.get("local_branch") or ""), str(bound.get("branch_ref") or "")
+    remote, identity = str(bound.get("remote") or "origin"), str(bound.get("repository_identity") or "")
+    if not (local.startswith("refs/heads/") and branch_ref.startswith("refs/heads/")):
+        return []
+    name = local.removeprefix("refs/heads/")
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return repo.git(*args, timeout=20)
+
+    def own(key: str) -> list[str]:
+        return git("config", "--local", "--get-all", key).stdout.splitlines()
+    done: list[str] = []
+    head = git("symbolic-ref", "-q", "HEAD").stdout.strip()
+    if not head:
+        tip = git("rev-parse", "-q", "--verify", local + "^{commit}").stdout.strip()
+        now = git("rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
+        if not tip or not now or git("merge-base", "--is-ancestor", tip, now).returncode != 0:
+            return done                      # somewhere else in the history: yours to say
+        # At its branch's last commit, or on from it (autosave commits there): the branch
+        # moves on to it, and HEAD is the branch again. No file changes, no commit is lost.
+        if now != tip:
+            git("update-ref", local, now, tip)
+        git("symbolic-ref", "HEAD", local)
+        done.append(f"back on its branch {name}")
+    elif head != local:
+        return done
+    if remote not in git("remote").stdout.split():
+        if not identity.startswith("github.com/"):
+            return done
+        git("remote", "add", remote, f"https://{identity}.git")
+        done.append(f"its GitHub address {identity}")
+    for key, want in ((f"branch.{name}.remote", remote), (f"branch.{name}.merge", branch_ref)):
+        if own(key) != [want]:
+            git("config", "--local", "--replace-all", key, want)
+            done.append("which branch on GitHub it syncs with")
+    for key in (f"branch.{name}.pushremote", "remote.pushdefault", f"remote.{remote}.mirror"):
+        if own(key):
+            git("config", "--local", "--unset-all", key)
+            done.append("where it uploads to")
+    return list(dict.fromkeys(done))
+
+
 def _true(value: str | None) -> bool:
     """A git boolean as `git config --bool` reads it (a key without "=" is true)."""
     if value is None:
@@ -244,6 +295,8 @@ class RepoSettings:
         this one; validate fills in the rest."""
         self.update(sync_target=target)
 
+    repaired: list[str] = []         # what the last validate put back (repair)
+
     def unbind(self) -> None:
         """No target bound (a repository Prism set out to create was not created)."""
         with registry.FileLock(self.file.with_name(self.file.name + ".lock"), timeout=10):
@@ -256,8 +309,25 @@ class RepoSettings:
         No binding yet (a project from before bindings, or a fresh clone): the target passed
         every check of resolve, so it is bound now. The same repository and branch reached
         another way (ssh instead of https, an upstream set by `git push -u`) is rebound
-        quietly; another repository or branch waits for the author to confirm it."""
-        bound = self.read().get("sync_target")
+        quietly; another repository or branch waits for the author to confirm it. In a
+        repository Prism manages, what sync needs that went astray is put back first
+        (repair; `repaired` says what)."""
+        data = self.read()
+        bound = data.get("sync_target")
+        self.repaired: list[str] = []
+        target, why = self._check(bound, fresh)
+        if why and isinstance(bound, dict) and data.get("managed"):
+            # A repository Prism set up: what sync needs of it, gone astray (another
+            # program, a terminal), is put back, and it goes on.
+            self.repaired = self._repair(bound)
+            if self.repaired:
+                target, why = self._check(bound, True)
+        return target, why
+
+    def _repair(self, bound: dict) -> list[str]:
+        return repair(self.repo, bound)
+
+    def _check(self, bound, fresh: bool) -> tuple[dict | None, str | None]:
         target = None
         try:
             target = resolve(self.repo, fresh)

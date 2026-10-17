@@ -255,6 +255,53 @@ class Targets(unittest.TestCase):
         self.assertEqual(self.g.push().state, "synced", "set back: it goes on")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
+    def test_a_repository_prism_set_up_is_put_back_and_syncs(self):
+        """What test_redirects_block_and_keep_local_edits pauses for, in a repository you
+        set up, Prism puts back in one it set up, and syncs: nobody has to know git. A
+        look (status(), every two seconds) changes nothing; nor does another repository
+        named as its address, which still waits."""
+        self.g.bind_target()
+        self.g.settings.update(managed=True)
+        git(self.root, "remote", "add", "tool", str(self.tool))
+        for n, (key, value) in enumerate((("branch.main.pushRemote", "tool"),
+                                          ("remote.pushDefault", "tool"),
+                                          ("remote.origin.mirror", "true"),
+                                          ("branch.main.merge", "refs/heads/elsewhere"))):
+            with self.subTest(key=key):
+                git(self.root, "config", key, value)
+                self.assertTrue(self.g.status()["blocked_reason"], "a look changes nothing")
+                self.assertEqual(git(self.root, "config", "--get", key), value)
+                (self.root / "main.tex").write_text(f"edit {n}\n")
+                self.g.now("commit")
+                self.assertIsNone(self.g.status()["blocked_reason"])
+                self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+                self.assertIn("put back", self.g.notice)
+        self.assertEqual(git(self.tool, "for-each-ref"), "", "nothing went elsewhere")
+        git(self.root, "checkout", "-q", "--detach")                 # left at its branch's commit
+        (self.root / "main.tex").write_text("detached\n")
+        self.g.now("commit")
+        self.assertEqual(git(self.root, "symbolic-ref", "HEAD"), "refs/heads/main")
+        self.assertEqual(git(self.remote, "show", "main:main.tex"), "detached")
+        git(self.root, "config", "remote.origin.pushurl", str(self.tool))  # another repository: waits
+        (self.root / "main.tex").write_text("waits\n")
+        self.g.now("commit")
+        self.assertTrue(self.g.status()["blocked_reason"])
+        self.assertEqual(git(self.tool, "for-each-ref"), "")
+        self.assertEqual(git(self.root, "config", "remote.origin.pushurl"), str(self.tool), "its address is left")
+
+    def test_a_github_remote_gone_is_added_back_by_its_address(self):
+        from repository import Repository
+        repo = Repository.find(self.root)
+        git(self.root, "remote", "remove", "origin")
+        done = synctarget.repair(repo, {"remote": "origin", "repository_identity": "github.com/me/paper",
+                                        "branch_ref": "refs/heads/main", "local_branch": "refs/heads/main"})
+        self.assertIn("its GitHub address github.com/me/paper", done)
+        self.assertEqual(git(self.root, "remote", "get-url", "origin"), "https://github.com/me/paper.git")
+        self.assertEqual(git(self.root, "config", "branch.main.merge"), "refs/heads/main")
+        self.assertEqual(synctarget.repair(repo, {"remote": "origin", "repository_identity": "github.com/me/paper",
+                                                  "branch_ref": "refs/heads/main",
+                                                  "local_branch": "refs/heads/main"}), [], "nothing more to do")
+
     def test_branch_switch_and_multiple_push_urls(self):
         self.g.bind_target()
         git(self.root, "checkout", "-qb", "other")

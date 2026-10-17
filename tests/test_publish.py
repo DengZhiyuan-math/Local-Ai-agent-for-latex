@@ -148,7 +148,9 @@ class Publish(unittest.TestCase):
         self.assertEqual(self.git(self.gh.repositories["me/paper"], "rev-parse", "main"),
                          self.git(self.root, "rev-parse", "HEAD"))
 
-    def test_wrong_remote_branch_waits_bound_to_the_created_one(self):
+    def test_a_remote_branch_changed_meanwhile_is_put_back_and_pushed(self):
+        """Its branch set to sync with another branch on GitHub while it was created: the
+        repository is one Prism set up, so that is put back, and the first push goes on."""
         create = self.gh.create
 
         def redirected(root, full):
@@ -159,9 +161,10 @@ class Publish(unittest.TestCase):
 
         with mock.patch.object(self.gh, "create", redirected):
             result = publish.publish_project(self.root)
-        self.assert_created_failure(result)
-        self.assertIn("send uploads elsewhere", result["error"])
-        self.assert_bound_to_the_created_one()
+        self.assertNotIn("error", result)
+        self.assertEqual(self.git(self.root, "config", "branch.main.merge"), "refs/heads/main")
+        remote = self.gh.repositories["me/paper"]
+        self.assertEqual(self.git(remote, "for-each-ref", "--format=%(refname)"), "refs/heads/main")
 
     def test_busy_first_push_reports_the_created_repository(self):
         with mock.patch.object(gitsync.GitSync, "push", side_effect=RepoBusy("fixture git is busy")):

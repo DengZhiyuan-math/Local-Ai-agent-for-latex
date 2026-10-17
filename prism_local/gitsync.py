@@ -148,10 +148,13 @@ class Outcome:
 
 class _Looking(RepoSettings):
     """The repository's settings as status() reads them: its look at the target binds
-    nothing (validate_target does, in the worker or at a button)."""
+    and repairs nothing (validate_target does, in the worker or at a button)."""
 
     def bind(self, target: dict) -> None:
         pass
+
+    def _repair(self, bound: dict) -> list[str]:
+        return []
 
 
 def _names(paths: list[str]) -> str:
@@ -373,7 +376,15 @@ class GitSync:
     def validate_target(self, fresh: bool = False) -> bool:
         with self.lock:
             if self.check_repo():
-                self.target, self.blocked_reason = self.settings.validate(fresh)
+                settings = self.settings
+                self.target, self.blocked_reason = settings.validate(fresh)
+                if settings.repaired:
+                    # A repository Prism set up, which another program or a terminal changed.
+                    self.notice = ("Prism put back this project's connection to GitHub, which had been "
+                                   "changed outside Prism" + ("" if self.blocked_reason is None else
+                                                              ", but it still cannot sync"))
+                    print(json.dumps({"event": "git_target", "git_top": str(self.top), "stage": "repair",
+                                      "repaired": settings.repaired}), flush=True)
             else:
                 self.target, self.blocked_reason = None, "This project has no repository to sync"
             signature = (self.blocked_reason, json.dumps(public_target(self.target), sort_keys=True))
