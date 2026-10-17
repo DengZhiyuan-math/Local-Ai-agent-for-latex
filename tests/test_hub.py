@@ -570,6 +570,93 @@ class FoldersAndTags(TempState):
 
 
 @unittest.skipUnless(hub.shutil.which("git"), "needs git")
+class OpenFromGitHub(TempState):
+    """A project of yours on GitHub, opened on another computer from the Home page."""
+
+    def setUp(self):
+        super().setUp()
+        import gitenv
+        import github
+        from fake_github import FakeGitHub
+        for k, v in {"GIT_AUTHOR_NAME": "T", "GIT_COMMITTER_NAME": "T",
+                     "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
+            self.addCleanup(lambda k=k, old=os.environ.get(k): os.environ.pop(k, None) if old is None
+                            else os.environ.__setitem__(k, old))
+            os.environ[k] = v
+        self.gh = FakeGitHub(remotes=self.tmp / "github")
+        for patch in (mock.patch.object(github, "GITHUB", self.gh), mock.patch.object(gitenv, "git", self.gh.git)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        # Clones go where the default folder is: here, never into your Documents.
+        self.papers = self.tmp / "papers"
+        self.papers.mkdir()
+        hub.settings.save({"default_parent": str(self.papers)})
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=cwd, capture_output=True,
+                              text=True, encoding="utf-8", check=True).stdout.strip()
+
+    def forget(self, ids):
+        def fn(data):
+            data["projects"] = [e for e in data["projects"] if registry.project_key(Path(e["path"])) not in ids]
+        registry.update_projects(fn)
+
+    def test_a_project_comes_as_prism_set_it_up_and_once(self):
+        paper = self.papers / "paper"
+        paper.mkdir()
+        (paper / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        pid = hub.add_project(str(paper))["id"]
+        self.assertNotIn("error", publish.publish_project(paper))
+        self.assertEqual(hub.open_from_github("me/paper"), {"ids": [pid], "path": str(paper.resolve()), "cloned": False},
+                         "listed already: opened, not cloned again")
+        self.forget({pid})                                         # as on another computer
+        r = hub.open_from_github("me/paper")
+        dest = Path(r["path"])
+        self.assertTrue(dest.resolve().is_relative_to(self.tmp.resolve()), dest)
+        self.assertTrue(r["cloned"])
+        self.assertEqual(dest, (self.papers / "paper (2)").resolve(), "next to the others, not over one")
+        self.assertEqual((dest / "main.tex").read_text(encoding="utf-8"), "\\documentclass{article}\n")
+        self.assertEqual(r["ids"], [registry.project_key(dest)])
+        sync = hub.project_sync(dest)
+        self.assertTrue(sync.settings.managed, "Prism's to keep")
+        self.assertTrue(sync.validate_target())
+        self.assertEqual(sync.target["repository_identity"], "github.com/me/paper")
+        self.assertIn("prism-local", (dest / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8"),
+                      "force pushes refused")
+        with self.assertRaises(ValueError):
+            hub.open_from_github("not a repository")
+
+    def test_a_folders_shared_repository_comes_as_that_folder(self):
+        work = self.tmp / "work"
+        for rel in ("练习/ex 1", "Answers/sol"):
+            (work / rel).mkdir(parents=True)
+            (work / rel / "main.tex").write_text("\\documentclass{amsart}\n", encoding="utf-8")
+        (work / "Answers" / "sol" / "figs").mkdir()
+        (work / "Answers" / "sol" / "figs" / "plot.tex").write_text("\\begin{tikzpicture}\n", encoding="utf-8")
+        (work / hub.gitsync.SHARED_MARKER).write_text(json.dumps({"shared": True, "folder": "Course"}), encoding="utf-8")
+        bare = self.gh.remotes / "me" / "course.git"
+        bare.parent.mkdir(parents=True)
+        self.git(self.tmp, "init", "-q", "--bare", "-b", "main", str(bare))
+        self.gh.repositories["me/course"] = bare
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "course"],
+                     ["push", "-q", str(bare), "main"]):
+            self.git(work, *args)
+        r = hub.open_from_github("me/course")
+        top = Path(r["path"])
+        self.assertTrue(top.resolve().is_relative_to(self.tmp.resolve()), top)
+        self.assertEqual(len(r["ids"]), 2, "the projects, not the figures folder")
+        data = registry.load_projects()
+        folders = {f["id"]: f for f in data["folders"]}
+        course = next(f for f in data["folders"] if f["name"] == "Course")
+        self.assertEqual(course["sync"], {"mode": "shared", "repo": str(top)})
+        where = {Path(e["path"]).name: folders[e["folder_id"]] for e in data["projects"]}
+        self.assertEqual((where["ex 1"]["name"], where["ex 1"]["parent"]), ("练习", course["id"]))
+        self.assertEqual((where["sol"]["name"], where["sol"]["parent"]), ("Answers", course["id"]))
+        self.assertTrue(hub.project_sync(top / "练习" / "ex 1").settings.managed)
+        self.assertEqual(hub.git_info(top / "练习" / "ex 1")["shared"], top.name)
+
+
+@unittest.skipUnless(hub.shutil.which("git"), "needs git")
 class FolderSync(TempState):
     """A folder of projects: one shared repository, or one each, and back."""
 

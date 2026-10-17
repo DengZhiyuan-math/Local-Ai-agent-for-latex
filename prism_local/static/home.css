@@ -228,6 +228,11 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
 #setup .setup-err { color: var(--err); }
 #setup details pre { white-space: pre-wrap; max-width: 640px; font-size: 11px; }
 
+/* ---------- open from GitHub */
+.clone-list { max-height: 50vh; overflow: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+.clone-list .clone-it { text-align: left; display: flex; gap: 8px; align-items: baseline; }
+.clone-list .clone-it small { color: var(--muted); }
+
 /* ---------- empty states */
 .empty-note { color: var(--muted); padding: 40px 0; text-align: center; }
 .welcome { max-width: 520px; margin: 9vh auto 0; text-align: center; }

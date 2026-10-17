@@ -110,6 +110,24 @@ const setup = await ev(`
   clearTimeout(SETUP.timer); api = real;
   return seen;`);
 check("getting started installs git and the GitHub CLI and shows the login's code", Object.values(setup).every(Boolean), JSON.stringify(setup));
+const clone = await ev(`
+  const real = api, seen = {}; let asked = null;
+  api = async (path, body) => path === "/api/github/repos"
+    ? { _status: 200, repos: [{ full: "me/thesis", name: "thesis", private: true, updated: "2026-10-01T10:00:00Z" },
+                              { full: "me/notes", name: "notes", private: false, updated: "" }] }
+    : path === "/api/github/open" ? (asked = body.full, { _status: 200, ids: ["x"], path: "C:/papers/thesis", cloned: true })
+    : real(path, body);
+  $("#btn-clone").click();
+  seen.listed = await T.until(() => $("#clone-list").querySelectorAll("[data-full]").length === 2);
+  const f = $("#form-clone"); f.elements.filter.value = "thes"; f.elements.filter.dispatchEvent(new Event("input"));
+  seen.filtered = $("#clone-list").querySelectorAll("[data-full]").length === 1;
+  $("#clone-list").querySelector('[data-full="me/thesis"]').click();
+  seen.closed = await T.until(() => !$("#dlg-clone").open);
+  seen.asked = asked === "me/thesis";
+  seen.said = T.toast().includes("Copied me/thesis");
+  api = real;
+  return seen;`);
+check("open from GitHub lists your repositories and copies the one chosen", Object.values(clone).every(Boolean), JSON.stringify(clone));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
 await closeSocket(ws);

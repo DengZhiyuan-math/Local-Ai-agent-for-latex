@@ -1009,6 +1009,39 @@ $("#form-new").addEventListener("submit", async (e) => {
   if (f.elements.open.checked) openProject(r.id);
 });
 
+// Open from GitHub: a project of yours made on another computer (hub.open_from_github).
+const CLONE = { repos: [] };
+async function openClone() {
+  const f = $("#form-clone"), dlg = $("#dlg-clone");
+  f.reset(); dlgError(dlg, "");
+  $("#clone-list").textContent = "Asking GitHub…";
+  dlg.showModal(); f.elements.filter.focus();
+  const r = await api("/api/github/repos");
+  if (r._status !== 200) { $("#clone-list").textContent = ""; return dlgError(dlg, r.error || "Could not ask GitHub"); }
+  CLONE.repos = r.repos || [];
+  renderClone();
+}
+function renderClone() {
+  const want = $("#form-clone").elements.filter.value.trim().toLowerCase();
+  const rows = CLONE.repos.filter((x) => !want || x.full.toLowerCase().includes(want));
+  $("#clone-list").innerHTML = rows.length ? rows.map((x) => `<button type="button" class="clone-it" data-full="${esc(x.full)}">
+      <b>${esc(x.name)}</b> <small>${esc(x.full)}${x.private ? " · private" : ""}${x.updated ? " · changed " + esc(x.updated.slice(0, 10)) : ""}</small></button>`).join("")
+    : `<p class="hint">${CLONE.repos.length ? "Nothing matches." : "You have no repositories on GitHub yet."}</p>`;
+}
+$("#form-clone").elements.filter.addEventListener("input", renderClone);
+$("#clone-list").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-full]"); if (!b) return;
+  const dlg = $("#dlg-clone");
+  for (const x of $("#clone-list").querySelectorAll("button")) x.disabled = true;
+  b.querySelector("small").textContent = "copying to this computer…";
+  const r = await api("/api/github/open", { full: b.dataset.full });
+  if (r._status !== 200) { renderClone(); return dlgError(dlg, r.error || "Could not open it"); }
+  dlg.close();
+  toast(r.cloned ? `Copied ${b.dataset.full} to ${r.path}` : `${b.dataset.full} is already here: ${r.path}`);
+  H.sig = null; await load(); loadAllGit();
+});
+$("#btn-clone").onclick = openClone;
+
 function openAdd() {
   const f = $("#form-add"), dlg = $("#dlg-add");
   f.reset(); dlgError(dlg, "");

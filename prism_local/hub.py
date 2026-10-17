@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gitenv  # noqa: E402
 import gitsync  # noqa: E402
 import github  # noqa: E402
 import settings  # noqa: E402
@@ -354,6 +355,93 @@ def add_project(path: str, folder_id: str = "") -> dict:
     has_tex = any(p.glob("*.tex"))
     registry.update_projects(lambda data: _add(data, p, folder_id))
     return {"id": registry.project_key(p), "path": str(p), "has_tex": has_tex}
+
+
+FULL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+
+
+def open_from_github(full: str) -> dict:
+    """A project of yours on GitHub ("owner/name") on this computer, as on another one
+    (Home: Open from GitHub): cloned into the default folder, Prism's to keep (managed,
+    force pushes refused: publish.py set it up so where it was made), and listed. A folder's
+    shared repository (its top has SHARED_MARKER) comes as that folder, with its projects.
+    One already listed here (synced with the same repository) is not cloned again.
+    Returns {"ids": [project ids], "path", "cloned"}."""
+    if not FULL_NAME.fullmatch(full or ""):
+        raise ValueError("not a GitHub repository")
+    identity = f"github.com/{full}".lower()
+    data = registry.load_projects()
+    here = []
+    for e in data["projects"]:
+        root = Path(e["path"])
+        place = repoview.place(root) if root.is_dir() else None
+        if place is not None and place.syncs and \
+                ((sync_facts(root, place.repo.git_dir).get("target") or {}).get("repository_identity") == identity):
+            here.append((registry.project_key(root), place.repo.top))
+    if here:
+        return {"ids": [i for i, _ in here], "path": str(here[0][1]), "cloned": False}
+    parent = Path(default_parent(data))
+    name = full.split("/")[1]
+    dest, n = parent / name, 2
+    while dest.exists():
+        dest, n = parent / f"{name} ({n})", n + 1
+    r = gitenv.git(parent, "clone", "-q", "--", f"https://github.com/{full}.git", str(dest),
+                   timeout=900, interactive=True)
+    if r.returncode != 0:
+        raise ValueError(f"Could not get {full} from GitHub.\n" + synctarget.safe_git_message(
+            (r.stderr or r.stdout).strip())[-300:])
+    from repository import Repository
+    synctarget.RepoSettings(Repository(dest, dest / ".git")).update(managed=True)
+    gitsync.install_guard(dest / ".git")
+    if not gitsync.shared_marker(dest):
+        return {"ids": [add_project(str(dest))["id"]], "path": str(dest), "cloned": True}
+    return {"ids": _add_shared_clone(dest), "path": str(dest), "cloned": True}
+
+
+def _add_shared_clone(top: Path) -> list[str]:
+    """A folder's shared repository, cloned to `top`: its folder on the Home page (shared,
+    in `top`), subfolders as they are on disk, and each project in it (a folder, up to three
+    deep, with a document: a .tex with \\documentclass)."""
+    try:
+        marker = json.loads((top / gitsync.SHARED_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        marker = {}
+    projects = []
+    for dirpath, dirnames, filenames in os.walk(top):
+        rel = Path(dirpath).relative_to(top)
+        dirnames[:] = [] if len(rel.parts) >= 3 else \
+            sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        if rel.parts and any(f.endswith(".tex") and "\\documentclass" in _head(Path(dirpath) / f) for f in filenames):
+            projects.append(Path(dirpath))
+
+    def fn(data):
+        made: dict[tuple, str] = {}
+
+        def folder(parts: tuple, name: str) -> str:
+            if parts not in made:
+                parent = folder(parts[:-1], parts[-2]) if len(parts) > 1 else None
+                f = {"id": secrets.token_hex(4), "name": name, "parent": parent, "note": ""}
+                data.setdefault("folders", []).append(f)
+                made[parts] = f["id"]
+            return made[parts]
+        top_id = folder(("",), str(marker.get("folder") or top.name))
+        _folder(data, top_id)["sync"] = {"mode": "shared", "repo": str(top)}
+        for root in projects:
+            parts = Path(root).relative_to(top).parts[:-1]
+            fid = top_id
+            for i in range(len(parts)):
+                fid = folder(("",) + parts[:i + 1], parts[i])
+            _add(data, root.resolve(), fid)
+        return [registry.project_key(root.resolve()) for root in projects]
+    return registry.update_projects(fn)
+
+
+def _head(path: Path) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read(4096)
+    except OSError:
+        return ""
 
 
 def _add(data: dict, p: Path, folder_id: str = "") -> None:
@@ -886,6 +974,8 @@ class Handler(httpbase.Handler):
         if path == "/api/projects":
             return self._json({**list_projects(),
                                "updated": APP.updated()})
+        if path == "/api/github/repos":
+            return self._json({"repos": github.GITHUB.repos()})
         if path == "/api/tools":                  # Getting started: git, the GitHub CLI, the login
             return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
                                "login": github.GITHUB.login_state()})
@@ -925,6 +1015,8 @@ class Handler(httpbase.Handler):
             return self._json(settings.save_snippets(body.get("content")))
         if path == "/api/tools/install":
             return self._json(tools.install(str(body["name"])))
+        if path == "/api/github/open":            # a project of yours on GitHub, on this computer
+            return self._json(open_from_github(str(body["full"])))
         if path == "/api/github/login":           # GitHub's device login, in the browser
             return self._json(github.GITHUB.login())
         if path == "/api/github/login/cancel":

@@ -40,13 +40,17 @@ class FakeGitHub:
         return None
 
     def git(self, cwd, *args, **kwargs):
-        if args and args[0] in ("fetch", "push", "ls-remote"):
+        if args and args[0] in ("fetch", "push", "ls-remote", "clone"):
             # Only the transport sees the rewrite. Target discovery and binding still
             # inspect the real GitHub URL, and git itself performs the transfer.
             config = [item for full, path in self.repositories.items()
                       for item in ("-c", f"url.{path.as_posix()}.insteadOf=https://github.com/{full}.git")]
             return self._git(cwd, *config, *args, **kwargs)
         return self._git(cwd, *args, **kwargs)
+
+    def repos(self) -> list[dict]:
+        return [{"full": full, "name": full.split("/")[1], "private": True, "updated": ""}
+                for full in self.repositories]
 
     def protect(self, full: str, branch: str) -> str:
         self.protected.append((full, branch))

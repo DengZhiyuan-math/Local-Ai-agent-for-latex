@@ -16,7 +16,7 @@ import threading
 import time
 from pathlib import Path
 
-from errors import NotInstalled
+from errors import NotInstalled, Refused
 from gitenv import git_env
 import proc
 import tools
@@ -82,6 +82,20 @@ class GhCli:
         if "Upgrade to GitHub Pro" in (r.stdout + r.stderr):
             return "not available for private repositories on GitHub's free plan"
         return "not set: " + (r.stderr or r.stdout).strip()[-200:]
+
+    def repos(self) -> list[dict]:
+        """Your repositories on GitHub, the most recently changed first: {"full" ("owner/name"),
+        "name", "private", "updated"}. To open one on this computer (Home: Open from GitHub)."""
+        exe = tools.find("gh")
+        if not exe:
+            raise NotInstalled("gh")
+        r = self._gh(exe, "repo", "list", "--json", "nameWithOwner,name,isPrivate,updatedAt",
+                     "--limit", "200", timeout=60)
+        if r.returncode != 0:
+            raise Refused("Could not list your repositories on GitHub.\n" + (r.stderr or r.stdout).strip()[-300:])
+        rows = [{"full": x["nameWithOwner"], "name": x["name"], "private": bool(x.get("isPrivate")),
+                 "updated": x.get("updatedAt") or ""} for x in json.loads(r.stdout or "[]")]
+        return sorted(rows, key=lambda x: x["updated"], reverse=True)
 
     # ------------------------------------------------------------ logging in, from Home
     LOGIN_TIME = 900            # seconds the browser's authorization is waited for

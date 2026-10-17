@@ -12,6 +12,7 @@
   <div class="brand"><span class="logo">∂</span> Prism <span class="sub">Projects</span></div>
   <div class="actions right">
     <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This page still runs the old version: restart it to use the new one (open editors offer their own restart)">Update: restart</button>
+    <button id="btn-clone" title="Open one of your projects on GitHub on this computer (one you made on another computer)">From GitHub…</button>
     <button id="btn-add" title="Add an existing LaTeX folder on disk to this list">Add existing…</button>
     <button id="btn-new" class="primary" title="Create a new LaTeX project from a template">+ New project</button>
     <button id="btn-settings" class="icon" data-icon="settings" title="Settings" aria-label="Settings"></button>
@@ -180,6 +181,17 @@
   </form>
 </dialog>
 
+<dialog id="dlg-clone" class="wide">
+  <form method="dialog" id="form-clone">
+    <h3>Open from GitHub</h3>
+    <p class="hint">Your repositories on GitHub. The one you choose is copied to this computer, into the
+      default location in Settings, and synced from then on; one already here is just shown.</p>
+    <input name="filter" type="search" placeholder="Filter" autocomplete="off" spellcheck="false">
+    <div id="clone-list" class="clone-list" role="listbox" aria-label="Your repositories on GitHub"></div>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions"><button type="button" data-close>Cancel</button></div>
+  </form>
+</dialog>
 <dialog id="dlg-add">
   <form method="dialog" id="form-add">
     <h3>Add existing folder</h3>
