@@ -359,6 +359,12 @@ def add_project(path: str, folder_id: str = "") -> dict:
 
 FULL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 
+# One opening at a time per repository: a second one (another tab, a double click) waits
+# for the first one's clone, then finds it listed instead of cloning it again. Others go
+# on meanwhile, since a clone can take minutes.
+_opening: dict[str, threading.Lock] = {}
+_opening_lock = threading.Lock()
+
 
 def open_from_github(full: str) -> dict:
     """A project of yours on GitHub ("owner/name") on this computer, as on another one
@@ -370,6 +376,13 @@ def open_from_github(full: str) -> dict:
     if not FULL_NAME.fullmatch(full or ""):
         raise ValueError("not a GitHub repository")
     identity = f"github.com/{full}".lower()
+    with _opening_lock:
+        lock = _opening.setdefault(identity, threading.Lock())
+    with lock:
+        return _open_from_github(full, identity)
+
+
+def _open_from_github(full: str, identity: str) -> dict:
     data = registry.load_projects()
     here = []
     for e in data["projects"]:

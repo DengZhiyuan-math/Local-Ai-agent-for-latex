@@ -626,6 +626,46 @@ class OpenFromGitHub(TempState):
         with self.assertRaises(ValueError):
             hub.open_from_github("not a repository")
 
+    def test_opened_twice_at_once_comes_once(self):
+        import threading
+        import gitenv
+        paper = self.papers / "paper"
+        paper.mkdir()
+        (paper / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        pid = hub.add_project(str(paper))["id"]
+        self.assertNotIn("error", publish.publish_project(paper))
+        self.forget({pid})                                         # as on another computer
+        clones = []
+
+        def slow(cwd, *args, **kwargs):                            # the other tab asks meanwhile
+            if args[:1] == ("clone",):
+                clones.append(args)
+                time.sleep(0.5)
+            return self.gh.git(cwd, *args, **kwargs)
+        results, errors = [], []
+
+        def open_it():
+            try:
+                results.append(hub.open_from_github("me/paper"))
+            except Exception as e:                                 # noqa: BLE001 - reported below
+                errors.append(e)
+        with mock.patch.object(gitenv, "git", slow):
+            threads = [threading.Thread(target=open_it) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(clones), 1, "cloned once")
+        self.assertEqual(sorted(r["cloned"] for r in results), [False, True])
+        self.assertEqual(results[0]["path"], results[1]["path"])
+        self.assertTrue(Path(results[0]["path"]).resolve().is_relative_to(self.tmp.resolve()), results[0]["path"])
+        self.assertEqual(results[0]["ids"], results[1]["ids"])
+        self.assertFalse((self.papers / "paper (3)").exists())
+        listed = [e for e in registry.load_projects()["projects"] if Path(e["path"]).name.startswith("paper")]
+        self.assertEqual([Path(e["path"]).resolve() for e in listed], [(self.papers / "paper (2)").resolve()],
+                         "listed once")
+
     def test_a_folders_shared_repository_comes_as_that_folder(self):
         work = self.tmp / "work"
         for rel in ("练习/ex 1", "Answers/sol"):
