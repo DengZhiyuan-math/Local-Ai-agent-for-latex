@@ -57,6 +57,7 @@ class Project:
         self.turn = turn or NoTurn()
         self.on_change = on_change
         self._scans: dict[tuple, tuple] = {}
+        self._chains: dict[str, tuple] = {}     # main -> (listed paths, its files' mtimes, its chain)
         self.builder = builder
         self._build_lock = threading.Lock()
         self._running = None                    # the build in progress (stop_build)
@@ -220,10 +221,10 @@ class Project:
         self._scans[key] = (stamp, found)
         return found
 
-    def document_order(self, files: list[str] | None = None) -> list[str]:
+    def document_order(self, files: list[str] | None = None, stamps: dict | None = None) -> list[str]:
         """Project .tex files in the order the main file \\input's them (depth first).
-        `files`: self.list_files(), when the caller has it already."""
-        order = self.input_chain(self.config.main)
+        `files`: self.list_files(), when the caller has it already; `stamps`: see input_chain."""
+        order = self.input_chain(self.config.main, stamps)
         rest = [f for f in (self.list_files() if files is None else files) if f.endswith(".tex") and f not in order]
         return order + rest
 
@@ -297,8 +298,19 @@ class Project:
                 continue
         return max(stale)[2] if stale else None
 
-    def input_chain(self, main: str) -> list[str]:
-        """`main` and the files it \\input's or \\include's, depth first."""
+    def input_chain(self, main: str, stamps: dict | None = None) -> list[str]:
+        """`main` and the files it \\input's or \\include's, depth first.
+
+        With `stamps` ({path: mtime} of the files listed now, as the tree has them), the last
+        chain of `main` is given again while the same files are listed and none of those in
+        it changed: what decides it is their \\input's and which names are files. Finding
+        each name's file (resolve, slow on Windows) took some 50 ms for 400 \\input's, on
+        every tree request of every open page. A chain with a file the tree does not list
+        (in a hidden folder, say) is worked out each time."""
+        listed = tuple(stamps) if stamps is not None else None
+        hit = self._chains.get(main)
+        if listed is not None and hit and hit[0] == listed and all(stamps.get(r) == m for r, m in hit[1]):
+            return list(hit[2])
         order: dict[str, None] = {}
 
         def visit(rel: str) -> None:
@@ -310,6 +322,8 @@ class Project:
                 if child:
                     visit(child)
         visit(main)
+        if listed is not None and all(r in stamps for r in order):
+            self._chains[main] = (listed, tuple((r, stamps[r]) for r in order), tuple(order))
         return list(order)
 
     def document_of(self, rel: str, cfg: Config) -> str:

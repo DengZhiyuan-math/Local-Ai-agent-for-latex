@@ -488,6 +488,33 @@ class Symbols(unittest.TestCase):
         self.assertEqual(server.PROJECT.document_order(), ["main.tex", "a.tex", "c.tex"])
         self.assertEqual(s["bibkeys"], [{"key": "knuth", "type": "book", "file": "refs.bib", "line": 1}])
 
+    def test_the_order_is_worked_out_again_only_when_its_files_or_the_list_changed(self):
+        """The tree asks for the order every two seconds: with the files listed and their
+        mtimes the same, no name is looked for again (each one a resolve, slow on Windows)."""
+        root = project({"main.tex": "\\input{a}\n\\input{later}\n", "a.tex": "x\n", "b.tex": "y\n"})
+        P = server.PROJECT
+
+        def order():
+            listed = P.list_files(editable_only=False)
+            return P.document_order(P.list_files(), {f: server.mtime(root / f) for f in listed})
+        self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+        with mock.patch.object(P, "resolve_tex_name", wraps=P.resolve_tex_name) as looked:
+            self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+            self.assertEqual(looked.call_count, 0, "nothing changed")
+            (root / "b.tex").write_text("z\n", encoding="utf-8")
+            os.utime(root / "b.tex", ns=(1, 1))
+            self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+            self.assertEqual(looked.call_count, 0, "a file outside the chain changed")
+        (root / "a.tex").write_text("\\input{b}\n", encoding="utf-8")
+        os.utime(root / "a.tex", ns=(2, 2))
+        self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"], "a file in it changed")
+        (root / "b.tex").write_text("", encoding="utf-8")
+        (root / "a.tex").write_text("x\n", encoding="utf-8")
+        os.utime(root / "a.tex", ns=(3, 3))
+        (root / "later.tex").write_text("", encoding="utf-8")
+        self.assertEqual(order(), ["main.tex", "a.tex", "later.tex", "b.tex"], "a file it names appeared")
+        self.assertEqual(P.document_order(), ["main.tex", "a.tex", "later.tex", "b.tex"], "without stamps: worked out")
+
 
 def copy_example(name="my paper") -> Path:
     """A copy of examples/minimal to work in."""

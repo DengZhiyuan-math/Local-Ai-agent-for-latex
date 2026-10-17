@@ -332,7 +332,7 @@ class Handler(httpbase.Handler):
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
-                               "order": PROJECT.document_order(editable),
+                               "order": PROJECT.document_order(editable, {f["path"]: f["mtime"] for f in files}),
                                "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
                                "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
                                "sync": GITSYNC.status()})
