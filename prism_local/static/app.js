@@ -1667,11 +1667,12 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key === "s") { e.preventDefault(); saveActive(); }
   else if (mod && e.key === "Enter") { e.preventDefault(); compile(); }
   else if (mod && e.key === "b" && !e.shiftKey) { e.preventDefault(); sidebarHidden(!$("#sidebar").classList.contains("hidden")); }
-  // Find in the open file, from wherever the focus is but the agent's panel (the editor has its own keys).
-  else if (mod && e.code === "KeyF" && !e.shiftKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
+  // Find and go to line in the open file, from wherever the focus is but the agent's panel (the
+  // editor has its own keys); with no file open, the browser keeps its own.
+  else if (mod && e.code === "KeyF" && !e.shiftKey && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
   else if (mod && e.code === "KeyF" && e.shiftKey && !e.altKey) { e.preventDefault(); psOpen(); }
-  else if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.code === "KeyG" && !e.target.closest("#chat")) { e.preventDefault(); gotoOpen(); }
-  else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
+  else if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.code === "KeyG" && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); gotoOpen(); }
+  else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
 });
 window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.preventDefault(); e.returnValue = ""; } });
 
