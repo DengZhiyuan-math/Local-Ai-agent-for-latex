@@ -1,7 +1,7 @@
 import { closeSocket } from "./close.mjs";
-// The editor's basics on the real page, with real keys: find and replace in the open file.
+// The editor's basics on the real page, with real keys: find and replace in the open file, search the project.
 // usage: node editing.mjs <editor url> <project folder>
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [url, root] = process.argv.slice(2);
@@ -23,7 +23,8 @@ ws.addEventListener("message", (m) => {
 const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
 const ev = async (expr) => {
   const r = await send("Runtime.evaluate", { expression: `(async () => { ${expr} })()`, awaitPromise: true, returnByValue: true });
-  if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "evaluate failed");
+  // A step that throws is a failed check, and the rest still run.
+  if (r.result.exceptionDetails) { check("a step ran", false, r.result.exceptionDetails.exception?.description || "evaluate failed"); return null; }
   return r.result.result.value;
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -42,6 +43,7 @@ const bar = () => ev(`return { open: !$("#find").hidden, count: $("#find-count")
   sel: cm.getSelection(), replace: !$("#find-replace").hidden, text: cm.getValue() }`);
 
 await send("Runtime.enable");
+await send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });   // the sidebar shows
 await ev(`
   for (let i = 0; i < 150 && (typeof S === "undefined" || !S.files.length); i++) await new Promise((r) => setTimeout(r, 100));
   window.confirm = () => true;
@@ -126,6 +128,52 @@ b = await bar();
 check("Ctrl+F elsewhere on the page opens the editor's bar, not the browser's", b.open, JSON.stringify(b));
 await key("Escape");
 check("the editor's text is as it was", (await bar()).text === FIND_TEXT);
+
+/* ---------------------------------------------------------------- search the project */
+writeFileSync(join(root, "sec", "s1.tex"), "needle one\nnothing\nneedle two\n");
+writeFileSync(join(root, "sec", "s2.tex"), "a Needle\n");
+await ev(`await T.until(async () => { await poll(); return S.files.some((f) => f.path === "sec/s2.tex"); });
+  store.set("psearch.opts", {}); Object.assign(PS.opts, { caseSensitive: false, wholeWord: false, regex: false }); psOptsShown();
+  cm.focus(); return true`);
+const ps = () => ev(`return { open: !$("#search-pane").hidden, files: !$("#tree").offsetParent, focus: document.activeElement.id,
+  summary: $("#ps-summary").textContent, hits: [...document.querySelectorAll("#ps-results .ps-hit")].map((li) => li.textContent) }`);
+await key("f", 2 | 8);
+let p = await ps();
+check("Ctrl+Shift+F opens Search in the sidebar in place of the files", p.open && p.files && p.focus === "ps-q", JSON.stringify(p));
+await type("needle");
+await ev(`return T.until(() => $("#ps-summary").textContent.startsWith("3 results"))`);
+p = await ps();
+check("finds in files that are not open, grouped by file", p.summary === "3 results in 2 files"
+  && p.hits.join("|") === "1needle one|3needle two|1a Needle", JSON.stringify(p));
+await ev(`cm.replaceRange("needle ", { line: 0, ch: 0 }); return true`);
+const typed = await ev(`return T.until(() => $("#ps-summary").textContent === "4 results in 3 files")`);
+check("an open file is searched as it is in the editor, unsaved edits too", typed, (await ps()).summary);
+await ev(`[...document.querySelectorAll("#ps-results .ps-hit")].find((li) => li.title === "sec/s2.tex:1")?.click(); return true`);
+const went = await ev(`await T.until(() => S.active === "sec/s2.tex" && cm.getSelection() === "Needle"); return { active: S.active, sel: cm.getSelection() }`);
+check("a click opens the file and selects the match", went.active === "sec/s2.tex" && went.sel === "Needle", JSON.stringify(went));
+await ev(`$("#ps-results .ps-file[title='sec/s1.tex']")?.click(); return true`);
+check("a file's results fold away and back", (await ps()).hits.length === 2);
+await ev(`$("#ps-results .ps-file[title='sec/s1.tex']")?.click(); return true`);
+
+// Replace all: the open files in their tabs (saved as typed), the others on disk.
+await ev(`$("#ps-more").click(); return true`);
+await type("pin");
+await ev(`$("#ps-all").click(); return true`);
+const replaced = await ev(`await T.until(() => $("#ps-summary").textContent === "No results");
+  await T.until(() => !S.tabs.some(isDirty));
+  return { s2: TABS.get("sec/s2.tex").doc.getValue(), find: TABS.get("find.tex").doc.getValue(), summary: $("#ps-summary").textContent }`);
+const disk = (f) => readFileSync(join(root, ...f.split("/")), "utf8");
+check("Replace all changes every file, open or not", replaced?.summary === "No results" && replaced.s2 === "a pin\n"
+  && replaced.find.startsWith("pin alpha") && disk("sec/s1.tex") === "pin one\nnothing\npin two\n"
+  && disk("sec/s2.tex") === "a pin\n" && disk("find.tex").startsWith("pin alpha"), JSON.stringify({ ...replaced, s1: disk("sec/s1.tex") }));
+// A file changed on disk is searched again by itself.
+writeFileSync(join(root, "sec", "s1.tex"), "needle again\n");
+const again = await ev(`return T.until(() => $("#ps-summary").textContent === "1 result in 1 file", 8000)`);
+check("a file changed on disk is searched again", again, (await ps()).summary);
+await ev(`$("#ps-q").focus(); return true`);
+await key("Escape");
+p = await ps();
+check("Esc closes Search: the files are back", !p.open && !p.files, JSON.stringify(p));
 check("no page errors", errors.length === 0, errors.join(" | "));
 
 console.log(results.join("\n"));

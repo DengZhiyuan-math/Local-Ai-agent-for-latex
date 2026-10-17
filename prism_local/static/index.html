@@ -55,8 +55,28 @@
 
 <main id="layout">
   <aside id="sidebar">
+    <section id="search-pane" hidden role="search">
+      <h3>Search <button id="ps-close" class="tiny icon ghost" title="Back to the files (Esc)" aria-label="Close search">×</button></h3>
+      <div class="ps-form">
+        <div class="ps-row">
+          <button id="ps-more" class="icon tiny ghost" data-icon="right" title="Replace in the project" aria-label="Show replace" aria-expanded="false"></button>
+          <input id="ps-q" type="text" placeholder="Search the project" spellcheck="false" autocomplete="off" aria-label="Search the project">
+        </div>
+        <div class="ps-row ps-opts">
+          <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
+          <button type="button" class="opt" data-opt="wholeWord" title="Whole word (Alt+W)" aria-pressed="false"><u>ab</u></button>
+          <button type="button" class="opt" data-opt="regex" title="Regular expression (Alt+R)" aria-pressed="false">.*</button>
+        </div>
+        <div class="ps-row" id="ps-replace" hidden>
+          <input id="ps-r" type="text" placeholder="Replace" spellcheck="false" autocomplete="off" aria-label="Replace in the project">
+          <button type="button" id="ps-all" class="tiny" title="Replace every match in the project (Ctrl+Alt+Enter)">Replace all</button>
+        </div>
+      </div>
+      <p id="ps-summary" role="status"></p>
+      <ul id="ps-results"></ul>
+    </section>
     <section>
-      <h3>Files</h3>
+      <h3>Files <button id="btn-search" class="tiny icon ghost" data-icon="search" title="Search the project (⌘⇧F)" aria-label="Search the project"></button></h3>
       <ul id="tree"></ul>
       <p id="files-status" role="status">Drop files here · 25 MB each</p>
     </section>

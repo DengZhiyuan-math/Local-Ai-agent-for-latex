@@ -35,6 +35,8 @@ const Client = (() => {
       // files
       file: (path) => get("/api/file", { path }),
       saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),
+      // many files' text at once, for search and word counts: {files: [{path, mtime, content | skipped}]}
+      texts: (paths) => post("/api/texts", { paths }),
       // the Files menu: one of FILE_ACTIONS
       fileAction: (action, body) => post("/api/files/" + action, body),
       // upload_id: the page's name for it, so removing its chip can take it back

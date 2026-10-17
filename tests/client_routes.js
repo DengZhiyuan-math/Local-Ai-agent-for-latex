@@ -15,7 +15,7 @@ const Q = Client.create(api);
 const ARGS = {
   tree: [], config: [], symbols: [], pdfstat: [], home: [], restart: [], renameProject: ["Paper"],
   snippets: [],
-  file: ["sec/a b.tex"], saveFile: [{ path: "a.tex", content: "x", base_mtime: 1, force: false }],
+  file: ["sec/a b.tex"], texts: [["a.tex", "b.tex"]], saveFile: [{ path: "a.tex", content: "x", base_mtime: 1, force: false }],
   upload: [{ name: "p.png", data: "", destination: "" }], uploadSync: [["a.png", "b.png"]], uploadCancel: ["u1"], diff: ["a.tex"],
   build: [{ mode: "latexmk", clean: false, active: "a.tex" }], buildStop: [],
   forward: ["a.tex", 3], inverse: [1, 10.5, 20.25],

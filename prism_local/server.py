@@ -470,6 +470,12 @@ class Handler(httpbase.Handler):
             return self._json(GITSYNC.status())
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
+        if path == "/api/texts":
+            # Many files at once, for search and word counts; a POST, as their names may be long.
+            paths = body.get("paths")
+            if not isinstance(paths, list) or not all(isinstance(f, str) for f in paths):
+                return self._err(400, "paths: a list of the project's files")
+            return self._json({"files": PROJECT.texts(paths)})
         if path == "/api/file":
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),

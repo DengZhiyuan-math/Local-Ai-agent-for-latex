@@ -57,6 +57,7 @@ const cm = CodeMirror($("#editor"), {
     // Find and replace (below).
     "Cmd-F": () => findOpen(false), "Ctrl-F": () => findOpen(false),
     "Cmd-Alt-F": () => findOpen(true), "Ctrl-H": () => findOpen(true),
+    "Shift-Cmd-F": () => psOpen(), "Shift-Ctrl-F": () => psOpen(),
     F3: () => findStep(1), "Shift-F3": () => findStep(-1),
     // Snippets first (see below): expand, next field, out of a bracket, & in a matrix row.
     Tab: () => SNIP.tab(indentOrSpaces),
@@ -238,7 +239,218 @@ $("#find-one").onclick = () => findReplaceOne();
 $("#find-all").onclick = () => findReplaceAll();
 $("#btn-find").onclick = () => findOpen(false);
 // Your edits, an agent's, a reload from disk: the matches are found again a moment later.
-cm.on("changes", () => { if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); } });
+cm.on("changes", () => {
+  if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
+  if (PS.open) psSchedule(400);
+});
+
+/* ------------------------------------------------------------------ the project's text */
+// The text of the project's files, for search and word counts: an open tab's as you see it
+// (unsaved edits too), the others' from disk (/api/texts), kept here while the tree shows
+// the same mtime for them. {path -> {content} or {skipped: why}}; files that cannot be read are left out.
+const TEXTS = new Map();               // path -> {mtime, content | skipped}, as the server gave it
+async function projectTexts(paths) {
+  const mtimes = new Map(S.files.map((f) => [f.path, f.mtime]));
+  const want = paths.filter((p) => !TABS.get(p) && TEXTS.get(p)?.mtime !== mtimes.get(p));
+  for (let i = 0; i < want.length; i += 300) {
+    const r = await Q.texts(want.slice(i, i + 300));
+    if (r._status !== 200) break;
+    for (const f of r.files) TEXTS.set(f.path, f);
+  }
+  const out = new Map();
+  for (const p of paths) {
+    const t = TABS.get(p);
+    if (t) out.set(p, { content: t.doc.getValue() });
+    else if (TEXTS.has(p)) out.set(p, TEXTS.get(p));
+  }
+  return out;
+}
+// The files you can edit, in the order the tree shows them.
+function editablePaths() {
+  const rank = (p) => { const i = S.order.indexOf(p); return i < 0 ? 1e9 : i; };
+  return S.files.filter((f) => f.editable !== false).map((f) => f.path)
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/* ------------------------------------------------------------------ search the project */
+// The sidebar's Search: every match in the project's files, grouped by file; a click opens
+// the file at it. Replace all changes them all: an open file in its tab (⌘Z there takes it
+// back; it is saved as you type), the others on disk, each only if unchanged since it was read.
+const PS_MAX = 2000;                   // matches listed
+const psQ = $("#ps-q"), psR = $("#ps-r");
+const PS = {
+  open: false, opts: { caseSensitive: false, wholeWord: false, regex: false, ...store.get("psearch.opts", {}) },
+  results: [], info: null, seq: 0, stamp: "", timer: null, closed: new Set(),
+};
+const psOpts = () => ({ ...PS.opts, query: psQ.value });
+// What a search depends on besides the query: the files and their mtimes.
+const psStamp = () => S.files.map((f) => f.path + ":" + f.mtime).join("\n");
+function psOpen() {
+  if ($("#sidebar").classList.contains("hidden")) sidebarHidden(false);
+  PS.open = true;
+  $("#search-pane").hidden = false;
+  $("#sidebar").classList.add("searching");
+  const sel = cm.hasFocus() ? cm.getSelection() : "";
+  if (sel && !sel.includes("\n") && sel.length < 200) psQ.value = PS.opts.regex ? regexEscape(sel) : sel;
+  psQ.focus(); psQ.select();
+  psRun();
+}
+function psClose() {
+  PS.open = false; PS.seq++;
+  $("#search-pane").hidden = true;
+  $("#sidebar").classList.remove("searching");
+  if (activeTab()) cm.focus();
+}
+function psSchedule(ms = 250) { clearTimeout(PS.timer); PS.timer = setTimeout(psRun, ms); }
+async function psRun() {
+  clearTimeout(PS.timer);
+  const seq = ++PS.seq, opts = psOpts();
+  if (!opts.query) { PS.results = []; PS.info = null; return psRender(); }
+  const paths = editablePaths();
+  PS.stamp = psStamp();                            // a poll meanwhile does not start it again
+  const texts = await projectTexts(paths);
+  if (seq !== PS.seq) return;                      // a newer search started meanwhile
+  const results = [], skipped = [];
+  let left = PS_MAX, error = null, more = false;
+  for (const path of paths) {
+    const f = texts.get(path);
+    if (!f) continue;
+    if (f.skipped) { skipped.push(`${path} (${f.skipped})`); continue; }
+    const r = FindLogic.matches(f.content, opts, left);
+    if (r.error) { error = r.error; break; }
+    if (r.list.length) results.push({ path, text: f.content, list: r.list, where: FindLogic.lines(f.content, r.list) });
+    left -= r.list.length;
+    if (r.more || left <= 0) { more = true; break; }
+  }
+  Object.assign(PS, { results, info: { error, more, skipped } });
+  psRender();
+}
+function psRender() {
+  const { results, info } = PS, sum = $("#ps-summary");
+  const n = results.reduce((k, r) => k + r.list.length, 0);
+  sum.textContent = !info ? "" : info.error || (!n ? "No results"
+    : `${Util.plural(n, "result")} in ${Util.plural(results.length, "file")}${info.more ? ` (the first ${PS_MAX.toLocaleString()})` : ""}`)
+    + (info && info.skipped.length ? ` · ${Util.plural(info.skipped.length, "file")} not searched` : "");
+  sum.title = info && info.skipped.length ? "Not searched: " + info.skipped.join(", ") : "";
+  sum.classList.toggle("bad", !!info?.error);
+  psQ.classList.toggle("bad", !!info?.error);
+  let html = "";
+  results.forEach((r, i) => {
+    const name = r.path.split("/").pop(), dir = r.path.slice(0, r.path.length - name.length - 1);
+    const closed = PS.closed.has(r.path);
+    html += `<li class="ps-file${closed ? " closed" : ""}" data-r="${i}" title="${esc(r.path)}"><span class="caret">${icon("down")}</span>`
+      + `<span>${esc(name)}</span><span class="dir">${esc(dir)}</span><span class="n">${r.list.length}</span></li>`;
+    if (closed) return;
+    r.where.forEach((w, k) => {
+      const e = FindLogic.excerpt(w.text, w.ch, w.len);
+      html += `<li class="ps-hit" data-r="${i}" data-k="${k}" title="${esc(r.path)}:${w.line + 1}"><span class="ln">${w.line + 1}</span>`
+        + `${esc(e.before)}<mark>${esc(e.hit)}</mark>${esc(e.after)}</li>`;
+    });
+  });
+  $("#ps-results").innerHTML = html;
+}
+// Opens a result's file and selects the match; if the file changed since the search, the
+// match nearest to where it was.
+async function psGo(r, x) {
+  await openFile(r.path);
+  if (S.active !== r.path) return;
+  let { from, to } = x;
+  const now = cm.getValue();
+  if (now !== r.text) {
+    const again = FindLogic.matches(now, psOpts()).list;
+    if (!again.length) return;
+    ({ from, to } = again.reduce((a, b) => Math.abs(b.from - x.from) < Math.abs(a.from - x.from) ? b : a));
+  }
+  const a = cm.posFromIndex(from), b = cm.posFromIndex(to);
+  cm.setSelection(a, b);
+  cm.scrollIntoView({ from: a, to: b }, 100);
+}
+async function psReplaceAll() {
+  const opts = psOpts(), repl = psR.value;
+  if (!opts.query) return;
+  const paths = editablePaths(), texts = await projectTexts(paths);
+  const todo = [];
+  for (const path of paths) {
+    const f = texts.get(path);
+    if (!f || f.skipped) continue;
+    const { list, error } = FindLogic.matches(f.content, opts, Infinity);
+    if (error) return toast(error, true);
+    if (list.length) todo.push({ path, f, list });
+  }
+  const n = todo.reduce((k, x) => k + x.list.length, 0);
+  if (!n) return toast("Nothing to replace.");
+  const closedFiles = todo.filter((x) => !TABS.get(x.path));
+  if (C.editTurn && closedFiles.length)
+    return toast("The agent is editing the files: replace in the project once its turn has ended.", true);
+  if (!confirm(`Replace ${Util.plural(n, "match", "matches")} in ${Util.plural(todo.length, "file")} with “${repl}”?`)) return;
+  const failed = [];
+  for (const { path, f, list } of todo) {
+    const t = TABS.get(path);
+    if (t && t === activeTab()) {
+      // as Replace all in the file: one step to take back
+      cm.operation(() => {
+        for (let i = list.length - 1; i >= 0; i--)
+          cm.replaceRange(FindLogic.expand(repl, list[i].m, opts), cm.posFromIndex(list[i].from), cm.posFromIndex(list[i].to), "+find");
+      });
+    } else if (t) {
+      // a tab in the background: one change from the first match to the last, so one ⌘Z there
+      const a = list[0].from, b = list[list.length - 1].to, text = FindLogic.replaceAll(f.content, list, repl, opts);
+      t.doc.replaceRange(text.slice(a, text.length - (f.content.length - b)), t.doc.posFromIndex(a), t.doc.posFromIndex(b), "+find");
+      updateTabState(t); scheduleSave(t);
+    } else {
+      const content = FindLogic.replaceAll(f.content, list, repl, opts);
+      const r = await Q.saveFile({ path, content, base_mtime: f.mtime });
+      if (r._status === 200) TEXTS.set(path, { path, mtime: r.mtime, content });
+      else failed.push(path + (r.conflict ? " (changed on disk meanwhile)" : r.error ? ` (${r.error})` : ""));
+    }
+  }
+  const done = todo.length - failed.length;
+  toast(`Replaced in ${Util.plural(done, "file")}.` + (failed.length ? ` Not replaced in: ${failed.join(", ")}.` : ""), failed.length > 0);
+  await poll();
+  psRun();
+}
+function psToggle(opt) {
+  PS.opts[opt] = !PS.opts[opt];
+  store.set("psearch.opts", PS.opts);
+  psOptsShown();
+  psRun();
+}
+function psOptsShown() {
+  for (const b of $("#search-pane").querySelectorAll("[data-opt]")) b.setAttribute("aria-pressed", String(!!PS.opts[b.dataset.opt]));
+}
+psOptsShown();
+function psKeys(e) {
+  if (e.key === "Escape") { e.preventDefault(); psClose(); }
+  else if (e.altKey && !e.ctrlKey && !e.metaKey && FIND_OPT_KEYS[e.code]) { e.preventDefault(); psToggle(FIND_OPT_KEYS[e.code]); }
+  else return false;
+  return true;
+}
+psQ.addEventListener("input", () => psSchedule());
+psQ.addEventListener("keydown", (e) => { if (!psKeys(e) && e.key === "Enter") { e.preventDefault(); psRun(); } });
+psR.addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "Enter" && e.altKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); psReplaceAll(); }
+});
+$("#search-pane .ps-opts").addEventListener("click", (e) => { const b = e.target.closest("[data-opt]"); if (b) psToggle(b.dataset.opt); });
+$("#ps-more").onclick = () => {
+  const on = $("#ps-replace").hidden;
+  $("#ps-replace").hidden = !on; $("#ps-more").setAttribute("aria-expanded", String(on));
+  (on ? psR : psQ).focus();
+};
+$("#ps-all").onclick = () => psReplaceAll();
+$("#ps-close").onclick = () => psClose();
+$("#btn-search").onclick = () => psOpen();
+$("#ps-results").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-r]"); if (!li) return;
+  const r = PS.results[+li.dataset.r]; if (!r) return;
+  if (li.classList.contains("ps-file")) {
+    if (!PS.closed.delete(r.path)) PS.closed.add(r.path);
+    return psRender();
+  }
+  for (const el of $("#ps-results").querySelectorAll(".cur")) el.classList.remove("cur");
+  li.classList.add("cur");
+  psGo(r, r.list[+li.dataset.k]);
+});
 /* ------------------------------------------------------------------ snippets */
 // Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours, and how
 // they expand, are set in Home → Settings (~/.prism-local/snippets.js and settings.json), so
@@ -803,6 +1015,7 @@ async function pollOnce() {
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
   if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
+  if (PS.open && psQ.value && psStamp() !== PS.stamp) psSchedule(0);   // a file changed: search it again
 }
 
 /* ------------------------------------------------------------------ GitHub sync */
@@ -1368,6 +1581,7 @@ document.addEventListener("keydown", (e) => {
   else if (mod && e.key === "b" && !e.shiftKey) { e.preventDefault(); sidebarHidden(!$("#sidebar").classList.contains("hidden")); }
   // Find in the open file, from wherever the focus is but the agent's panel (the editor has its own keys).
   else if (mod && e.code === "KeyF" && !e.shiftKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
+  else if (mod && e.code === "KeyF" && e.shiftKey && !e.altKey) { e.preventDefault(); psOpen(); }
   else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
 });
 window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.preventDefault(); e.returnValue = ""; } });

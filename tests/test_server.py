@@ -188,6 +188,22 @@ class Files(unittest.TestCase):
             _winapi.CreateJunction(str(root / "a"), str(root / "in"))
             self.assertEqual(server.PROJECT.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
 
+    def test_texts_for_search_are_the_editable_files_only(self):
+        """/api/texts gives the files the editor may open, as /api/file does; others are left
+        out, a file too large or not UTF-8 is named but not read."""
+        root = project({"sec/x.bib": "@book{k}", "fig.png": "", "build/out.tex": "x", ".hidden/h.tex": "h"})
+        (root / "main.tex").write_bytes(b"a\r\nb\n")
+        (root / "latin1.tex").write_bytes("caf\xe9".encode("latin-1"))
+        (root / "big.tex").write_bytes(b"x" * (projectmod.MAX_TEXT + 1))
+        got = server.PROJECT.texts(["main.tex", "sec/x.bib", "fig.png", "build/out.tex", ".hidden/h.tex",
+                                    "../main.tex", "gone.tex", "latin1.tex", "big.tex"])
+        by = {f["path"]: f for f in got}
+        self.assertEqual(list(by), ["main.tex", "sec/x.bib", "latin1.tex", "big.tex"])
+        self.assertEqual(by["main.tex"]["content"], "a\nb\n")
+        self.assertEqual(by["main.tex"]["mtime"], projectmod.mtime(root / "main.tex"))
+        self.assertEqual((by["latin1.tex"].get("content"), by["latin1.tex"]["skipped"]), (None, "not UTF-8 text"))
+        self.assertEqual((by["big.tex"].get("content"), by["big.tex"]["skipped"]), (None, "larger than 2 MB"))
+
     def test_no_save_while_the_agent_edits(self):
         """An Edit turn runs: the server holds every save, also from a page that did not see
         the turn start (another tab, a reload): its diff and Undo would take your text for
