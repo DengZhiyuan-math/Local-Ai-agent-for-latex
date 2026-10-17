@@ -326,7 +326,7 @@ class DeepCode(Backend):
         return {**super().info(), "bin": self.bin()}
 
     def env(self, job: Job) -> dict:
-        env = agent_env()
+        env = agent_env(root=job.root)
         settings_env = user_settings().get("env") or {}
         if not env.get("DEEPCODE_API_KEY") and env.get("DEEPSEEK_API_KEY") and \
                 not (isinstance(settings_env, dict) and settings_env.get("API_KEY")):

@@ -106,14 +106,23 @@ SYSTEM_AFTER_TOOLS = """\
 SYSTEM_APPEND = SYSTEM_BEFORE_TOOLS + FILE_TOOL_RULE + SYSTEM_AFTER_TOOLS   # Claude Code's
 
 
-def agent_env(base: dict | None = None) -> dict:
-    """Remove inherited GitHub credentials and block normal git transports.
+def agent_env(base: dict | None = None, root: Path | None = None) -> dict:
+    """Remove inherited GitHub credentials and block normal git transports. A project
+    `root` inside some other repository (prism-local's examples, say), which it does not
+    sync with: the agent's git stops at the project, and does not find that repository
+    (its remotes, its history) above it.
 
     This is a supplemental guard. A child can override environment variables;
     filesystem and network permissions must come from the backend runtime.
     """
     from gitenv import git_env
     env = git_env(base)
+    if root is not None:
+        import repoview
+        root = Path(root).resolve()
+        if repoview.place(root).kind == "nested":
+            # git looks for a repository in the project and its folders, not above it.
+            env["GIT_CEILING_DIRECTORIES"] = str(root.parent)
     env["GIT_ALLOW_PROTOCOL"] = "prism-local-agents-do-not-reach-remotes"
     env["GIT_TERMINAL_PROMPT"] = "0"
     for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
@@ -444,7 +453,7 @@ class CliBackend(Backend):
     def run(self, job: Job) -> dict:
         cmd, stdin = self.command(job)
         st: dict = {}
-        with cli_process(job, cmd, stdin, agent_env(), bufsize=1) as (proc, lines, stderr_lines):
+        with cli_process(job, cmd, stdin, agent_env(root=job.root), bufsize=1) as (proc, lines, stderr_lines):
             if proc is None:
                 return st                        # stopped before it started
             for line in lines:

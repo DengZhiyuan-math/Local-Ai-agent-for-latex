@@ -297,6 +297,28 @@ class Targets(unittest.TestCase):
                 self.assertEqual(git(self.tool, "for-each-ref"), "")
                 git(self.root, "remote", "set-url", "origin", str(self.remote))
 
+    def test_an_agent_in_a_project_inside_another_repository_does_not_find_it(self):
+        """A project in some other repository (prism-local's examples): nothing syncs it,
+        and the agent's git does not reach that repository's remotes or history either. A
+        project with a repository of its own finds that one, as before."""
+        outer = self.base / "tool"
+        nested = outer / "examples" / "paper"
+        nested.mkdir(parents=True)
+        (nested / "main.tex").write_text("x\n")
+        git(outer, "init", "-q", "-b", "main")
+        git(outer, "remote", "add", "origin", str(self.tool))
+
+        def top(project, cwd):
+            return subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True,
+                                  text=True, env=backends.agent_env(root=project))
+        self.assertNotEqual(top(nested, nested).returncode, 0, "the outer repository is not found")
+        (nested / "sub").mkdir()
+        self.assertNotEqual(top(nested, nested / "sub").returncode, 0, "nor from a folder of the project")
+        self.assertEqual(Path(top(self.root, self.root).stdout.strip()).resolve(), self.root.resolve(),
+                         "a project's own repository is found")
+        git(nested, "init", "-q", "-b", "main")                    # it gets one of its own
+        self.assertEqual(Path(top(nested, nested).stdout.strip()).resolve(), nested.resolve())
+
     def test_inherited_git_selectors_do_not_select_tool(self):
         other = self.base / "other"
         other.mkdir()
