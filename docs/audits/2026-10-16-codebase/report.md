@@ -204,6 +204,8 @@
 
 回归（`380fb0b` 导出的已提交源码、隔离状态目录、`PRISM_SKIP_TEX=1`）：[586 项，31 跳过，无失败](frontend/round4-tests.txt)；[浏览器 105 项通过](frontend/round4-browser.txt)。
 
+随后做 2.1（`9b30df9`）：新模块 `repoview.py`，`place()` 是带失效判断的 `locate` 缓存（原 `hub.place_of`），`changes(root, seen)` 跑一次 `git status -b` 读成 `Changes`（branch、ahead、behind，树用的 `files()`，"N changed" 与提交用的 `recordable()`），在 refs、index、配置和调用方看到的文件都不变时直接复用。编辑器的 tree 照旧以列出文件的 mtime 为 `seen`；Home 以卡片目录遍历的时间戳为 `seen`，回到页面时未变的项目不再跑 git（原地被其他程序改写的文件最迟在遍历的一分钟周期内计入）；同步提交仍当场经自己的仓库询问。编辑器运行中新建或移走的仓库现在能被看到。三处各自的解析、`sources.recordable_changes`、`server.git_place` 删除；`GitSync._remote_state` 的 ahead/behind 是相对同步目标而非 upstream，未并入。测试：`test_repoview`（新增 4 项）、`test_hub`（新增 1 项，原"状态无缓存"断言改为 0 个进程）。回归：[591 项，31 跳过，无失败](frontend/repoview-tests.txt)；[浏览器 105 项通过](frontend/repoview-browser.txt)。
+
 ## 待办（截至 `c154a6d`）
 
 来源：本报告"有意不改与剩余"、"其余后端整理"，以及复核时报告、尚未记录的条目。结构项的现状已对照代码核对；行为问题出自复核报告，未逐条重新复现。
@@ -241,7 +243,7 @@
 
 | 项 | 现状 |
 |---|---|
-| 2.1 `repoview.facts` | 未做。`git status` 仍在三处各跑一次（`server.py:106`、`hub.py:236`、`gitsync.py:302`，解析共用 `sources.parse_status`）；`locate` 多处调用 |
+| 2.1 `repoview.facts` | 完成（`9b30df9`），接口为 `repoview.place` 与 `repoview.changes`；同步目标与 GitHub 信息仍由 `hub.sync_facts` 按 refs 缓存，未并入 |
 | 2.2 `/api/tree` 增量 | 只做了"没变时不重跑 git status"；目录遍历缓存、签名加 `{same: true}` 的增量应答未做 |
 | 2.4 Home 扫描 | 完成（`41028ea`） |
 | 4.1 `httpbase.App` | 未做。编辑器服务与 Home 各自处理启动、交接、心跳和错误映射 |
