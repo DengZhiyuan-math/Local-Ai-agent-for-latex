@@ -10,3 +10,4 @@ __pycache__/
 ._*
 # Local paper checkouts and import records
 /papers/
+.claude/worktrees/
