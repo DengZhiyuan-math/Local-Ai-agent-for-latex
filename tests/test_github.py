@@ -110,6 +110,13 @@ if args[:2] == ["auth", "login"]:
     (here / "logged-in").write_text("me")
     print("Logged in as me", flush=True)
 elif args[:2] == ["auth", "setup-git"]:
+    with open(here / "setup-git-calls", "a") as f:
+        f.write("x")
+    fails = here / "setup-git-fails"            # how many more times it fails
+    if fails.exists() and int(fails.read_text() or 0) > 0:
+        fails.write_text(str(int(fails.read_text()) - 1))
+        print("failed to set up git credential helper", file=sys.stderr)
+        sys.exit(1)
     (here / "setup-git").write_text(" ".join(args))
 elif args[:2] == ["auth", "status"]:
     if (here / "logged-in").exists():
@@ -158,9 +165,53 @@ class LoggingIn(unittest.TestCase):
         self.assertIn("--web", (self.dir / "login-args").read_text())
         self.assertEqual(self.gh.login()["state"], "waiting", "a second click does not start another")
         (self.dir / "approve").write_text("")
-        self.until("done")
+        st = self.until("done")
         self.assertIn("setup-git", (self.dir / "setup-git").read_text(), "git pushes with this login")
+        self.assertIsNone(st["warning"])
         self.assertEqual(self.gh.status()["account"], "me", "the status is asked again")
+
+    def test_git_not_set_up_is_tried_again_and_then_said_in_plain_words(self):
+        (self.dir / "approve").write_text("")
+        (self.dir / "setup-git-fails").write_text("1")       # a passing hiccup: the second try works
+        self.gh.login()
+        st = self.until("done")
+        self.assertEqual((self.dir / "setup-git-calls").read_text(), "xx")
+        self.assertIsNone(st["warning"])
+        self.assertNotIn("credential helper", st["details"] or "")
+        (self.dir / "setup-git-calls").unlink()
+        (self.dir / "setup-git").unlink()
+        (self.dir / "setup-git-fails").write_text("2")       # fails both times
+        self.gh.login()
+        st = self.until("done")
+        self.assertEqual((self.dir / "setup-git-calls").read_text(), "xx", "tried once more, not more")
+        self.assertFalse((self.dir / "setup-git").exists())
+        self.assertIn("logged in to GitHub", st["warning"])
+        self.assertIn("log in once more", st["warning"])
+        for jargon in ("git ", "setup-git", "credential", "gh "):
+            self.assertNotIn(jargon, st["warning"])
+        self.assertIn("credential helper", st["details"], "gh's own words, under Details")
+        self.assertIsNone(st["error"])
+        self.assertEqual(self.gh.status()["account"], "me")
+
+    def test_a_cancel_while_starting_ends_the_login(self):
+        """Cancel clicked before gh has said its code: not lost once gh has started."""
+        start = github.proc.start
+
+        def cancelled_meanwhile(*a, **k):
+            self.gh.cancel_login()
+            return start(*a, **k)
+
+        self.gh.cancel_login()                                # an old cancel does not end a new login
+        with mock.patch.object(github.proc, "start", side_effect=cancelled_meanwhile):
+            st = self.gh.login()
+            self.assertIsNone(st["warning"])
+            self.assertEqual(self.until("failed")["error"], "Logging in to GitHub was cancelled.")
+        self.assertFalse((self.dir / "logged-in").exists())
+        self.gh.cancel_login()
+        self.gh.login()
+        self.until("waiting")
+        (self.dir / "approve").write_text("")
+        self.until("done")
 
     def test_refused_cancelled_and_too_slow_say_so(self):
         self.gh.login()

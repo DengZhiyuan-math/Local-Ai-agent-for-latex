@@ -30,7 +30,7 @@ class GhCli:
     def __init__(self):
         self._status: tuple[float, dict] | None = None
         self._login_lock = threading.Lock()
-        self._login: dict = {"state": None}          # see login()
+        self._login: dict = {"state": None, "warning": None}     # see login()
         self._login_proc: subprocess.Popen | None = None
         self._login_stop: str | None = None          # why it was ended: "cancelled", "expired"
 
@@ -105,14 +105,18 @@ class GhCli:
         device flow (`gh auth login --web`) in the background. Its one-time code is shown
         on the page (login_state: "code", "url"), which opens GitHub's page to enter it;
         once it is authorized, git is set to push with this login too (`gh auth setup-git`:
-        no second login window on the first push). Its state at once."""
+        no second login window on the first push). Should that fail twice, the login is
+        still "done", with a `warning` for the page and gh's words in `details`. A cancel
+        while it starts ends it too. Its state at once."""
         exe = tools.find("gh")
         if not exe:
             raise NotInstalled("gh")
         with self._login_lock:
             if self._login.get("state") in ("starting", "waiting"):
                 return dict(self._login)
-            self._login = {"state": "starting", "code": None, "url": None, "error": None, "details": None}
+            self._login = {"state": "starting", "code": None, "url": None, "error": None,
+                           "details": None, "warning": None}
+            self._login_stop = None          # a cancel from now on ends this login
         threading.Thread(target=self._log_in, args=(exe,), daemon=True).start()
         return self.login_state()
 
@@ -142,7 +146,10 @@ class GhCli:
         except OSError as e:
             return self._login_ended("failed", "GitHub's login could not be started.", str(e))
         with self._login_lock:
-            self._login_proc, self._login_stop = p, None
+            self._login_proc = p
+            stopped = self._login_stop       # cancelled while it was starting
+        if stopped:
+            proc.kill_tree(p)
         try:
             p.stdin.write("\n")          # "Press Enter to open github.com in your browser"
             p.stdin.close()
@@ -163,6 +170,7 @@ class GhCli:
             p.wait()
         finally:
             timer.cancel()
+            p.stdout.close()
             with self._login_lock:
                 self._login_proc = None
         said = "\n".join(lines)[-600:]
@@ -171,17 +179,31 @@ class GhCli:
                 "cancelled": "Logging in to GitHub was cancelled.",
                 "expired": f"GitHub's page was not confirmed within {self.LOGIN_TIME // 60} minutes. Try again.",
             }.get(self._login_stop, "Logging in to GitHub did not work. Try again."), said)
+        setup = self._setup_git(exe)
+        if setup:
+            setup = self._setup_git(exe)     # once more: a passing hiccup
+        self.status(refresh=True)
+        self._login_ended("done", None, said + ("\nsetup-git: " + setup if setup else ""),
+                          warning=self.SETUP_FAILED if setup else None)
+
+    # Logged in, but git was not set to push with this login: the first push may open
+    # git's own login window. Said so, in words for someone who does not know git.
+    SETUP_FAILED = ("You are logged in to GitHub, but this computer could not be fully set up to use "
+                    "that login. The first time a project is saved to GitHub, a GitHub window may ask "
+                    "you to log in once more: log in there, and it is remembered.")
+
+    def _setup_git(self, exe: str) -> str | None:
+        """`gh auth setup-git`: None, or gh's words for why not."""
         try:
             r = self._gh(exe, "auth", "setup-git", "--hostname", "github.com", timeout=60)
-            setup = None if r.returncode == 0 else (r.stderr or r.stdout).strip()[-300:]
         except (OSError, subprocess.SubprocessError) as e:
-            setup = str(e)
-        self.status(refresh=True)
-        self._login_ended("done", None, said + ("\nsetup-git: " + setup if setup else ""))
+            return str(e) or type(e).__name__
+        return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "gh auth setup-git failed")
 
-    def _login_ended(self, state: str, error: str | None, details: str | None) -> None:
+    def _login_ended(self, state: str, error: str | None, details: str | None,
+                     warning: str | None = None) -> None:
         with self._login_lock:
-            self._login.update(state=state, error=error, details=details or None)
+            self._login.update(state=state, error=error, details=details or None, warning=warning)
 
     @staticmethod
     def _gh(exe, *args, cwd=None, timeout=60, env=None, input=None) -> subprocess.CompletedProcess:
