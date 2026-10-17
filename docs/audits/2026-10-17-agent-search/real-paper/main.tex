@@ -1,0 +1,22 @@
+\documentclass{amsart}
+\usepackage{amsmath,amssymb}
+\newtheorem{lemma}{Lemma}
+\begin{document}
+\title{Averages over indices}
+\maketitle
+
+\section{Setting}
+Let $x_1, \dots, x_n$ be points and let $w_i \geq 0$ be weights, one for each index $i$.
+We write $\bar{x} = \sum_{i=1}^n w_i x_i$ for the average, i.e.\ the barycenter.
+For each $i$ in $\{1, \dots, n\}$ the point $x_i$ is in the convex hull.
+
+\begin{lemma}\label{lem:convex}
+If $\sum_i w_i = 1$, then
+\begin{equation}
+  \bar{x} - x_k = \sum_{i \neq k} w_i (x_i - x_k).
+\end{equation}
+\end{lemma}
+
+\input{sections/proof}
+% TODO: rename the index i in the proof of the lemma as well
+\end{document}
