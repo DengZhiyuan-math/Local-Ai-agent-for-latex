@@ -636,6 +636,40 @@ class FolderSync(TempState):
         self.assertTrue((repo / sharedrepo.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
         self.assertFalse((repo / "prism-repo.json").exists())
 
+    def test_one_repository_failing_before_its_commit_is_finished_by_the_next_try(self):
+        """A run that failed after exam's .git was set aside: tried again, exam is already in
+        the shared repository and nothing is fetched, but its history still comes along."""
+        def fails(repo):
+            raise subprocess.CalledProcessError(128, ["git", "commit-tree"], "", "fixture: the disk is full")
+        repo = Path(hub.sync_plan(self.top["id"], "shared")["repo"])
+        with mock.patch.object(sharedrepo, "unstage_big", side_effect=fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertFalse(r["ok"])
+        self.assertTrue((repo / "练习" / "exam" / sharedrepo.SPLIT_BACKUP).is_dir(), "it got that far")
+        self.assertNotIn("exam: first", self.git(repo, "log", "--format=%s"))
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertTrue(r["ok"], r["report"])
+        self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
+        self.assertIn("The histories of 1 project come along in the shared commit", r["report"])
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertTrue(r["ok"], r["report"])
+        self.assertFalse(any("histories" in line for line in r["report"]), "taken in once")
+
+    def test_a_history_that_cannot_be_fetched_keeps_its_repository(self):
+        real = sharedrepo.run_git
+
+        def fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fetch_fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertFalse(r["ok"])
+        self.assertIn("the disk is full", " ".join(r["report"]))
+        exam = Path(next(p["path"] for p in hub.list_projects()["projects"] if p["name"] == "exam"))
+        self.assertTrue((exam / ".git").is_dir(), "its .git is not set aside without its history")
+        self.assertIn("exam: first", self.git(exam, "log", "--format=%s"))
+
     def test_back_to_separate_repositories_failing_half_way_leaves_the_shared_one_whole(self):
         r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
         self.assertTrue(r["ok"], r["report"])

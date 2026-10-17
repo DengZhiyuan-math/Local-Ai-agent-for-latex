@@ -178,7 +178,6 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
     if not gitsync.shared_marker(top):
         marker.write_bytes((json.dumps({"shared": True, "folder": f["name"]}, ensure_ascii=False,
                                        indent=2) + "\n").encode("utf-8"))
-    imports = []
     for r in plan["projects"]:
         if r["action"] not in ("moves", "stays"):
             continue
@@ -193,10 +192,11 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         if dot.is_file():
             raise ValueError(f"{root.name} is a git worktree or submodule; set it up by hand")
         if dot.is_dir() and r["kind"] == "own":
-            ref = f"refs/prism/imported/{r['id']}"
-            got = gitenv.git(top, "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}", timeout=300)
-            if got.returncode == 0:
-                imports.append(run_git(top, "rev-parse", ref).stdout.strip())
+            # Its history is kept as refs/prism/imported/<id> until the shared commit takes
+            # it in: a run that failed after this is finished by the next (_imported).
+            if gitenv.git(root, "rev-parse", "-q", "--verify", "HEAD^{commit}", timeout=20).returncode == 0:
+                run_git(top, "fetch", "-q", "--no-tags", str(root), f"+HEAD:refs/prism/imported/{r['id']}",
+                        timeout=300)
             if (root / SPLIT_BACKUP).exists():
                 raise ValueError(f"{root / SPLIT_BACKUP} is in the way")
             os.replace(dot, root / SPLIT_BACKUP)
@@ -211,6 +211,10 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
         tree = repo.ok("write-tree").strip()
         head = repo.git("rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
         old_tree = repo.ok("rev-parse", "HEAD^{tree}").strip() if head else None
+        imports = _imported(repo, head)
+        if imports:
+            report.append(f"The histories of {len(imports)} project{'s' if len(imports) != 1 else ''} "
+                          "come along in the shared commit")
         if imports or tree != old_tree:
             parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
             n = len(plan["projects"])
@@ -221,6 +225,16 @@ def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
     _publish(top, bool(body.get("github")), str(body.get("github_owner") or ""),
              str(body.get("github_name") or "") or repo_name(top.name), report)
     f["sync"] = {"mode": "shared", "repo": str(top)}
+
+
+def _imported(repo: Repository, head: str) -> list[str]:
+    """The projects' histories fetched into the shared repository (refs/prism/imported/)
+    that its branch does not have yet: this run's, and those of a run that failed before
+    its commit, whose projects' .git are set aside already (a retry sees them as in the
+    shared repository, and fetches nothing)."""
+    refs = repo.ok("for-each-ref", "--format=%(objectname)", "refs/prism/imported/").split()
+    return [sha for sha in dict.fromkeys(refs)
+            if not head or repo.git("merge-base", "--is-ancestor", sha, head).returncode != 0]
 
 
 def _init_own(root: Path) -> None:
