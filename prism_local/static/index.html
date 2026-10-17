@@ -66,7 +66,7 @@
       <div class="ps-form">
         <div class="ps-row">
           <button id="ps-more" class="icon tiny ghost" data-icon="right" title="Replace in the project" aria-label="Show replace" aria-expanded="false"></button>
-          <input id="ps-q" type="text" placeholder="Search the project" spellcheck="false" autocomplete="off" aria-label="Search the project">
+          <input id="ps-q" type="text" placeholder="Search the project" title="↓ goes through the results" spellcheck="false" autocomplete="off" aria-label="Search the project">
         </div>
         <div class="ps-row ps-opts">
           <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
@@ -79,7 +79,7 @@
         </div>
       </div>
       <p id="ps-summary" role="status"></p>
-      <ul id="ps-results"></ul>
+      <ul id="ps-results" tabindex="0" aria-label="Results: ↑ ↓ to go through them, Enter to edit there"></ul>
       </div>
       <div id="ps-agent" class="ps-body" hidden>
         <textarea id="as-q" rows="3" spellcheck="true" aria-label="The change to look for"
@@ -97,7 +97,7 @@
             <label><input type="checkbox" id="as-all" checked> <span id="as-count"></span></label>
             <button type="button" id="as-apply" class="primary tiny">Apply</button>
           </div>
-          <ul id="as-results"></ul>
+          <ul id="as-results" tabindex="0" aria-label="Changes: ↑ ↓ to go through them, Space to tick, Enter to edit there"></ul>
         </div>
       </div>
     </section>
@@ -127,7 +127,7 @@
       <button id="find-more" class="icon tiny ghost" data-icon="right" title="Replace (⌘⌥F / Ctrl+H)" aria-label="Show replace" aria-expanded="false"></button>
       <div class="find-rows">
         <div class="find-row">
-          <input id="find-q" type="text" placeholder="Find" spellcheck="false" autocomplete="off" aria-label="Find">
+          <input id="find-q" type="text" placeholder="Find" title="Enter or ↓: next · Shift+Enter or ↑: previous" spellcheck="false" autocomplete="off" aria-label="Find">
           <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
           <button type="button" class="opt" data-opt="wholeWord" title="Whole word (Alt+W)" aria-pressed="false"><u>ab</u></button>
           <button type="button" class="opt" data-opt="regex" title="Regular expression (Alt+R)" aria-pressed="false">.*</button>

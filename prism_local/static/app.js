@@ -223,6 +223,7 @@ findQ.addEventListener("input", () => { clearTimeout(FIND.timer); FIND.timer = s
 findQ.addEventListener("keydown", (e) => {
   if (findKeys(e)) return;
   if (e.key === "Enter") { e.preventDefault(); clearTimeout(FIND.timer); findStep(e.shiftKey ? -1 : 1); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); clearTimeout(FIND.timer); findStep(e.key === "ArrowDown" ? 1 : -1); }
 });
 findR.addEventListener("keydown", (e) => {
   if (findKeys(e)) return;
@@ -432,7 +433,8 @@ function psRender() {
     if (closed) return;
     r.where.forEach((w, k) => {
       const e = FindLogic.excerpt(w.text, w.ch, w.len);
-      html += `<li class="ps-hit" data-r="${i}" data-k="${k}" title="${esc(r.path)}:${w.line + 1}"><span class="ln">${w.line + 1}</span>`
+      const key = `${r.path}:${r.list[k].from}`;
+      html += `<li class="ps-hit${key === PS.curKey ? " cur" : ""}" data-r="${i}" data-k="${k}" data-key="${esc(key)}" title="${esc(r.path)}:${w.line + 1}"><span class="ln">${w.line + 1}</span>`
         + `${esc(e.before)}<mark>${esc(e.hit)}</mark>${esc(e.after)}</li>`;
     });
   });
@@ -440,10 +442,14 @@ function psRender() {
 }
 // Opens a result's file and selects the match; if the file changed since the search, the
 // match nearest to where it was.
-// again: the matches in the file as it is now (the search's by default).
-async function psGo(r, x, again = (now) => FindLogic.matches(now, psOpts()).list) {
+// again: the matches in the file as it is now (the search's by default); stay: the list to
+// keep the keyboard in (going through the results with ↑ ↓), else the editor has it.
+let goSeq = 0;
+async function psGo(r, x, again = (now) => FindLogic.matches(now, psOpts()).list, stay = null) {
+  const seq = ++goSeq;
   await openFile(r.path);
-  if (S.active !== r.path) return;
+  if (stay) stay.focus();
+  if (S.active !== r.path || seq !== goSeq) return;     // another result was asked for meanwhile
   let { from, to } = x;
   const now = cm.getValue();
   if (now !== r.text) {
@@ -525,7 +531,48 @@ function psKeys(e) {
   return true;
 }
 psQ.addEventListener("input", () => psSchedule());
-psQ.addEventListener("keydown", (e) => { if (!psKeys(e) && e.key === "Enter") { e.preventDefault(); psRun(); } });
+psQ.addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "Enter") { e.preventDefault(); psRun(); }
+  else if (e.key === "ArrowDown") {          // into the results: at the current one, else the first
+    e.preventDefault();
+    const list = $("#ps-results"), li = list.querySelector(".ps-hit.cur");
+    list.focus();
+    if (li) psShow(li, list); else psMove(1);
+  }
+});
+// Going through a list of results with ↑ ↓: the next item `sel` becomes the current one and
+// show(item) shows it in the editor. "top": ↑ on the first item.
+function listMove(list, sel, d, show) {
+  const items = [...list.querySelectorAll(sel)];
+  if (!items.length) return false;
+  const i = items.findIndex((li) => li.classList.contains("cur"));
+  const j = i < 0 ? (d > 0 ? 0 : items.length - 1) : i + d;
+  if (j < 0) return "top";
+  if (j >= items.length) return false;
+  listCur(list, items[j]);
+  show(items[j]);
+  return true;
+}
+function listCur(list, li) {
+  for (const el of list.querySelectorAll(".cur")) el.classList.remove("cur");
+  li.classList.add("cur");
+  li.scrollIntoView({ block: "nearest" });
+}
+const psShow = (li, stay) => {
+  const r = PS.results[+li.dataset.r];
+  PS.curKey = li.dataset.key;
+  psGo(r, r.list[+li.dataset.k], undefined, stay);
+};
+function psMove(d) {
+  const list = $("#ps-results");
+  if (listMove(list, ".ps-hit", d, (li) => psShow(li, list)) === "top") psQ.focus();
+}
+$("#ps-results").addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); psMove(e.key === "ArrowDown" ? 1 : -1); }
+  else if (e.key === "Enter") { const li = $("#ps-results .ps-hit.cur"); if (li) { e.preventDefault(); psShow(li); } }
+});
 psR.addEventListener("keydown", (e) => {
   if (psKeys(e)) return;
   if (e.key === "Enter" && e.altKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); psReplaceAll(); }
@@ -546,9 +593,8 @@ $("#ps-results").addEventListener("click", (e) => {
     if (!PS.closed.delete(r.path)) PS.closed.add(r.path);
     return psRender();
   }
-  for (const el of $("#ps-results").querySelectorAll(".cur")) el.classList.remove("cur");
-  li.classList.add("cur");
-  psGo(r, r.list[+li.dataset.k]);
+  listCur($("#ps-results"), li);
+  psShow(li);
 });
 
 /* ------------------------------------------------------------------ search with the agent */
@@ -699,7 +745,8 @@ function asRender() {
       const off = AS.off.has(asKey(f.path, c));
       const e = FindLogic.excerpt(c.before, c.ch, Math.min(c.to - c.from, c.before.length - c.ch), 70);
       const by = c.by === "rule" ? `rule ${c.index + 1}` : (AS.proposal.edits[c.index].note || "listed by the agent");
-      html += `<li class="as-change${off ? " off" : ""}"><input type="checkbox" data-c="${i}:${k}"${off ? "" : " checked"}>`
+      const key = asKey(f.path, c);
+      html += `<li class="as-change${off ? " off" : ""}${key === AS.curKey ? " cur" : ""}" data-c="${i}:${k}" data-key="${esc(key)}"><input type="checkbox" data-c="${i}:${k}"${off ? "" : " checked"}>`
         + `<span class="ln">${c.line + 1}</span><span class="diff" data-go="${i}:${k}" title="Show it in the file">`
         + `${esc(e.before)}<del>${esc(e.hit)}</del><ins>${esc(c.text)}</ins>${esc(e.after)}<span class="by">${esc(by)}</span></span></li>`;
     });
@@ -716,16 +763,32 @@ $("#as-results").addEventListener("change", (e) => {
   if (box.dataset.file) { const f = files[+box.dataset.file]; for (const c of f.changes) set(f.path, c, box.checked); }
   else if (box.dataset.c) { const [i, k] = box.dataset.c.split(":").map(Number); set(files[i].path, files[i].changes[k], box.checked); }
   asRender();
+  $("#as-results").focus();            // drawn again: ↑ ↓ go on from here
+});
+const asShow = (li, stay) => {
+  const [i, k] = li.dataset.c.split(":").map(Number), f = AS.result.files[i];
+  AS.curKey = li.dataset.key;
+  psGo({ path: f.path, text: AS.texts.get(f.path).content }, f.changes[k], (now) =>
+    AgentSearch.changes([[f.path, now]], AS.proposal).files[0]?.changes || [], stay);
+};
+// ↑ ↓ through the changes (each shown in the file), Space ticks or unticks, Enter goes to the editor.
+$("#as-results").addEventListener("keydown", (e) => {
+  const list = $("#as-results"), cur = list.querySelector(".as-change.cur");
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    listMove(list, ".as-change", e.key === "ArrowDown" ? 1 : -1, (li) => asShow(li, list));
+  } else if (e.key === " " && cur) { e.preventDefault(); cur.querySelector("input").click(); }
+  else if (e.key === "Enter" && cur) { e.preventDefault(); asShow(cur); }
 });
 $("#as-all").addEventListener("change", (e) => {
   for (const f of AS.result.files) for (const c of f.changes) { if (e.target.checked) AS.off.delete(asKey(f.path, c)); else AS.off.add(asKey(f.path, c)); }
   asRender();
 });
 $("#as-results").addEventListener("click", (e) => {
-  const d = e.target.closest("[data-go]"); if (!d) return;
-  const [i, k] = d.dataset.go.split(":").map(Number), f = AS.result.files[i];
-  psGo({ path: f.path, text: AS.texts.get(f.path).content }, f.changes[k], (now) =>
-    AgentSearch.changes([[f.path, now]], AS.proposal).files[0]?.changes || []);
+  if (!e.target.closest("[data-go]")) return;
+  const li = e.target.closest("li.as-change");
+  listCur($("#as-results"), li);
+  asShow(li);
 });
 async function asApply() {
   const todo = AS.result.files.map((f) => ({ path: f.path, f: AS.texts.get(f.path), list: f.changes.filter((c) => !AS.off.has(asKey(f.path, c))) }))

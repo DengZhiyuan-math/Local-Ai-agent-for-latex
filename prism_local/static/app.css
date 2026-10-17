@@ -243,6 +243,9 @@ button.flip .ico { transform: rotate(180deg); }
 #ps-results li.ps-hit .ln { color: var(--muted); display: inline-block; min-width: 2.6em; margin-right: 4px; text-align: right; }
 #ps-results li.ps-hit mark { background: rgba(255, 196, 0, .45); color: inherit; border-radius: 2px; }
 #ps-results li.ps-hit.cur { background: var(--sel); }
+/* A list gone through with ↑ ↓: its current item marked at the edge while it has the keyboard. */
+#ps-results:focus, #as-results:focus { outline: none; }
+#ps-results:focus li.cur, #as-results:focus li.cur { box-shadow: inset 2px 0 var(--accent); }
 #search-pane .ps-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
 #search-pane .ps-body[hidden] { display: none; }
 #search-pane .ps-modes { display: inline-flex; gap: 2px; margin-left: 8px; margin-right: auto; text-transform: none; letter-spacing: 0; }
@@ -282,6 +285,7 @@ button.flip .ico { transform: rotate(180deg); }
 #as-results li.as-change .ln { color: var(--muted); font: 11px var(--mono); min-width: 2.4em; text-align: right; padding-top: 1px; }
 #as-results li.as-change .diff { font: 11.5px var(--mono); overflow-wrap: anywhere; cursor: pointer; flex: 1; }
 #as-results li.as-change.off .diff { opacity: .5; }
+#as-results li.as-change.cur { background: var(--sel); }
 #as-results del { background: var(--cm-del-word); color: var(--cm-del); text-decoration: line-through; border-radius: 2px; }
 #as-results ins { background: var(--cm-add-word); color: var(--cm-add); text-decoration: none; border-radius: 2px; }
 #as-results .by { font: 10.5px var(--sans); color: var(--muted); margin-left: 4px; }

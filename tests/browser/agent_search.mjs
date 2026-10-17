@@ -37,6 +37,16 @@ const ev = async (expr) => {
   if (r.result.exceptionDetails) { check("a step ran", false, r.result.exceptionDetails.exception?.description || "evaluate failed"); return null; }
   return r.result.result.value;
 };
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A key as the keyboard sends it.
+const KEYS = { ArrowUp: 38, ArrowDown: 40, " ": 32, Enter: 13 };
+async function key(k) {
+  const base = { key: k, code: k === " " ? "Space" : k, windowsVirtualKeyCode: KEYS[k], nativeVirtualKeyCode: KEYS[k] };
+  await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
+  if (k === " ") await send("Input.dispatchKeyEvent", { type: "char", text: " ", ...base });
+  await send("Input.dispatchKeyEvent", { type: "keyUp", ...base });
+  await sleep(400);
+}
 await send("Runtime.enable");
 await send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
 await ev(`
@@ -66,6 +76,29 @@ check("only in formulas: not the text, not a comment", s.changes.every((c) => !c
 check("the sidebar is widened for the changes", s.width >= 400, String(s.width));
 check("the search turn is not in the agent's conversation", await ev(`return !$("#chat-log").textContent.includes("prism-search")
   && !$("#chat-log").textContent.includes("I looked at the formulas")`));
+
+// Up Down through the changes, each shown in its file; Space ticks and unticks the current one.
+// shown: the editor shows the current change's file, its old text selected
+const cur = () => ev(`const li = $("#as-results .as-change.cur");
+  return { focus: document.activeElement.id, i: [...document.querySelectorAll("#as-results .as-change")].indexOf(li),
+    shown: !!li && S.active === li.dataset.key.split(":")[0] && cm.getSelection() === li.querySelector("del").textContent,
+    sel: cm.getSelection(), count: $("#as-count").textContent }`);
+await ev(`$("#as-results").focus(); return true`);
+await key("ArrowDown");
+let c = await cur();
+check("Down in the changes shows the first in its file, the keyboard in the list", c.focus === "as-results" && c.i === 0 && c.shown, JSON.stringify(c));
+await key("ArrowDown");
+c = await cur();
+check("Down goes to the next change", c.i === 1 && c.shown, JSON.stringify(c));
+await key(" ");
+c = await cur();
+check("Space unticks the current change, which stays current", c.count === "4 of 5 changes in 2 files" && c.i === 1 && c.focus === "as-results", JSON.stringify(c));
+await key(" ");
+c = await cur();
+check("Space ticks it again", c.count === "5 of 5 changes in 2 files", JSON.stringify(c));
+await key("ArrowUp");
+c = await cur();
+check("Up goes back", c.i === 0 && c.shown, JSON.stringify(c));
 
 // Untick one change; edit a rule: the preview follows.
 await ev(`[...document.querySelectorAll("#as-results .as-change")].find((li) => li.textContent.includes("y_i_j"))?.querySelector("input").click(); return true`);

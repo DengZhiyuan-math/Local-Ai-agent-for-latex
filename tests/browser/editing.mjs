@@ -30,9 +30,9 @@ const ev = async (expr) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 // A key as the keyboard sends it. mods: 1 Alt, 2 Ctrl, 4 Meta, 8 Shift.
-const KEYS = { Enter: 13, Escape: 27, F3: 114 };
+const KEYS = { Enter: 13, Escape: 27, F3: 114, ArrowUp: 38, ArrowDown: 40, " ": 32 };
 async function key(k, mods = 0) {
-  const code = KEYS[k] ? k : "Key" + k.toUpperCase();
+  const code = k === " " ? "Space" : KEYS[k] ? k : "Key" + k.toUpperCase();
   const vk = KEYS[k] || k.toUpperCase().charCodeAt(0);
   const base = { key: k, code, modifiers: mods, windowsVirtualKeyCode: vk, nativeVirtualKeyCode: vk };
   await send("Input.dispatchKeyEvent", { type: "rawKeyDown", ...base });
@@ -72,6 +72,11 @@ await key("Enter", 8);
 await key("Enter", 8);
 b = await bar();
 check("Shift+Enter goes back, round past the first", b.count === "4 of 4" && b.sel === "alpha", JSON.stringify(b));
+await key("ArrowUp");
+const up = (await bar()).count;
+await key("ArrowDown");
+b = await bar();
+check("Up and Down in the find box go to the previous and next match", up === "3 of 4" && b.count === "4 of 4" && b.focus === "find-q", up + " " + b.count);
 await key("w", 1);
 b = await bar();
 check("Alt+W: whole words only", b.count.endsWith("of 3") || b.count === "3", b.count);
@@ -155,6 +160,34 @@ check("a click opens the file and selects the match", went.active === "sec/s2.te
 await ev(`$("#ps-results .ps-file[title='sec/s1.tex']")?.click(); return true`);
 check("a file's results fold away and back", (await ps()).hits.length === 2);
 await ev(`$("#ps-results .ps-file[title='sec/s1.tex']")?.click(); return true`);
+
+// Down from the search box into the results, Up Down through them: each shown in its file, the
+// keyboard staying in the list; Up on the first goes back to the box; Enter to the editor.
+const curHit = () => ev(`await new Promise((r) => setTimeout(r, 400)); const li = $("#ps-results .ps-hit.cur");
+  return { focus: document.activeElement.id, at: li ? li.title : null, i: [...document.querySelectorAll("#ps-results .ps-hit")].indexOf(li),
+    active: S.active, line: cm.getCursor("from").line + 1, sel: cm.getSelection().toLowerCase(), editor: cm.hasFocus() }`);
+await ev(`PS.curKey = null; for (const li of document.querySelectorAll("#ps-results .cur")) li.classList.remove("cur");
+  $("#ps-q").focus(); return true`);         // the result clicked above is no longer the current one
+await key("ArrowDown");
+let h = await curHit();
+check("Down in the search box goes to the first result and shows it, the keyboard in the list", h.focus === "ps-results" && h.i === 0
+  && h.at === `${h.active}:${h.line}` && h.sel === "needle", JSON.stringify(h));
+await key("ArrowDown");
+const second = await curHit();
+await key("ArrowDown");
+h = await curHit();
+check("Down goes on through the results, to other files too", second.i === 1 && h.i === 2 && h.at === `${h.active}:${h.line}`
+  && h.sel === "needle" && h.focus === "ps-results", JSON.stringify([second, h]));
+await key("ArrowUp"); await key("ArrowUp"); await key("ArrowUp");
+h = await curHit();
+check("Up on the first result goes back to the search box", h.focus === "ps-q", JSON.stringify(h));
+await key("ArrowDown");
+h = await curHit();
+check("Down from the box again goes back in at the current result", h.focus === "ps-results" && h.i === 0, JSON.stringify(h));
+await key("Enter");
+h = await curHit();
+check("Enter on a result goes to the editor there", h.editor && h.sel === "needle", JSON.stringify(h));
+await ev(`$("#ps-q").focus(); return true`);
 
 // Replace all: the open files in their tabs (saved as typed), the others on disk.
 await ev(`$("#ps-more").click(); return true`);

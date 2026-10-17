@@ -397,6 +397,7 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘F / Ctrl-F | Find in the open file (Enter: next, Shift+Enter: previous, Esc: close; Alt+C match case, Alt+W whole word, Alt+R regular expression) |
 | ⌘⌥F / Ctrl-H | Find and replace in the open file (Enter: replace this one; Replace all is one undo) |
 | ⌘⇧F / Ctrl-Shift-F | Search the project, in the sidebar; Replace all there changes every file |
+| ↓ / ↑ in the results | Go through the project's results (or the agent's changes), each shown in its file; Enter: edit there; Space: tick or untick a change; ↑ on the first goes back to the search box. In the find box, ↓ ↑ are next and previous |
 | Ctrl-G | Go to a line, or line:column (also: click "Ln, Col" under the editor) |
 | ⌘F / Ctrl-F after clicking the PDF | Search the PDF (Enter: next, Shift+Enter: previous, Esc: close) |
 | Ctrl-Q | Fold or unfold the section, environment or `\[ … \]` at the cursor |
