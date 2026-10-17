@@ -228,6 +228,33 @@ class Targets(unittest.TestCase):
                 self.assertEqual(git(self.root, "show", "HEAD:main.tex"), key)
                 git(self.root, "config", "--unset-all", key)
 
+    def test_a_target_changed_while_waiting_for_the_network_is_not_pushed_to(self):
+        """A push checks its target, then waits for the network lock (another window's
+        transfer: minutes on a slow network); git reads the configuration only when it
+        starts. A change in between is seen, not pushed to."""
+        import threading
+        import repository
+        self.g.bind_target()
+        (self.root / "main.tex").write_text("mine\n")
+        self.g.commit_all("Autosave")
+        with repository.network_lock(self.root / ".git"):         # another window's transfer
+            pushed = []
+            t = threading.Thread(target=lambda: pushed.append(self.g.push()))
+            t.start()
+            for _ in range(200):                                   # it has checked, and waits
+                if self.g.state == "pushing":
+                    break
+                threading.Event().wait(0.02)
+            git(self.root, "config", "remote.origin.pushurl", str(self.tool))
+        t.join(30)
+        self.assertEqual(pushed[0].state, "local")
+        self.assertIn("Sync paused", pushed[0].message)
+        self.assertEqual(git(self.tool, "for-each-ref"), "", "nothing reached the other repository")
+        self.assertEqual(git(self.remote, "for-each-ref"), "")
+        git(self.root, "config", "--unset", "remote.origin.pushurl")
+        self.assertEqual(self.g.push().state, "synced", "set back: it goes on")
+        self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+
     def test_branch_switch_and_multiple_push_urls(self):
         self.g.bind_target()
         git(self.root, "checkout", "-qb", "other")

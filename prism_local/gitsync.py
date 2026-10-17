@@ -393,14 +393,25 @@ class GitSync:
         """Fetch GitHub's branch into the tracking ref; None when there is nothing to fetch
         from. The transfer holds only the repository's network lock (Repository.transferring:
         RepoBusy after `wait` seconds): commits, merges and saves go on meanwhile."""
-        if not self.validate_target(fresh=True) or (not manual and not self.enabled):
+        if not self.validate_target() or (not manual and not self.enabled):
             return None
-        t = self.target
-        self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
         with self.repo.transferring(wait):
+            t = self._checked_target()
+            if t is None:
+                return None
+            self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
             return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
                             t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
                             interactive=manual)
+
+    def _checked_target(self) -> dict | None:
+        """The sync target as the configuration names it now, checked (validate_target,
+        read afresh), or None when it may not be synced with (blocked_reason says why).
+        Asked holding the network lock, right before a fetch or push: the wait for that
+        lock lasts as long as another window's transfer (minutes on a slow network), and
+        git reads the configuration when it starts, so a change made meanwhile (another
+        program, a terminal) is seen here, not sent to."""
+        return dict(self.target) if self.validate_target(fresh=True) else None
 
     def _remote_state(self) -> None:
         self.validate_target()
@@ -448,14 +459,14 @@ class GitSync:
                     return Outcome("local", "Automatic sync is off.")
                 if not self.ahead:
                     return Outcome("synced")
-                if not self.validate_target(fresh=True):
-                    return Outcome("local", "Sync paused: " + str(self.blocked_reason))
-                args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
-                        self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
             self.state = "pushing"
             try:
                 with self.repo.transferring():
-                    r = self.git(*args, timeout=180, interactive=manual)
+                    t = self._checked_target()
+                    if t is None:
+                        return Outcome("local", "Sync paused: " + str(self.blocked_reason))
+                    r = self.git("push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
+                                 t["remote"], f"HEAD:{t['branch_ref']}", timeout=180, interactive=manual)
             finally:
                 self.state = "idle"
             if r.returncode == 0:
