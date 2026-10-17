@@ -76,6 +76,24 @@ class Publish(unittest.TestCase):
         self.assertEqual(publish.publish_project(self.root), {"url": result["url"], "created": False})
         self.assertEqual(self.gh.created, ["my-org/paper"])
 
+    def test_a_repository_prism_sets_up_is_one_it_manages(self):
+        """Made here, or given its GitHub remote here: Prism's to keep. One you made and
+        configured yourself, which it only syncs, is not."""
+        def managed(root):
+            return gitsync.RepoSettings(gitsync.Repository(root, root / ".git")).managed
+        self.assertNotIn("error", publish.publish_project(self.root))
+        self.assertTrue(managed(self.root), "made and published here")
+        mine = self.base / "mine"
+        mine.mkdir()
+        (mine / "main.tex").write_text("x\n", encoding="utf-8")
+        self.git(mine, "init", "-q", "-b", "main")
+        self.assertFalse(managed(mine), "made in a terminal")
+        self.assertNotIn("error", publish.publish_project(mine))
+        self.assertTrue(managed(mine), "its GitHub remote set up here")
+        theirs = self.base / "theirs"
+        self.git(self.base, "clone", "-q", str(self.gh.repositories["me/paper"]), str(theirs))
+        self.assertFalse(managed(theirs), "cloned in a terminal")
+
     def test_first_push_and_protection_use_the_current_branch(self):
         self.git(self.root, "init", "-q", "-b", "draft")
         result = publish.publish_project(self.root)

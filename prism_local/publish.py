@@ -69,7 +69,8 @@ def github_of(top: Path | None) -> str | None:
 
 def git_init(root: Path) -> None:
     """A repository of the project's own, with build output ignored, line ends kept the
-    same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
+    same for co-authors on every system, and force pushes refused (gitsync.install_guard).
+    One made here is one Prism manages (RepoSettings.managed)."""
     gi = root / ".gitignore"
     if not gi.exists():
         lines = sources.gitignore(Config(root).outdir)
@@ -82,6 +83,7 @@ def git_init(root: Path) -> None:
             run_git(root, "init", "-q", "-b", "main")
         except subprocess.CalledProcessError:          # git older than 2.28
             run_git(root, "init", "-q")
+        RepoSettings(Repository(root, root / ".git")).update(managed=True)
     if (root / ".git").is_dir():
         gitsync.install_guard(root / ".git")
 
@@ -143,6 +145,7 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
         # bound, and never binds whatever the configuration names instead. Its branch
         # pushes to the branch of the same name there.
         own = RepoSettings(repo)
+        own.update(managed=True)        # its remote and branches are set up here
         own.bind({"repository_identity": f"github.com/{who}/{name}".lower(),
                   "branch_ref": f"refs/heads/{branch}", "local_branch": f"refs/heads/{branch}"})
         run_git(root, "config", f"branch.{branch}.remote", "origin")

@@ -230,6 +230,13 @@ class RepoSettings:
     def enabled(self) -> bool:
         return bool(self.read().get("sync", True))
 
+    @property
+    def managed(self) -> bool:
+        """A repository Prism set up (made it, or gave it its GitHub remote: publish.py),
+        whose remote and branches are Prism's to keep as sync needs them. Not one you set
+        up yourself (a terminal, another program): Prism does not change its settings."""
+        return bool(self.read().get("managed"))
+
     def bind(self, target: dict) -> None:
         """Called after the author confirmed `target`, when Prism creates a repository (the
         one it creates: publish.create_github_repo), and by validate for one not bound yet.
