@@ -416,6 +416,16 @@ whole match. Search in the project includes unsaved edits of open files. Its Rep
 changes open files in their tabs (⌘Z there takes it back) and the others on disk, each only
 if nothing changed it since it was read.
 
+**Search with the agent.** For a change a plain search cannot express ("rename the index i
+to j in every formula", "write `\mathscr{O}` instead of `\mathcal{O}`"), open Search
+(⌘⇧F / Ctrl-Shift-F), choose **✦ With the agent** and describe it. The agent chosen in the
+agent panel reads the project in a read-only turn of its own (not in your conversation) and
+proposes rules (a regular expression, its replacement, and where it applies: in formulas,
+in the text, or anywhere) and, where no rule fits, single changes. Prism finds every place
+each rule matches and lists every change with its line, before and after; untick what should
+stay, or edit a rule and the list follows. **Apply** makes the ticked changes as Replace all
+does. Nothing changes before you apply.
+
 ## Building
 
 **Compile** (⌘↵) saves every file. It builds the active `.tex` file if that file contains
@@ -847,7 +857,7 @@ prism_local/gitsync.py     commits, pushes and pulls the project's changes (Hist
 prism_local/repoview.py    where a project is in git and what changed in it, asked again only on a change
 prism_local/selfupdate.py  updates prism-local itself from GitHub when a server starts
 prism_local/tools.py       git, the GitHub CLI, LaTeX and Claude Code: found, or installed from Home
-prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, findlogic.js, app.css)
+prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, findlogic.js, agentsearch.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs,
                            marked 12.0.2 (MIT) and KaTeX 0.16.11 (MIT) for the agent's replies
 examples/minimal/          a small amsart project to try it on
