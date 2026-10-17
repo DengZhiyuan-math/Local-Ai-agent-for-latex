@@ -28,7 +28,10 @@ to `pip install`, no npm, and it works offline.
 
 ### 1. Prerequisites
 
-Python 3.9 or newer, a TeX distribution and git. The GitHub CLI is optional (for GitHub).
+Python 3.9 or newer and a TeX distribution. Prism also uses git (every version of your
+papers) and the GitHub CLI (your papers on GitHub): you do not need to know either, and on
+Windows the Home page installs both for you (**Getting started**, one click each). To
+install everything yourself instead:
 
 | System | One command |
 |---|---|
@@ -50,6 +53,9 @@ Python 3.9 or newer, a TeX distribution and git. The GitHub CLI is optional (for
 git clone https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git prism-local
 ```
 
+Without git: on the [repository's page](https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex)
+choose **Code → Download ZIP** and unpack it into a folder named `prism-local`. A copy made
+with git updates itself; a downloaded one does not (download it again for a new version).
 That is the whole installation: there is nothing to build.
 
 ### 3. Start it
@@ -88,8 +94,11 @@ The Home page opens. Create a project (**+ New project**) or add a folder you al
 
 ### Optional: GitHub and the AI agent
 
-- **GitHub**: log the GitHub CLI in once, `gh auth login`. Projects can then get a private
-  repository each (or one per folder), and every change is pushed by itself.
+- **GitHub**: on the Home page, **Getting started** installs the GitHub CLI and logs you in:
+  **Log in to GitHub** shows a code, which you enter on the GitHub page it opens (once).
+  Projects can then get a private repository each (or one per folder), and every change is
+  saved there by itself. On another computer, **From GitHub…** copies a project of yours
+  there and keeps it in sync. (In a terminal, `gh auth login` does the same login.)
 - **Claude Code** for the agent panel: install it
   (`irm https://claude.ai/install.ps1 | iex` on Windows,
   `curl -fsSL https://claude.ai/install.sh | bash` elsewhere) and run `claude` once to log in.
