@@ -4,7 +4,8 @@ An Overleaf-style LaTeX studio that runs on your own computer: an editor, a PDF 
 stays in sync with the source, an AI agent that edits your project, and a Home page for all
 your papers, each kept in git and on GitHub.
 
-- **Editor**: tabs, LaTeX highlighting, search, folding of sections and environments, and
+- **Editor**: tabs, LaTeX highlighting, find and replace in a file or the whole project, go to
+  line, a word count of the file and the document, folding of sections and environments, and
   completion of `\cref{…}`, `\cite{…}` and your own `\newcommand`s. Edits save themselves.
 - **Files**: drag files onto the sidebar to add them to the project (up to 25 MB each).
   Different files with the same name get a number; existing files are kept. Text files
@@ -393,6 +394,10 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘J / Ctrl-J | Show the cursor line in the PDF |
 | double-click or Ctrl/⌘-click in PDF | Jump to the source line |
 | click a link in PDF / Alt+← | Follow a reference, citation, contents entry or URL / go back |
+| ⌘F / Ctrl-F | Find in the open file (Enter: next, Shift+Enter: previous, Esc: close; Alt+C match case, Alt+W whole word, Alt+R regular expression) |
+| ⌘⌥F / Ctrl-H | Find and replace in the open file (Enter: replace this one; Replace all is one undo) |
+| ⌘⇧F / Ctrl-Shift-F | Search the project, in the sidebar; Replace all there changes every file |
+| Ctrl-G | Go to a line, or line:column (also: click "Ln, Col" under the editor) |
 | ⌘F / Ctrl-F after clicking the PDF | Search the PDF (Enter: next, Shift+Enter: previous, Esc: close) |
 | Ctrl-Q | Fold or unfold the section, environment or `\[ … \]` at the cursor |
 | Ctrl-K Ctrl-0 / Ctrl-K Ctrl-J | Fold all / unfold all |
@@ -400,6 +405,16 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘/ / Ctrl-/ | Toggle `%` comments |
 | ⌘B / Ctrl-B | Show/hide the file sidebar |
 | Ctrl-Space | Completion |
+
+Under the editor, the status line shows the cursor's line and column and the words of the
+file, of the selection, and of the whole document when the file is part of it (the main file
+and what it `\input`s). Comments, mathematics, the preamble, command names, labels, citations
+and file names are not counted; Chinese and Japanese characters count one each.
+
+In a regular expression, the replacement may use `$1`, `$2` … for its groups and `$&` for the
+whole match. Search in the project includes unsaved edits of open files. Its Replace all
+changes open files in their tabs (⌘Z there takes it back) and the others on disk, each only
+if nothing changed it since it was read.
 
 ## Building
 
@@ -832,7 +847,7 @@ prism_local/gitsync.py     commits, pushes and pulls the project's changes (Hist
 prism_local/repoview.py    where a project is in git and what changed in it, asked again only on a change
 prism_local/selfupdate.py  updates prism-local itself from GitHub when a server starts
 prism_local/tools.py       git, the GitHub CLI, LaTeX and Claude Code: found, or installed from Home
-prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
+prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, findlogic.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs,
                            marked 12.0.2 (MIT) and KaTeX 0.16.11 (MIT) for the agent's replies
 examples/minimal/          a small amsart project to try it on
