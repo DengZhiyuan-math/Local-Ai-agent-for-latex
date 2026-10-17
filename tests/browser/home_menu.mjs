@@ -86,7 +86,7 @@ const setup = await ev(`
   const real = api, seen = {}, st = { git: null, gh: null, can_install: true, installing: {}, how: { git: "by hand", gh: "by hand" },
                                       github: { logged_in: false }, login: { state: null } };
   api = async (path, body) => {
-    if (path === "/api/tools") return { _status: 200, ...JSON.parse(JSON.stringify(st)) };
+    if (path.split("?")[0] === "/api/tools") { (seen.asked ||= []).push(path); return { _status: 200, ...JSON.parse(JSON.stringify(st)) }; }
     if (path === "/api/tools/install") { st.installing[body.name] = { state: "running" }; return { _status: 200, state: "running" }; }
     if (path === "/api/github/login") { st.login = { state: "waiting", code: "AB12-CD34", url: "https://github.com/login/device" }; return { _status: 200 }; }
     return real(path, body);
@@ -107,9 +107,76 @@ const setup = await ev(`
   seen.link = panel().querySelector('a[href="https://github.com/login/device"]') !== null;
   st.login = { state: "done" }; st.github = { logged_in: true, account: "me" }; await loadSetup();
   seen.gone = !panel();
+  seen.pollsDoNotRefresh = seen.asked.length > 3 && seen.asked.every((p) => p === "/api/tools"); delete seen.asked;
   clearTimeout(SETUP.timer); api = real;
   return seen;`);
 check("getting started installs git and the GitHub CLI and shows the login's code", Object.values(setup).every(Boolean), JSON.stringify(setup));
+const recheck = await ev(`
+  // Where Prism cannot install (no winget): Check again asks gh afresh, and stays usable while still missing;
+  // so does a button whose request is refused.
+  const real = api, seen = {}, asked = [], st = { git: null, gh: null, can_install: false, installing: {},
+    how: { git: "Install git from git-scm.com.", gh: "Install the GitHub CLI from cli.github.com." }, github: { logged_in: false }, login: { state: null } };
+  api = async (path, body) => {
+    if (path.split("?")[0] === "/api/tools") { asked.push(path); await T.sleep(50); return { _status: 200, ...JSON.parse(JSON.stringify(st)) }; }
+    if (path === "/api/tools/install") return { _status: 409, error: "fixture: refused" };
+    return real(path, body);
+  };
+  const panel = () => document.querySelector("#setup");
+  await loadSetup();
+  const b = panel().querySelector('[data-setup="recheck"]');
+  b.click();
+  seen.busyWhileAsking = b.disabled;
+  seen.usableAgain = await T.until(() => !b.disabled && asked.length === 2);
+  seen.samePanel = b.isConnected;
+  seen.refreshed = asked[1] === "/api/tools?refresh=1";
+  b.click();
+  seen.secondClick = await T.until(() => !b.disabled && asked.length === 3) && asked[2] === "/api/tools?refresh=1";
+  st.can_install = true; await loadSetup();
+  const i = panel().querySelector('[data-setup="install-git"]');
+  i.click();
+  seen.refusedUsable = await T.until(() => !i.disabled && asked.length === 5) && i.isConnected && T.toast() === "fixture: refused";
+  clearTimeout(SETUP.timer); api = real;
+  return seen;`);
+check("check again asks afresh and stays usable, as does a refused button", Object.values(recheck).every(Boolean), JSON.stringify(recheck));
+const warned = await ev(`
+  // Logged in, but git could not be set to use it: said once, when the login ends; and in Settings.
+  const real = api, seen = {}, warning = "You are logged in to GitHub, but the first save to GitHub may ask you to log in again.";
+  const st = { git: "C:/git.exe", gh: null, can_install: true, installing: {}, how: { git: "", gh: "" },
+               github: { logged_in: false }, login: { state: "waiting", code: "AB12-CD34", url: "https://github.com/login/device" } };
+  api = async (path, body) => {
+    if (path.split("?")[0] === "/api/tools") return { _status: 200, ...JSON.parse(JSON.stringify(st)) };
+    if (path.split("?")[0] === "/api/settings") return { _status: 200, settings: {}, github: JSON.parse(JSON.stringify(st.github)), claude: {}, update: null };
+    if (path === "/api/tools/install") { st.installing[body.name] = { state: "running" }; return { _status: 200, state: "running" }; }
+    return real(path, body);
+  };
+  toast("before");
+  await loadSetup();
+  seen.notYet = T.toast() === "before";
+  st.login = { state: "done", warning, details: "setup-git: exit 1" }; st.github = { logged_in: true, account: "me" };
+  await loadSetup();
+  seen.toast = T.toast() === warning && $("#toast").className === "err";
+  toast("after"); await loadSetup(); await loadSetup();
+  seen.once = T.toast() === "after";
+  SETUP.loggingIn = false; await loadSetup();          // a page opened after the login
+  seen.notOnLoad = T.toast() === "after";
+  // Settings: git installed, the GitHub CLI not (here), with the same Install button.
+  st.login = { state: null }; st.github = { logged_in: false, error: "The GitHub CLI is not installed." };
+  await openSettings();
+  await T.until(() => $("#tools-status").textContent.includes("not installed"));
+  const rows = [...$("#tools-status").children].map((d) => d.textContent.trim());
+  seen.gitRow = rows[0] === "✓ git is installed";
+  seen.ghRow = rows[1].startsWith("The GitHub CLI is not installed") && !!$('#tools-status [data-setup="install-gh"]');
+  seen.noDoubleLine = $("#gh-status").hidden;
+  $('#tools-status [data-setup="install-gh"]').click();
+  seen.installing = await T.until(() => $("#tools-status").textContent.includes("Installing"));
+  st.installing.gh = { state: "done" }; st.gh = "C:/gh.exe"; st.github = { logged_in: true, account: "me" };
+  st.login = { state: "done", warning, details: null };
+  seen.ghDone = await T.until(() => $("#tools-status").textContent.includes("✓ The GitHub CLI is installed"));
+  seen.settingsWarning = !$("#gh-warning").hidden && $("#gh-warning").textContent === warning && !$("#gh-status").hidden;
+  $("#dlg-settings").close();
+  clearTimeout(SETUP.timer); api = real;
+  return seen;`);
+check("a login's warning is said once, and Settings shows git, the GitHub CLI and the warning", Object.values(warned).every(Boolean), JSON.stringify(warned));
 const clone = await ev(`
   const real = api, seen = {}; let asked = null;
   api = async (path, body) => path === "/api/github/repos"

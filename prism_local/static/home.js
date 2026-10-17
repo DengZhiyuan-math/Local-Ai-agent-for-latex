@@ -1381,10 +1381,24 @@ function renderGhStatus() {
   const el = $("#gh-status"), gh = H.github || {};
   el.className = "gh-status " + (gh.logged_in ? "ok" : "err");
   el.textContent = gh.logged_in ? `✓ Connected as ${gh.account} (GitHub CLI)` : (gh.error || "Checking…");
+  el.hidden = !gh.logged_in && !!SETUP.st && !SETUP.st.gh;   // the row above says so, with its Install button
+  const login = (SETUP.st && SETUP.st.login) || {}, warn = $("#gh-warning");
+  warn.hidden = !(gh.logged_in && login.state === "done" && login.warning);
+  warn.textContent = warn.hidden ? "" : login.warning;
+  renderToolsStatus();
   const f = $("#form-settings");
   f.elements.github_repo.disabled = !gh.logged_in;
   f.elements.github_owner.placeholder = gh.account || "";
   renderClaudeStatus();
+}
+// git and the GitHub CLI, as the Getting started panel has them, with the same buttons.
+function renderToolsStatus() {
+  const el = $("#tools-status"), r = SETUP.st;
+  if (!r) return;
+  const row = (name, what) => r[name] ? `<div class="gh-status ok">✓ ${what} is installed</div>`
+    : `<div class="gh-status err">${what} is not installed. ${setupInstall(r, name)}</div>`;
+  const html = row("git", "git") + row("gh", "The GitHub CLI");
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
 }
 // Which account Claude Code uses now, and whether it matches the one allowed.
 function renderClaudeStatus() {
@@ -1424,6 +1438,7 @@ async function openSettings() {
   fill(); dlg.showModal();
   loadSnippetsFile();
   await loadSettings(true); fill();          // re-check gh: you may have just logged in
+  loadSetup();                               // and git and gh: installed since?
 }
 
 // Your snippets file (snippets.js reads it; every editor uses it): whether it loads, and
@@ -1561,19 +1576,29 @@ load().then(loadAllGit).then(watchFetch);
 // git, the GitHub CLI and a GitHub login (tools.py, github.py): until all three are
 // there, a panel above the list does each with one button, for someone who has never
 // used a terminal. What went wrong is said in a sentence; the installer's or gh's own
-// words are folded under Details.
-const SETUP = { st: null, timer: null };
-async function loadSetup() {
-  const r = await api("/api/tools");
+// words are folded under Details. The Settings dialog shows the same (renderToolsStatus).
+const SETUP = { st: null, timer: null, loggingIn: false };
+// refresh: ask gh again whether you are logged in (slow: only when asked, not while polling).
+async function loadSetup(refresh = false) {
+  const r = await api("/api/tools" + (refresh === true ? "?refresh=1" : ""));
   if (r._status !== 200) return;
   SETUP.st = r; H.github = r.github;
-  renderSetup();
+  const login = r.login || {};
   const busy = Object.values(r.installing || {}).some((x) => x.state === "running")
-    || ["starting", "waiting"].includes(r.login && r.login.state);
+    || ["starting", "waiting"].includes(login.state);
+  // A login seen under way that has ended: its warning (logged in, but git could not be set
+  // to use it) is said once; the panel is gone by then. Settings keeps showing it.
+  if (["starting", "waiting"].includes(login.state)) SETUP.loggingIn = true;
+  else if (SETUP.loggingIn) {
+    SETUP.loggingIn = false;
+    if (login.state === "done" && login.warning) toast(login.warning, true);
+  }
+  renderSetup(); renderGhStatus();
   clearTimeout(SETUP.timer);
   if (busy) SETUP.timer = setTimeout(loadSetup, 1500);
-  else if (r.github && r.github.logged_in) { renderGhStatus(); }
 }
+// Not all there yet: you may have installed something, or logged in, meanwhile.
+const setupMissing = () => !!SETUP.st && !(SETUP.st.git && SETUP.st.gh && SETUP.st.github && SETUP.st.github.logged_in);
 function setupFailure(x, retry) {
   return `<span class="setup-err">${esc(x.error || "It did not work.")}</span> <button type="button" data-setup="${retry}">Try again</button>`
     + (x.details ? `<details><summary>Details</summary><pre>${esc(x.details)}</pre></details>` : "");
@@ -1619,19 +1644,27 @@ function renderSetup() {
 }
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-setup]");
-  if (!b) return;
+  if (!b || b.disabled) return;
   const what = b.dataset.setup;
   b.disabled = true;
-  const r = what.startsWith("install-") ? await api("/api/tools/install", { name: what.slice(8) })
-    : what === "login" ? await api("/api/github/login", {})
-    : what === "login-cancel" ? await api("/api/github/login/cancel", {})
-    : { _status: 200 };
-  if (r._status !== 200) toast(r.error || "It did not work", true);
-  await loadSetup();
+  try {
+    const r = what.startsWith("install-") ? await api("/api/tools/install", { name: what.slice(8) })
+      : what === "login" ? await api("/api/github/login", {})
+      : what === "login-cancel" ? await api("/api/github/login/cancel", {})
+      : { _status: 200 };
+    if (r._status !== 200) toast(r.error || "It did not work", true);
+    await loadSetup(what === "recheck");
+  } finally {
+    b.disabled = false;     // still there when nothing changed (still missing, a refusal): usable again
+  }
 });
 
 loadSettings();
 loadSetup();
 // Every 10 s while the page is shown and no dialog is open (see poller).
 load.start(() => !document.querySelector("dialog[open]"));
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load().then(loadOpenedGit); });
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  load().then(loadOpenedGit);
+  if (setupMissing()) loadSetup(true);
+});
