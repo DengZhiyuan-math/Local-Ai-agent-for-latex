@@ -534,6 +534,13 @@ check("find: lines and columns of the matches, and a long line's excerpt", () =>
   assert.ok(e.before.startsWith("…") && e.after.endsWith("…") && e.before.length + e.after.length < 90, JSON.stringify(e));
   assert.deepStrictEqual(FindLogic.excerpt("  short cat", 8, 3), { before: "short ", hit: "cat", after: "" });
 });
+check("go to line: a line, or a line and a column, from 1", () => {
+  assert.deepStrictEqual(FindLogic.lineSpec("120"), { line: 119, ch: 0 });
+  assert.deepStrictEqual(FindLogic.lineSpec(" 12:5 "), { line: 11, ch: 4 });
+  assert.deepStrictEqual(FindLogic.lineSpec("12,5"), { line: 11, ch: 4 });
+  assert.deepStrictEqual(FindLogic.lineSpec("0"), { line: 0, ch: 0 });
+  for (const bad of ["", "x", "12:", "-3", "1.5"]) assert.strictEqual(FindLogic.lineSpec(bad), null, bad);
+});
 check("words: comments, the preamble, math and commands are not words", () => {
   const W = (s, o) => FindLogic.wordCount(s, "tex", o);
   assert.strictEqual(W("\\documentclass{article}\n\\usepackage{amsmath}\nPreamble words\n\\begin{document}\nOne two\n\\end{document}\nafter"), 2);

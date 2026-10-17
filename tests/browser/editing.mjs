@@ -174,6 +174,27 @@ await ev(`$("#ps-q").focus(); return true`);
 await key("Escape");
 p = await ps();
 check("Esc closes Search: the files are back", !p.open && !p.files, JSON.stringify(p));
+
+/* ---------------------------------------------------------------- go to line */
+await ev(`await openFile("find.tex"); cm.setCursor({ line: 0, ch: 0 }); return true`);
+const at = () => ev(`const c = cm.getCursor(); return { open: !$("#goto").hidden, focus: document.activeElement.id, line: c.line, ch: c.ch,
+  bad: $("#goto-q").classList.contains("bad"), editor: cm.hasFocus(), last: cm.lineCount() - 1 }`);
+await key("g", 2);
+let g = await at();
+check("Ctrl+G asks for a line", g.open && g.focus === "goto-q", JSON.stringify(g));
+await type("3:4");
+await key("Enter");
+g = await at();
+check("line:column goes there, and back to the editor", !g.open && g.editor && g.line === 2 && g.ch === 3, JSON.stringify(g));
+await key("g", 2); await type("999"); await key("Enter");
+g = await at();
+check("past the end is the last line", g.line === g.last && !g.open, JSON.stringify(g));
+await key("g", 2); await type("abc"); await key("Enter");
+g = await at();
+check("what is no line is marked, the box stays", g.open && g.bad, JSON.stringify(g));
+await key("Escape");
+g = await at();
+check("Esc goes back to the editor where it was", !g.open && g.editor && g.line === g.last, JSON.stringify(g));
 check("no page errors", errors.length === 0, errors.join(" | "));
 
 console.log(results.join("\n"));

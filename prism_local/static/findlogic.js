@@ -92,6 +92,13 @@ const FindLogic = (() => {
     return { before, hit, after };
   }
 
+  // "120", "120:5" or "120,5" (line, column from 1) as {line, ch} from 0; null if it is none.
+  function lineSpec(text) {
+    const m = /^\s*(\d+)\s*(?:[:,]\s*(\d+)\s*)?$/.exec(text);
+    if (!m) return null;
+    return { line: Math.max(0, +m[1] - 1), ch: m[2] ? Math.max(0, +m[2] - 1) : 0 };
+  }
+
   /* ---------------------------------------------------------------- words */
   // Environments whose content is mathematics, not words (with or without *).
   const MATH_ENVS = "equation|align|alignat|flalign|gather|multline|eqnarray|math|displaymath|split|dmath|IEEEeqnarray";
@@ -144,7 +151,7 @@ const FindLogic = (() => {
     return /\.(tex|ltx)$/i.test(path) ? "tex" : /\.(md|markdown)$/i.test(path) ? "md" : /\.txt$/i.test(path) ? "txt" : null;
   }
 
-  return { pattern, matches, expand, replaceAll, lines, excerpt, wordCount, wordKind, MAX_MATCHES };
+  return { pattern, matches, expand, replaceAll, lines, excerpt, lineSpec, wordCount, wordKind, MAX_MATCHES };
 })();
 
 if (typeof module !== "undefined") module.exports = FindLogic;

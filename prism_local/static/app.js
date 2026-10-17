@@ -59,6 +59,7 @@ const cm = CodeMirror($("#editor"), {
     "Cmd-Alt-F": () => findOpen(true), "Ctrl-H": () => findOpen(true),
     "Shift-Cmd-F": () => psOpen(), "Shift-Ctrl-F": () => psOpen(),
     F3: () => findStep(1), "Shift-F3": () => findStep(-1),
+    "Ctrl-G": () => gotoOpen(),
     // Snippets first (see below): expand, next field, out of a bracket, & in a matrix row.
     Tab: () => SNIP.tab(indentOrSpaces),
     "Shift-Tab": () => SNIP.shiftTab(),
@@ -243,6 +244,34 @@ cm.on("changes", () => {
   if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
   if (PS.open) psSchedule(400);
 });
+
+/* ------------------------------------------------------------------ go to line */
+// Ctrl+G (on a Mac too) or a click on the line and column below the editor: a line, or
+// line:column, to go to; past the end is the last line.
+const gotoQ = $("#goto-q");
+function gotoOpen() {
+  if (!activeTab()) return;
+  const c = cm.getCursor();
+  gotoQ.value = ""; gotoQ.classList.remove("bad");
+  gotoQ.placeholder = `Go to line 1–${cm.lineCount().toLocaleString()} (now ${c.line + 1}:${c.ch + 1})`;
+  $("#goto").hidden = false;
+  gotoQ.focus();
+}
+function gotoClose(back = true) { $("#goto").hidden = true; if (back && activeTab()) cm.focus(); }
+gotoQ.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); gotoClose(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const at = FindLogic.lineSpec(gotoQ.value);
+    if (!at) { gotoQ.classList.add("bad"); return; }
+    gotoClose();
+    jumpToLine(at.line + 1);
+    const line = Math.min(at.line, cm.lineCount() - 1);
+    cm.setCursor({ line, ch: Math.min(at.ch, cm.getLine(line).length) });
+  }
+});
+gotoQ.addEventListener("input", () => gotoQ.classList.remove("bad"));
+gotoQ.addEventListener("blur", () => gotoClose(false));
 
 /* ------------------------------------------------------------------ the project's text */
 // The text of the project's files, for search and word counts: an open tab's as you see it
@@ -1582,6 +1611,7 @@ document.addEventListener("keydown", (e) => {
   // Find in the open file, from wherever the focus is but the agent's panel (the editor has its own keys).
   else if (mod && e.code === "KeyF" && !e.shiftKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
   else if (mod && e.code === "KeyF" && e.shiftKey && !e.altKey) { e.preventDefault(); psOpen(); }
+  else if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.code === "KeyG" && !e.target.closest("#chat")) { e.preventDefault(); gotoOpen(); }
   else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
 });
 window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.preventDefault(); e.returnValue = ""; } });
