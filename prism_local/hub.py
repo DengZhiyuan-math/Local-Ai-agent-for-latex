@@ -16,8 +16,6 @@ state-changing request, and uses the Python standard library only.
 """
 from __future__ import annotations
 
-import gitenv
-
 import argparse
 import json
 import os
@@ -36,12 +34,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import gitsync  # noqa: E402
 import github  # noqa: E402
 import settings  # noqa: E402
-import sources  # noqa: E402
 import synctarget  # noqa: E402
 from projectconfig import Config  # noqa: E402
 from publish import (create_github_repo, git_init, github_of, project_sync, publish_info,  # noqa: E402
                      publish_project, repo_kind)
-from repository import RepoBusy, locate, refs_stamp  # noqa: E402
+from repository import RepoBusy, refs_stamp  # noqa: E402
+import repoview  # noqa: E402
 import sharedrepo  # noqa: E402
 from sharedrepo import BAD_NAME, inside, is_running  # noqa: E402
 import httpbase  # noqa: E402
@@ -114,6 +112,13 @@ def scan_sources(root: Path, outdir: str) -> tuple[int, float | None, bool]:
     return summary
 
 
+def walked(root: Path, outdir: str) -> float:
+    """When scan_sources last walked the project's folders (walking them now if they
+    changed): the same while its files are, as far as that walk can tell."""
+    scan_sources(root, outdir)
+    return _SCANS[(str(root), outdir)][0]
+
+
 def _stat(p: Path):
     try:
         st = p.stat()
@@ -125,7 +130,6 @@ def _stat(p: Path):
 # The Home page asks for every project's facts every ten seconds, and most are the same as
 # the last time: each is worked out again only when what it is made of changed.
 _TITLES: dict[str, tuple] = {}       # main file -> (its stat, its title)
-_PLACES: dict[str, object] = {}      # project folder -> its Place, while its git dir is there
 _SYNC_FACTS: dict[str, tuple] = {}   # git dir -> (what they depend on, the sync facts)
 
 
@@ -138,28 +142,6 @@ def title_of(path: Path) -> str | None:
     title = tex_title(path)
     _TITLES[str(path)] = (st, title)
     return title
-
-
-def place_of(root: Path):
-    """locate(root), looked up again only when its repository's git dir went (the project
-    joined a shared repository, or left one), it had none (one may have been made), or a
-    .git appeared between it and the top of the repository it is in (git finds that one)."""
-    hit = _PLACES.get(str(root))
-    if hit is not None and hit.repo is not None and hit.repo.git_dir.is_dir()             and not (hit.prefix and _git_below(root, hit.repo.top)):
-        return hit
-    place = locate(root, timeout=8)
-    _PLACES[str(root)] = place
-    return place
-
-
-def _git_below(folder: Path, top: Path) -> bool:
-    """A .git in `folder` or a folder above it, below `top`."""
-    p, top = folder.resolve(), top.resolve()
-    while p != top and p != p.parent:
-        if (p / ".git").exists():
-            return True
-        p = p.parent
-    return False
 
 
 def sync_facts(root: Path, git_dir: Path) -> dict:
@@ -252,38 +234,30 @@ def git_info(root: Path) -> dict | None:
     """Branch and changes of the project's repository: its own, or one shared by a folder of
     projects (then the changes are the project's own). A project folder inside some other
     repository (such as prism-local's) has none to sync with: report which one."""
-    def git(*args):
-        return gitenv.git(root, *args, timeout=8)
-    place = place_of(root)
+    place = repoview.place(root)
     if place.kind == "none":
         return None
     toplevel = place.repo.top
     if place.kind == "nested":
         return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
     shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)} if place.kind == "shared" else None
-    try:
-        r = git("status", "--porcelain", "-z", "-b", "-uall", "--", ".")
-    except (OSError, subprocess.SubprocessError):
+    outdir = pdf_path(root)[2]
+    # git's status is asked again only when the repository changed, or the files did as the
+    # card's walk sees them (scan_sources: a file added, removed or saved by the editor, or
+    # a minute gone by): coming back to the page then runs no git for an unchanged project.
+    found = repoview.changes(root, seen=walked(root, outdir), timeout=8)
+    if found is None:
         return None
-    if r.returncode != 0:
-        return None
-    first = r.stdout.split("\0", 1)[0]
-    head = first[3:] if first.startswith("## ") else ""
     # What autosave would record, as the editor counts it: not build output or LaTeX's
     # auxiliary files, which a folder added without ignore rules has many of.
-    changed = sources.recordable_changes(r.stdout, toplevel, place.prefix + pdf_path(root)[2].strip("/"))
-    head = re.sub(r"^(No commits yet on|Initial commit on) ", "", head)
-    branch = re.split(r"\.\.\.| ", head)[0] if head else ""
-    ahead = re.search(r"ahead (\d+)", head)
-    behind = re.search(r"behind (\d+)", head)
+    changed = found.recordable(outdir)
     sync = sync_facts(root, place.repo.git_dir)
     web = sync["github"]
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
-    return {"branch": branch, "changes": len(changed),
-            "ahead": int(ahead.group(1)) if ahead else 0,
-            "behind": int(behind.group(1)) if behind else 0, "github": web,
-            "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"], **(shared or {})}
+    return {"branch": found.branch, "changes": len(changed), "ahead": found.ahead, "behind": found.behind,
+            "github": web, "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"],
+            **(shared or {})}
 
 
 # ---------------------------------------------------------------- checking GitHub
@@ -305,9 +279,10 @@ def fetch_targets() -> list[Path]:
         root = Path(e["path"])
         if not root.is_dir():
             continue
-        kind, top = repo_kind(root)
-        if kind not in ("own", "shared"):
+        place = repoview.place(root)
+        if not place.syncs:
             continue
+        top = place.repo.top
         key = registry.norm(top)
         tops[key] = top
         if is_running(root):

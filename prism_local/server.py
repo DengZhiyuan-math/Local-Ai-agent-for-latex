@@ -31,7 +31,8 @@ from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from project import UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
-from repository import FilesLock, RepoBusy, locate, refs_stamp  # noqa: E402
+from repository import FilesLock, RepoBusy  # noqa: E402
+import repoview  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES  # noqa: E402
 import desktop  # noqa: E402
 from errors import Conflict, NotFound, Refused  # noqa: E402
@@ -43,7 +44,6 @@ import publish  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 import settings  # noqa: E402
-import sources  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -65,51 +65,14 @@ def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     return gitenv.git(PROJECT.root, *args, timeout=timeout)
 
 
-_GIT_PLACE: dict = {}
-
-
-def git_place():
-    """Where the project is in git (repository.locate), looked up once."""
-    if PROJECT.root not in _GIT_PLACE:
-        _GIT_PLACE[PROJECT.root] = locate(PROJECT.root)
-    return _GIT_PLACE[PROJECT.root]
-
-
-def git_prefix() -> str:
-    """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
-    return git_place().prefix
-
-
-_STATUS: list = [(None, {})]         # (key, status), replaced as one (requests run in threads)
-
-
 def git_status(listed=None) -> dict[str, str]:
-    """{project-relative path: status} of the files git reports as changed. With `listed`
-    (the files the tree shows, with their mtimes: what a change to them changes), the last
-    answer is given again while neither they nor the repository changed (refs_stamp): the
-    tree is asked for every two seconds by every open page, and nothing has changed most
-    of those times."""
-    place = git_place()
-    stamp = refs_stamp(place.repo.git_dir) if listed is not None and place.repo else None
-    key = None if stamp is None else (str(place.repo.git_dir), stamp, tuple(listed))
-    last_key, last = _STATUS[0]
-    if key is not None and key == last_key:
-        return last
-    status = _git_status()
-    if key is not None:
-        _STATUS[0] = (key, status)
-    return status
-
-
-def _git_status() -> dict[str, str]:
-    try:
-        # --no-optional-locks: a look, which never holds the index from a commit meanwhile.
-        out = git("--no-optional-locks", "status", "--porcelain", "-z", "-uall", "--", ".").stdout
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    prefix = git_prefix()
-    return {path[len(prefix):]: xy.strip() or "M" for xy, path in sources.parse_status(out)
-            if path.startswith(prefix)}
+    """{project-relative path: status} of the files git reports as changed (repoview). With
+    `listed` (the files the tree shows, with their mtimes: what a change to them changes),
+    the last answer is given again while neither they nor the repository changed: the tree
+    is asked for every two seconds by every open page, and nothing has changed most of
+    those times."""
+    found = repoview.changes(PROJECT.root, None if listed is None else tuple(listed))
+    return found.files() if found else {}
 
 
 def project_diff(spec: str) -> dict:

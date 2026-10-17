@@ -17,9 +17,11 @@ HUB = REPO / "prism_local" / "hub.py"
 PROJECT = REPO / "examples" / "minimal"
 sys.path.insert(0, str(REPO / "prism_local"))
 import hub  # noqa: E402
+import proc  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
 import repository  # noqa: E402
+import repoview  # noqa: E402
 import sharedrepo  # noqa: E402
 import instances  # noqa: E402
 import settings  # noqa: E402
@@ -359,11 +361,25 @@ class Create(TempState):
         g, plain = (hub.registry.project_key((self.tmp / n).resolve()) for n in ("g", "plain"))
         if any((p / ".git").exists() for p in self.tmp.resolve().parents) or not (self.tmp / "g" / ".git").exists():
             self.skipTest("git not available, or the temp folder is inside a repository")
-        with mock.patch.object(hub.gitenv.proc, "run", wraps=hub.gitenv.proc.run) as run:
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
             self.assertIsNone(hub.git_info(self.tmp / "plain"))
             run.assert_not_called()                 # no .git anywhere: no git is run
         self.assertEqual(set(hub.all_git_info()), {g, plain})
         self.assertEqual(list(hub.all_git_info({g})), [g])
+
+    def test_git_info_asks_git_again_only_on_a_change(self):
+        """Coming back to the page asks for the cards' git facts: an unchanged project runs
+        no git, a file added is counted."""
+        hub.create_project({"name": "g", "parent": str(self.tmp), "template": "empty", "git": True})
+        root = self.tmp / "g"
+        if not (root / ".git").exists():
+            self.skipTest("git not available")
+        first = hub.git_info(root)
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.assertEqual(hub.git_info(root), first)
+        self.assertEqual(run.call_count, 0)
+        (root / "added.tex").write_text("x\n", encoding="utf-8")
+        self.assertEqual(hub.git_info(root)["changes"], first["changes"] + 1)
 
 
 class Scan(TempState):
@@ -896,8 +912,9 @@ class CheckGitHub(TempState):
         self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
 
     def test_home_works_a_project_out_again_only_when_it_changed(self):
-        """The page asks every ten seconds: the title and the sync facts (some seven git
-        commands) are reused while their files and the repository are the same."""
+        """The page asks every ten seconds: the title, the status of the files and the sync
+        facts (some seven git commands) are reused while their files and the repository
+        are the same."""
         import proc
         from unittest import mock
         root = self.tmp / "paper"
@@ -910,7 +927,7 @@ class CheckGitHub(TempState):
         hub.git_info(root)
         with mock.patch.object(proc, "run", wraps=proc.run) as run:
             hub.git_info(root)
-        self.assertEqual(run.call_count, 1, "only the status of the files, which nothing caches")
+        self.assertEqual(run.call_count, 0)
         subprocess.run(["git", "remote", "add", "origin", "https://github.com/me/paper.git"], cwd=root,
                        check=True, capture_output=True)
         self.assertEqual(hub.git_info(root)["github"], "https://github.com/me/paper", "a new remote is seen")
@@ -945,9 +962,9 @@ class CheckGitHub(TempState):
         root.mkdir(parents=True)
         (root / "main.tex").write_text("x\n", encoding="utf-8")
         git("init", "-q", "-b", "main", cwd=outer)
-        self.assertEqual(hub.place_of(root).kind, "nested")
+        self.assertEqual(repoview.place(root).kind, "nested")
         git("init", "-q", "-b", "main", cwd=root)
-        self.assertEqual(hub.place_of(root).kind, "own", "its own repository is seen")
+        self.assertEqual(repoview.place(root).kind, "own", "its own repository is seen")
         xdg = self.tmp / "xdg"
         (xdg / "git").mkdir(parents=True)
         with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}):

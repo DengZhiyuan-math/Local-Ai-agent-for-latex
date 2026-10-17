@@ -18,6 +18,7 @@ off per clone (.git/prism-local.json, never committed).
 GitSync is what the editor and the Home page call; what it decides with lives apart:
 - synctarget.py: where the repository syncs to, and the target its author confirmed;
 - repository.py: where a project's folder is in git (locate), and its locks;
+- repoview.py: what changed in it, as the editor, the Home page and the commits count it;
 - integrate.py: every merge, losing nothing;
 - syncschedule.py: when to commit, push and pull, on a clock it is given.
 
@@ -42,9 +43,9 @@ import integrate
 import keepboth
 import registry
 import gitenv
-import sources
+import repoview
 from errors import say
-from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
+from repository import SHARED_MARKER, FilesLock, Place, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
 import synctarget
@@ -292,10 +293,6 @@ class GitSync:
         """A project-relative path as git sees it (from the repository's top)."""
         return self.prefix + path
 
-    def _pathspec(self) -> str:
-        """This project's files only. literal: a folder may be called "a*b"."""
-        return f":(top,literal){self.prefix.rstrip('/')}" if self.prefix else "."
-
     # ------------------------------------------------------------ the switch
     @property
     def settings(self) -> RepoSettings | None:
@@ -312,10 +309,12 @@ class GitSync:
 
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
-        """Paths (from the top) with changes worth recording: no build output, no huge files."""
-        out = self._ok("status", "--porcelain", "-z", "-uall", "--", self._pathspec(), timeout=30)
-        top, outdir = self.top or self.root_fn(), self.prefix + self.outdir_fn().strip("/")
-        return sources.recordable_changes(out, top, outdir)
+        """Paths (from the top) with changes worth recording: no build output, no huge files
+        (repoview.Changes.recordable). Asked of git now: a commit follows."""
+        if not self.check_repo():
+            raise RuntimeError("This project has no repository to sync")
+        place = Place("shared" if self.prefix else "own", self.repo, self.prefix)
+        return repoview.status(place).recordable(self.outdir_fn())
 
     def commit(self, paths: list[str], message: str) -> bool:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""

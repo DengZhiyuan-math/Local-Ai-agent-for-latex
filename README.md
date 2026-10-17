@@ -779,6 +779,7 @@ prism_local/backends.py    the backend interface, presets and ~/.prism-local/age
 prism_local/backend_*.py   Claude Code, Codex CLI, Deep Code CLI and OpenAI-compatible API backends
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
+prism_local/repoview.py    where a project is in git and what changed in it, asked again only on a change
 prism_local/selfupdate.py  updates prism-local itself from GitHub when a server starts
 prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs,
