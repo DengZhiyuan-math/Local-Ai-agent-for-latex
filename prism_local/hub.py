@@ -26,7 +26,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -57,9 +56,7 @@ from texutil import tex_title  # noqa: E402
 PRESENCE = Presence()
 # Like the editor, the Home page keeps running the code it started with; once prism-local
 # is updated, the page offers a restart (/api/restart) on the same command line.
-STARTED_CODE = httpbase.code_stamp()
-RESTART: dict = {"server": None, "again": False}
-LIFETIME: instances.Serving | None = None
+APP = httpbase.App("prism-home", PRESENCE)
 MAX_SCAN = 3000
 
 
@@ -883,11 +880,10 @@ class Handler(httpbase.Handler):
 
     def get(self, path, q):
         if path == "/api/ping":
-            return self._json({"app": "prism-home", "pid": os.getpid(),
-                               "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
+            return self._json(APP.ping())
         if path == "/api/projects":
             return self._json({**list_projects(),
-                               "updated": httpbase.code_stamp() > STARTED_CODE + 1})
+                               "updated": APP.updated()})
         if path == "/api/settings":
             return self._json({"settings": settings.load(),
                                "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
@@ -958,16 +954,8 @@ class Handler(httpbase.Handler):
         if path == "/api/tags/remove":
             return self._json(remove_tag(str(body["name"])))
         if path == "/api/restart":
-            if RESTART["server"] is None:
-                return self._err(409, "not ready to restart")
-            if LIFETIME is None:
-                return self._err(409, "not ready to restart")
-            try:
-                LIFETIME.transition()
-            except (instances.Busy, TimeoutError, OSError) as exc:
-                return self._err(409, str(exc))
-            RESTART["again"] = True
-            threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+            APP.restart()
+            APP.stop_for_restart()
             return self._json({"ok": True})
         if path == "/api/projects/open":
             r = open_project(body["id"])
@@ -987,71 +975,22 @@ class Handler(httpbase.Handler):
 def main():
     httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local Home: manage your LaTeX projects")
-    ap.add_argument("--port", type=int, default=instances.HOME_PORT, help="port (0: any free port)")
-    ap.add_argument("--port-tries", type=int, default=1,
-                    help="if the port is taken, try this many ports upwards")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--exit-when-idle", action="store_true",
-                    help="exit shortly after the last Home page is closed")
-    ap.add_argument("--ready-file", type=Path,
-                    help="once listening, write {pid, port, url} as JSON to this file")
-    ap.add_argument("--idle-timings", help=argparse.SUPPRESS)
-    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
-    a = ap.parse_args()
-    global LIFETIME
-    try:
-        with instances.serving(None, a.ready_file, a.instance_token) as life:
-            LIFETIME = life
-            return serve(a, life)
-    except (instances.Busy, TimeoutError) as exc:
-        sys.exit(f"prism-home: {exc}")
+    httpbase.App.arguments(ap, instances.HOME_PORT, "Home page")
+    return APP.run(ap.parse_args(), None, serve)
 
 
-def serve(a, life):
-    if a.idle_timings:
-        f, g, st = (float(x) for x in a.idle_timings.split(","))
-        PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
-    try:
-        srv = httpbase.listen(Handler, a.port, a.port_tries)
-    except OSError as e:
-        sys.exit(f"prism-home: {e}")
-    url = f"http://127.0.0.1:{srv.server_address[1]}/"
-    print(f"prism-local Home: {url}\n  projects: {registry.state_dir() / 'projects.json'}",
+def serve(life):
+    APP.listen(Handler)
+    print(f"prism-local Home: {APP.url}\n  projects: {registry.state_dir() / 'projects.json'}",
           flush=True)
-    life.publish(url, srv.server_address[1])
-    if not a.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    if a.exit_when_idle:
-        threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
-    start_fetch_all()                   # what changed on GitHub since last time
-    threading.Thread(target=selfupdate.update, daemon=True).start()   # prism-local itself
-    httpbase.stop_on_signals(srv)
-    RESTART["server"] = srv
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        transition = life.pending or life.transition()
-        try:
-            srv.server_close()
-            life.unpublish()
-            if RESTART["again"]:
-                argv = [sys.executable, str(Path(__file__).resolve()), "--port",
-                        str(srv.server_address[1]), "--port-tries", "1", "--no-browser"]
-                if a.exit_when_idle:
-                    argv.append("--exit-when-idle")
-                if a.idle_timings:
-                    argv += ["--idle-timings", a.idle_timings]
-                if a.ready_file:
-                    argv += ["--ready-file", str(a.ready_file)]
-                result = transition.handover(argv, str(Path.home()))
-                httpbase.log("restart failed: " + result["error"] if "error" in result
-                             else "restart handed to the successor")
-            else:
-                httpbase.log("stopped")
-        finally:
-            transition.close()
+
+    def successor():
+        argv = APP.successor_argv(Path(__file__).resolve())
+        if APP.args.ready_file:
+            argv += ["--ready-file", str(APP.args.ready_file)]
+        return argv, str(Path.home())
+    # What changed on GitHub since last time, once listening.
+    APP.serve(started=start_fetch_all, successor=successor)
 
 
 if __name__ == "__main__":

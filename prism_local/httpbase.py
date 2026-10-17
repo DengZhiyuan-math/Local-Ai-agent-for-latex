@@ -16,6 +16,7 @@ and stopping once no page is open.
 """
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import socket
@@ -24,11 +25,12 @@ import sys
 import threading
 import traceback
 import time
+import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from errors import LockBusy, Params, Refused, say
+from errors import Conflict, LockBusy, Params, Refused, say
 from presence import Presence, serve_stream, valid_id
 
 STATIC = Path(__file__).resolve().parent / "static"
@@ -306,3 +308,141 @@ def code_stamp() -> float:
 def own_argv() -> list[str]:
     """This process's command line."""
     return list(getattr(sys, "orig_argv", None) or [sys.executable, *sys.argv])
+
+
+# ---------------------------------------------------------------- one server's life
+
+class App:
+    """What the editor's server and the Home page's share around their routes: the
+    command line they have in common, the instance (instances.serving: one per project,
+    one Home), the page's check that it talks to this server (/api/ping), the restart
+    once prism-local is updated (the successor gets the port and the pages reload), the
+    exit when no page is left, and the end, where what is running is stopped. Each keeps
+    its own routes and what it starts and stops."""
+
+    def __init__(self, name: str, presence: Presence):
+        self.name = name                     # in /api/ping, and before its messages
+        self.presence = presence
+        self.started_code = code_stamp()     # a server keeps running the code it started with
+        self.life = None                     # instances.Serving, while it serves
+        self.server: Server | None = None
+        self.args = None
+        self.again = False                   # start the successor once serving ends
+
+    @staticmethod
+    def arguments(ap, port: int, pages: str) -> None:
+        """The command-line options both servers take."""
+        ap.add_argument("--port", type=int, default=port, help="port (0: any free port)")
+        ap.add_argument("--port-tries", type=int, default=1,
+                        help="if the port is taken, try this many ports upwards")
+        ap.add_argument("--no-browser", action="store_true")
+        ap.add_argument("--exit-when-idle", action="store_true",
+                        help=f"exit shortly after the last {pages} is closed")
+        ap.add_argument("--ready-file", type=Path,
+                        help="once listening, write {pid, port, url, root} as JSON to this file")
+        ap.add_argument("--idle-timings", help=argparse.SUPPRESS)   # "first,grace,stale" for tests
+        ap.add_argument("--instance-token", help=argparse.SUPPRESS)
+
+    def run(self, a, project, serve):
+        """serve(life) as the instance of `project` (None: the Home page); a server already
+        there, or one starting, ends this one with its message."""
+        import instances
+        self.args = a
+        try:
+            with instances.serving(project, a.ready_file, a.instance_token) as life:
+                self.life = life
+                return serve(life)
+        except (instances.Busy, TimeoutError) as exc:
+            sys.exit(f"{self.name}: {exc}")
+
+    def listen(self, handler) -> Server:
+        """The server, on the port the command line asked for (the idle timings set)."""
+        a = self.args
+        if a.idle_timings:
+            p = self.presence
+            p.first_wait, p.grace, p.stale = (float(x) for x in a.idle_timings.split(","))
+        try:
+            self.server = listen(handler, a.port, a.port_tries)
+        except OSError as e:
+            sys.exit(f"{self.name}: {e}")
+        return self.server
+
+    @property
+    def url(self) -> str:
+        return f"http://127.0.0.1:{self.server.server_address[1]}/"
+
+    def ping(self, **more) -> dict:
+        """/api/ping: whose server this is (a page and instances.inspect check it)."""
+        return {"app": self.name, **more, "pid": os.getpid(), "pages": self.presence.count(),
+                "token": self.life.token if self.life else None}
+
+    def updated(self) -> bool:
+        """prism-local's code changed since this server started: its page offers a restart."""
+        return code_stamp() > self.started_code + 1
+
+    def restart(self, to: Path | None = None):
+        """Stop serving, and start the successor on the same port (at `to`, a renamed
+        project's folder). Its transition is begun now: Conflict when another one is (a
+        restart, Home moving the project). Returns it."""
+        import instances
+        if self.server is None or self.life is None:
+            raise Conflict("not ready to restart")
+        try:
+            transition = self.life.transition(*([to] if to is not None else []))
+        except (instances.Busy, TimeoutError, OSError) as exc:
+            raise Conflict(str(exc)) from exc
+        return transition
+
+    def stop_for_restart(self) -> None:
+        self.again = True
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+    def serve(self, *, busy=lambda: False, what="work", started=lambda: None, stopping=lambda: None,
+              successor=lambda: (own_argv(), os.getcwd())) -> None:
+        """Serve until the last page has gone (--exit-when-idle), a signal or a restart:
+        published as this instance, the page opened (unless --no-browser), prism-local
+        updated in the background, `started()` once listening. At the end `stopping()`
+        stops what runs, and a restart hands the instance to successor(): (its command
+        line, its folder)."""
+        import selfupdate
+        a, srv, life = self.args, self.server, self.life
+        life.publish(self.url, srv.server_address[1])
+        if not a.no_browser:
+            url = self.url
+            threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+        if a.exit_when_idle:
+            threading.Thread(target=idle_watchdog, daemon=True, args=(srv, self.presence, busy, what)).start()
+        stop_on_signals(srv)
+        started()
+        threading.Thread(target=selfupdate.update, daemon=True).start()   # the page then offers a restart
+        try:
+            srv.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            transition = life.pending or life.transition()
+            try:
+                srv.server_close()
+                life.unpublish()
+                stopping()
+                if self.again:
+                    argv, cwd = successor()
+                    result = transition.handover(argv, cwd)
+                    log("restart failed: " + result["error"] if "error" in result
+                        else "restart handed to the successor")
+                else:
+                    log("stopped")
+            finally:
+                transition.close()
+
+    def successor_argv(self, script: Path, *head: str) -> list[str]:
+        """This server's command line for the successor: `script` with `head` (a project),
+        on the port it has now, with the options it was started with."""
+        a = self.args
+        argv = [sys.executable, *(["-u"] if "-u" in (getattr(sys, "orig_argv", None) or []) else []),
+                str(script), *head, "--port", str(self.server.server_address[1]), "--port-tries", "1", "--no-browser"]
+        if a.exit_when_idle:
+            argv.append("--exit-when-idle")
+        if a.idle_timings:
+            argv += ["--idle-timings", a.idle_timings]
+        return argv

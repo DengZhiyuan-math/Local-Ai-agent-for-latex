@@ -23,7 +23,6 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -42,7 +41,6 @@ import httpbase  # noqa: E402
 import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
-import selfupdate  # noqa: E402
 import settings  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
@@ -192,10 +190,10 @@ ATTACHMENTS = Attachments()
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
 # command line, on the same port, and the page reloads.
-STARTED_CODE = httpbase.code_stamp()
+PRESENCE = Presence()
+APP = httpbase.App("prism-local", PRESENCE)
 STARTED_AT = time.time()                 # tells the page when a new server answers
-RESTART: dict = {"server": None, "again": False, "move_to": None, "args": None, "port": None}
-LIFETIME: instances.Serving | None = None
+MOVING: dict = {"to": None}              # the folder a rename restarts the server at
 # A folder rename that did not work (in use?): the server came back at the old folder.
 MOVE: dict = {"error": None, "from": None}
 
@@ -212,38 +210,29 @@ def rename_project(name: str) -> tuple[dict, int]:
     new = PROJECT.root.parent / folder
     if new.exists() and registry.norm(new) != registry.norm(PROJECT.root):
         return {"error": f"a folder named {folder} already exists next to this project"}, 409
-    if PROJECT.busy() or RESTART["server"] is None:
+    if PROJECT.busy():
         return {"error": "wait until the build or the agent's turn has finished"}, 409
-    if LIFETIME is None:
-        return {"error": "not ready to restart"}, 409
     try:
-        transition = LIFETIME.transition(new)
-    except (instances.Busy, TimeoutError, OSError) as exc:
+        transition = APP.restart(new)
+    except Conflict as exc:
         return {"error": str(exc)}, 409
     try:
         registry.rename(PROJECT.root, name)      # the list keeps the exact name; move_folder tidies it
     except BaseException:
         transition.close()
         raise
-    RESTART.update(again=True, move_to=new)
-    threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+    MOVING["to"] = new
+    APP.stop_for_restart()
     return {"name": name, "moving": True, "folder": folder}, 200
 
 
 def move_argv(new: Path, moving: bool = True) -> list[str]:
     """This server's command line for the project at `new`, on the port it has now."""
-    a = RESTART["args"]
-    argv = [sys.executable, *(["-u"] if "-u" in (getattr(sys, "orig_argv", None) or []) else []),
-            str(Path(__file__).resolve()), str(new), "--port", str(RESTART["port"]),
-            "--port-tries", "1", "--no-browser"]
+    argv = APP.successor_argv(Path(__file__).resolve(), str(new))
     if moving:
         argv += ["--moved-from", str(PROJECT.root)]
-    if a.exit_when_idle:
-        argv.append("--exit-when-idle")
-    if a.idle_timings:
-        argv += ["--idle-timings", a.idle_timings]
-    if a.ready_file:
-        alias = LIFETIME.alias if LIFETIME else None
+    if APP.args.ready_file:
+        alias = APP.life.alias if APP.life else None
         if alias and moving and registry.inside(alias, PROJECT.root):
             alias = new / alias.relative_to(PROJECT.root)
         argv += ["--ready-file", str(alias or instances.path(new))]
@@ -282,7 +271,6 @@ def project_name() -> str:
 
 def github_url() -> str | None:
     return GITSYNC.status().get("github")
-PRESENCE = Presence()
 
 
 # ---------------------------------------------------------------- http
@@ -300,8 +288,7 @@ class Handler(httpbase.Handler):
         if self._foreign_project(q):
             return
         if path == "/api/ping":
-            return self._json({"app": "prism-local", "root": str(PROJECT.root), "project_key": registry.project_key(PROJECT.root), "pid": os.getpid(),
-                               "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
+            return self._json(APP.ping(root=str(PROJECT.root), project_key=registry.project_key(PROJECT.root)))
         if path == "/api/pdfstat":
             cfg = PROJECT.config
             # project_key: the pop-out PDF polls only this, and so learns whose PDF it shows.
@@ -334,7 +321,7 @@ class Handler(httpbase.Handler):
                                "move_error": MOVE["error"], "files": files, "folders": folders,
                                "order": PROJECT.document_order(editable, {f["path"]: f["mtime"] for f in files}),
                                "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
-                               "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
+                               "updated": APP.updated(), "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
             return self._json(publish.publish_info(PROJECT.root))
@@ -574,16 +561,10 @@ class Handler(httpbase.Handler):
                 return self._err(400, "missing upload_id")
             return self._json(*ATTACHMENTS.cancel(str(body["upload_id"])))
         if path == "/api/restart":
-            if PROJECT.busy() or RESTART["server"] is None:
+            if PROJECT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
-            if LIFETIME is None:
-                return self._err(409, "not ready to restart")
-            try:
-                LIFETIME.transition()
-            except (instances.Busy, TimeoutError, OSError) as exc:
-                return self._err(409, str(exc))
-            RESTART["again"] = True
-            threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+            APP.restart()
+            APP.stop_for_restart()
             return self._json({"ok": True})
         if path == "/api/build/stop":
             return self._json({"ok": PROJECT.stop_build()})
@@ -625,90 +606,47 @@ def main():
                                  "(editor, PDF + SyncTeX, AI agent panel)")
     ap.add_argument("project", nargs="?", type=Path, default=Path.cwd(),
                     help="LaTeX project directory (default: current directory)")
-    ap.add_argument("--port", type=int, default=8765, help="port (0: any free port)")
-    ap.add_argument("--port-tries", type=int, default=1,
-                    help="if the port is taken, try this many ports upwards")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--exit-when-idle", action="store_true",
-                    help="exit shortly after the last editor or PDF page is closed")
-    ap.add_argument("--ready-file", type=Path,
-                    help="once listening, write {pid, port, url, root} as JSON to this file")
-    ap.add_argument("--idle-timings", help=argparse.SUPPRESS)   # "first,grace,stale" for tests
+    httpbase.App.arguments(ap, 8765, "editor or PDF page")
     ap.add_argument("--root", type=Path, help=argparse.SUPPRESS)   # backwards compatible
     ap.add_argument("--moved-from", type=Path, help=argparse.SUPPRESS)   # see rename_project
-    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
     a = ap.parse_args()
     project = Path(a.root or a.project).resolve()
-    global LIFETIME
-    try:
-        with instances.serving(project, a.ready_file, a.instance_token) as life:
-            LIFETIME = life
-            if a.moved_from:
-                actual = finish_move(a.moved_from.resolve(), project)
-                if actual != project:
-                    life.retarget(actual)
-                project = actual
-            return serve(a, project, life)
-    except (instances.Busy, TimeoutError) as exc:
-        sys.exit(f"prism-local: {exc}")
+
+    def start(life):
+        at = project
+        if a.moved_from:
+            at = finish_move(a.moved_from.resolve(), project)
+            if at != project:
+                life.retarget(at)
+        return serve(at)
+    return APP.run(a, project, start)
 
 
-def serve(a, project, life):
+def serve(project):
     set_root(project)
     PROJECT.show_last_built()
-    if a.idle_timings:
-        f, g, st = (float(x) for x in a.idle_timings.split(","))
-        PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
     if not (PROJECT.root / PROJECT.config.main).is_file():
         print(f"prism-local: warning: main file {PROJECT.config.main} not found in {PROJECT.root}", file=sys.stderr)
-    try:
-        srv = httpbase.listen(Handler, a.port, a.port_tries)
-    except OSError as e:
-        sys.exit(f"prism-local: {e}")
-    port = srv.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
-    AGENT.server_url = url              # the agent's compile tool builds through this server
-    stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
-    print(f"prism-local: {url}\n  project: {PROJECT.root}\n  main:    {PROJECT.config.main}\n"
+    APP.listen(Handler)
+    AGENT.server_url = APP.url          # the agent's compile tool builds through this server
+    stop = "closes after the last page" if APP.args.exit_when_idle else "Ctrl-C to stop"
+    print(f"prism-local: {APP.url}\n  project: {PROJECT.root}\n  main:    {PROJECT.config.main}\n"
           f"  builds:  {', '.join(PROJECT.config.modes)}\n  {stop}", flush=True)
     if PROJECT.config.error:
         print(f"  warning: {PROJECT.config.error}", flush=True)
     if not is_scratch(PROJECT.root):
         registry.safe_touch(PROJECT.root)       # list the project on the Home page
-    life.publish(url, port)
-    if not a.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    if a.exit_when_idle:
-        busy = lambda: PROJECT.busy()  # noqa: E731
-        threading.Thread(target=httpbase.idle_watchdog, daemon=True,
-                         args=(srv, PRESENCE, busy, "build or agent turn")).start()
-    httpbase.stop_on_signals(srv)
-    RESTART.update(server=srv, args=a, port=port)
-    GITSYNC.start()
-    # Update prism-local in the background; the editor then offers a restart.
-    threading.Thread(target=selfupdate.update, daemon=True).start()
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        transition = life.pending or life.transition()
-        try:
-            srv.server_close()
-            life.unpublish()
-            PROJECT.stop_build()
-            AGENT.shutdown()
-            GITSYNC.flush()             # what is left is committed and pushed
-            if RESTART["again"]:
-                destination = RESTART["move_to"] or PROJECT.root
-                argv = move_argv(destination, moving=RESTART["move_to"] is not None)
-                result = transition.handover(argv, str(PROJECT.root.parent))
-                httpbase.log("restart failed: " + result["error"] if "error" in result
-                             else "restart handed to the successor")
-            else:
-                httpbase.log("stopped")
-        finally:
-            transition.close()
+
+    def stopping():
+        PROJECT.stop_build()
+        AGENT.shutdown()
+        GITSYNC.flush()                 # what is left is committed and pushed
+
+    def successor():
+        destination = MOVING["to"] or PROJECT.root
+        return move_argv(destination, moving=MOVING["to"] is not None), str(PROJECT.root.parent)
+    APP.serve(busy=PROJECT.busy, what="build or agent turn", started=GITSYNC.start,
+              stopping=stopping, successor=successor)
 
 
 if __name__ == "__main__":

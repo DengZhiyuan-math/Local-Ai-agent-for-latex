@@ -122,5 +122,34 @@ class CodeStamp(unittest.TestCase):
             self.assertEqual(httpbase.code_stamp(), 2000, "a few seconds later: the update is seen")
 
 
+class App(unittest.TestCase):
+    """One server's life, as the editor's and the Home page's share it."""
+
+    def test_both_servers_take_the_same_options_and_say_who_they_are(self):
+        import argparse
+        import hub
+        import server
+        for app, port in ((server.APP, 8765), (hub.APP, hub.instances.HOME_PORT)):
+            ap = argparse.ArgumentParser()
+            httpbase.App.arguments(ap, port, "page")
+            a = ap.parse_args(["--port", "0", "--exit-when-idle", "--idle-timings", "1,2,3"])
+            self.assertEqual((a.port, a.port_tries, a.no_browser, a.exit_when_idle, a.ready_file),
+                             (0, 1, False, True, None))
+            ping = app.ping()
+            self.assertEqual(set(ping) >= {"app", "pid", "pages", "token"}, True)
+            self.assertEqual(ping["app"], {server.APP: "prism-local", hub.APP: "prism-home"}[app])
+
+    def test_a_restart_before_serving_is_refused_and_after_it_is_the_same_command_line(self):
+        app = httpbase.App("prism-test", Presence())
+        with self.assertRaises(errors.Conflict):
+            app.restart()
+        app.args = mock.Mock(exit_when_idle=True, idle_timings="1,2,3")
+        app.server = mock.Mock(server_address=("127.0.0.1", 8999))
+        argv = app.successor_argv(Path("server.py"), "my paper")
+        self.assertEqual(argv[argv.index("server.py"):],
+                         ["server.py", "my paper", "--port", "8999", "--port-tries", "1", "--no-browser",
+                          "--exit-when-idle", "--idle-timings", "1,2,3"])
+
+
 if __name__ == "__main__":
     unittest.main()
