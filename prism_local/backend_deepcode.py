@@ -72,6 +72,27 @@ def node_entry(bin_path: str) -> list[str]:
     return [bin_path]
 
 
+# Ask's no-write rule is the permission categories the turn's settings deny (write-in-cwd,
+# delete-in-cwd, mcp: turn_settings); the first version they were checked on, with the
+# real CLI, is 0.4.3 (docs/audits/2026-10-08-*). One that does not know them would let an
+# Ask turn write, leaving only the restore after the turn.
+MIN_VERSION = (0, 4, 3)
+
+
+def installed_version(bin_path: str) -> tuple[int, int, int] | None:
+    """Deep Code's version, from the package.json of the npm package its command starts;
+    None when that cannot be told (a stand-in, a build of its own)."""
+    entry = node_entry(bin_path)
+    if len(entry) != 2 or Path(entry[1]).name != "cli.js":
+        return None
+    try:
+        data = json.loads((Path(entry[1]).parent / "package.json").read_text(encoding="utf-8"))
+        m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(data.get("version", ""))) if data.get("name") == PACKAGE else None
+    except (OSError, ValueError, AttributeError):
+        return None
+    return tuple(int(x) for x in m.groups()) if m else None
+
+
 def project_code(root: Path) -> str:
     """The folder name Deep Code keeps a project's sessions under (its getProjectCode)."""
     root_s = str(root.resolve())
@@ -246,6 +267,12 @@ class DeepCode(Backend):
         if not executable(binary) and not (binary and Path(binary).suffix == ".py" and Path(binary).is_file()):
             return (f"Deep Code not found. Install it (npm install -g {PACKAGE}) or set "
                     "DEEPCODE_BIN=/path/to/deepcode.")
+        version = installed_version(binary)
+        if version is not None and version < MIN_VERSION:
+            need = ".".join(map(str, MIN_VERSION))
+            return (f"This Deep Code ({'.'.join(map(str, version))}) is older than {need}, the first "
+                    f"version Prism can keep from changing files in Ask mode. Update it: "
+                    f"npm install -g {PACKAGE}")
         return None
 
     def preflight(self, root: Path) -> str | None:

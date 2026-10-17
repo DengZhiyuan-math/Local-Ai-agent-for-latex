@@ -628,6 +628,33 @@ class DeepCodeBackend(unittest.TestCase):
         with mock.patch("backend_deepcode.deepcode_bin", return_value=None):
             self.assertIn("npm install -g @vegamo/deepcode-cli", DeepCode("deepcode").unavailable())
 
+    def test_a_version_too_old_for_ask_mode_is_refused(self):
+        """Ask's no-write rule is permission categories Deep Code 0.4.3 knows: an older one
+        is refused, saying how to update; one whose version cannot be told is let run."""
+        from backend_deepcode import DeepCode
+        with tempfile.TemporaryDirectory() as d:
+            npm = Path(d)
+            pkg = npm / "node_modules" / "@vegamo" / "deepcode-cli"
+            pkg.mkdir(parents=True)
+            (pkg / "cli.js").write_text("", encoding="utf-8")
+            shim = npm / "deepcode.cmd"
+            shim.write_text("@echo off\n", encoding="utf-8")
+            shim.chmod(0o755)
+            spec = {"bin": str(shim)}
+            for version, refused in (("0.4.2", True), ("0.4.3", False), ("0.10.0", False),
+                                     ("1.0.0-beta.1", False), ("unknown", False)):
+                with self.subTest(version=version):
+                    (pkg / "package.json").write_text(json.dumps({"name": "@vegamo/deepcode-cli", "version": version}),
+                                                      encoding="utf-8")
+                    said = DeepCode("deepcode", spec).unavailable()
+                    if refused:
+                        self.assertIn("older than 0.4.3", said)
+                        self.assertIn("npm install -g @vegamo/deepcode-cli", said)
+                    else:
+                        self.assertIsNone(said)
+            (pkg / "package.json").unlink()
+            self.assertIsNone(DeepCode("deepcode", spec).unavailable(), "cannot be told: let run")
+
 
 class ActiveTurn(unittest.TestCase):
     def test_a_page_loaded_during_a_turn_learns_which_one_runs(self):
