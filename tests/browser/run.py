@@ -53,7 +53,7 @@ def ready(file):
 
 results = {}
 try:
-    start([sys.executable, str(here / "slow_api.py"), "18765"])
+    start([sys.executable, str(here / "slow_api.py"), "18765", str(work / "agent-answer.txt")])
     start([sys.executable, str(repo / "prism_local/server.py"), str(work / "proj"), "--port", "0", "--no-browser",
            "--ready-file", str(work / "ready.json")])
     start([sys.executable, str(repo / "prism_local/hub.py"), "--port", "0", "--no-browser",
@@ -85,6 +85,7 @@ try:
     results["pages load"] = node(scripts / "pages.mjs", editor, home)
     results["many pages"] = node(scripts / "many_pages.mjs", editor, str(work / "proj"))
     results["editing"] = node(scripts / "editing.mjs", editor, str(work / "proj"))
+    results["search with the agent"] = node(scripts / "agent_search.mjs", editor, str(work / "proj"))
     trashed = sorted(p.name for p in (work / "trash").iterdir()) if (work / "trash").is_dir() else []
     results["trash folder"] = ("PASS" if trashed == ["intro.tex", "proj2"] else "FAIL") + f" deleted items: {trashed}"
     clip = work / "clipboard.json"
