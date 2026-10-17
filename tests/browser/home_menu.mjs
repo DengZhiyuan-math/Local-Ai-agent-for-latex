@@ -82,8 +82,9 @@ const pin = await ev(`
   return { back, toast: T.toast() };`);
 check("a pin that could not be saved says so and goes back", pin.back && pin.toast.includes("another window"), JSON.stringify(pin));
 const setup = await ev(`
-  // Getting started, from nothing: git and the GitHub CLI installed, the login's code shown.
-  const real = api, seen = {}, st = { git: null, gh: null, can_install: true, installing: {}, how: { git: "by hand", gh: "by hand" },
+  // Getting started, from nothing: git and the GitHub CLI installed, the login's code shown, LaTeX with Quick start.
+  const real = api, seen = {}, st = { git: null, gh: null, tex: { engine: null, tectonic: null }, claude: null,
+                                      can_install: { git: true, gh: true, tectonic: true, tex: true, claude: true }, installing: {}, how: { git: "by hand", gh: "by hand", tectonic: "by hand", tex: "by hand", claude: "by hand" },
                                       github: { logged_in: false }, login: { state: null } };
   api = async (path, body) => {
     if (path.split("?")[0] === "/api/tools") { (seen.asked ||= []).push(path); return { _status: 200, ...JSON.parse(JSON.stringify(st)) }; }
@@ -93,7 +94,8 @@ const setup = await ev(`
   };
   const panel = () => document.querySelector("#setup");
   await loadSetup();
-  seen.shown = !!panel() && panel().querySelectorAll("li").length === 3 && panel().querySelectorAll('[data-setup^="install-"]').length === 2;
+  seen.shown = !!panel() && panel().querySelectorAll("li").length === 5
+    && [...panel().querySelectorAll('[data-setup^="install-"]')].map((b) => b.dataset.setup).join() === "install-git,install-gh,install-tectonic,install-tex,install-claude";
   panel().querySelector('[data-setup="install-git"]').click();
   seen.installing = await T.until(() => (panel()?.textContent || "").includes("Installing"));
   st.installing.git = { state: "done" }; st.git = "C:/git.exe"; await loadSetup();
@@ -106,7 +108,11 @@ const setup = await ev(`
   seen.code = await T.until(() => panel()?.querySelector(".setup-code")?.textContent === "AB12-CD34");
   seen.link = panel().querySelector('a[href="https://github.com/login/device"]') !== null;
   st.login = { state: "done" }; st.github = { logged_in: true, account: "me" }; await loadSetup();
-  seen.gone = !panel();
+  seen.waitsForLatex = !!panel() && !panel().querySelector(".setup-latex").classList.contains("done");
+  panel().querySelector('[data-setup="install-tectonic"]').click();
+  seen.latexInstalling = await T.until(() => panel()?.querySelector(".setup-latex")?.textContent.includes("Downloading Tectonic"));
+  st.installing.tectonic = { state: "done" }; st.tex.tectonic = "C:/prism/bin/tectonic.exe"; await loadSetup();
+  seen.gone = !panel();               // without the AI assistant: it is optional
   seen.pollsDoNotRefresh = seen.asked.length > 3 && seen.asked.every((p) => p === "/api/tools"); delete seen.asked;
   clearTimeout(SETUP.timer); api = real;
   return seen;`);
@@ -114,8 +120,10 @@ check("getting started installs git and the GitHub CLI and shows the login's cod
 const recheck = await ev(`
   // Where Prism cannot install (no winget): Check again asks gh afresh, and stays usable while still missing;
   // so does a button whose request is refused.
-  const real = api, seen = {}, asked = [], st = { git: null, gh: null, can_install: false, installing: {},
-    how: { git: "Install git from git-scm.com.", gh: "Install the GitHub CLI from cli.github.com." }, github: { logged_in: false }, login: { state: null } };
+  const real = api, seen = {}, asked = [], st = { git: null, gh: null, tex: { engine: null, tectonic: null }, claude: null,
+    can_install: { git: false, gh: false, tectonic: false, tex: false, claude: false }, installing: {},
+    how: { git: "Install git from git-scm.com.", gh: "Install the GitHub CLI from cli.github.com.", tectonic: "Get Tectonic from tectonic-typesetting.github.io.",
+           tex: "Install TeX Live.", claude: "Install Claude Code from claude.ai." }, github: { logged_in: false }, login: { state: null } };
   api = async (path, body) => {
     if (path.split("?")[0] === "/api/tools") { asked.push(path); await T.sleep(50); return { _status: 200, ...JSON.parse(JSON.stringify(st)) }; }
     if (path === "/api/tools/install") return { _status: 409, error: "fixture: refused" };
@@ -131,7 +139,7 @@ const recheck = await ev(`
   seen.refreshed = asked[1] === "/api/tools?refresh=1";
   b.click();
   seen.secondClick = await T.until(() => !b.disabled && asked.length === 3) && asked[2] === "/api/tools?refresh=1";
-  st.can_install = true; await loadSetup();
+  st.can_install = { git: true, gh: true, tectonic: true, tex: true, claude: true }; await loadSetup();
   const i = panel().querySelector('[data-setup="install-git"]');
   i.click();
   seen.refusedUsable = await T.until(() => !i.disabled && asked.length === 5) && i.isConnected && T.toast() === "fixture: refused";
@@ -141,7 +149,8 @@ check("check again asks afresh and stays usable, as does a refused button", Obje
 const warned = await ev(`
   // Logged in, but git could not be set to use it: said once, when the login ends; and in Settings.
   const real = api, seen = {}, warning = "You are logged in to GitHub, but the first save to GitHub may ask you to log in again.";
-  const st = { git: "C:/git.exe", gh: null, can_install: true, installing: {}, how: { git: "", gh: "" },
+  const st = { git: "C:/git.exe", gh: null, tex: { engine: null, tectonic: null }, claude: null, can_install: { git: true, gh: true, tectonic: true, tex: true, claude: true }, installing: {},
+               how: { git: "", gh: "", tectonic: "", tex: "", claude: "" },
                github: { logged_in: false }, login: { state: "waiting", code: "AB12-CD34", url: "https://github.com/login/device" } };
   api = async (path, body) => {
     if (path.split("?")[0] === "/api/tools") return { _status: 200, ...JSON.parse(JSON.stringify(st)) };
@@ -166,17 +175,68 @@ const warned = await ev(`
   const rows = [...$("#tools-status").children].map((d) => d.textContent.trim());
   seen.gitRow = rows[0] === "✓ git is installed";
   seen.ghRow = rows[1].startsWith("The GitHub CLI is not installed") && !!$('#tools-status [data-setup="install-gh"]');
+  seen.latexRow = rows[2].startsWith("LaTeX is not installed") && !!$('#tools-status [data-setup="install-tectonic"]')
+    && !!$('#tools-status [data-setup="install-tex"]');
+  seen.aiRow = rows[3].startsWith("The AI assistant (Claude Code, optional) is not installed") && !!$('#tools-status [data-setup="install-claude"]')
+    && !$("#tools-status").children[3].classList.contains("err");
   seen.noDoubleLine = $("#gh-status").hidden;
   $('#tools-status [data-setup="install-gh"]').click();
   seen.installing = await T.until(() => $("#tools-status").textContent.includes("Installing"));
   st.installing.gh = { state: "done" }; st.gh = "C:/gh.exe"; st.github = { logged_in: true, account: "me" };
   st.login = { state: "done", warning, details: null };
+  st.tex.engine = "C:/miktex/pdflatex.exe"; st.claude = "C:/claude.exe";
   seen.ghDone = await T.until(() => $("#tools-status").textContent.includes("✓ The GitHub CLI is installed"));
+  await loadSetup();
+  const done = [...$("#tools-status").children].map((d) => d.textContent.trim());
+  seen.latexDone = done[2] === "✓ LaTeX: TeX installed";
+  seen.aiLogin = done[3].startsWith("✓ The AI assistant (Claude Code) is installed") && !!$('#tools-status [data-setup="claude-login"]');
   seen.settingsWarning = !$("#gh-warning").hidden && $("#gh-warning").textContent === warning && !$("#gh-status").hidden;
   $("#dlg-settings").close();
   clearTimeout(SETUP.timer); api = real;
   return seen;`);
 check("a login's warning is said once, and Settings shows git, the GitHub CLI and the warning", Object.values(warned).every(Boolean), JSON.stringify(warned));
+const latex = await ev(`
+  // LaTeX: Full LaTeX where it cannot be installed says how instead; a full TeX says it takes long, and a failure
+  // can be tried again. The AI assistant: Install, then Log in opens a window; the panel goes without it.
+  const real = api, seen = {}, asked = [], claudeLogin = [];
+  const st = { git: "C:/git.exe", gh: "C:/gh.exe", tex: { engine: null, tectonic: null }, claude: null,
+               can_install: { git: true, gh: true, tectonic: true, tex: false, claude: true }, installing: {},
+               how: { git: "", gh: "", tectonic: "", tex: "Install MacTeX from tug.org/mactex.", claude: "" },
+               github: { logged_in: true, account: "me" }, login: { state: null } };
+  api = async (path, body) => {
+    if (path.split("?")[0] === "/api/tools") { asked.push(path); return { _status: 200, ...JSON.parse(JSON.stringify(st)) }; }
+    if (path === "/api/tools/install") { st.installing[body.name] = { state: "running" }; return { _status: 200, state: "running" }; }
+    if (path === "/api/tools/claude-login") { claudeLogin.push(body); return { _status: 200, ok: true }; }
+    return real(path, body);
+  };
+  const realClaude = H.claude; H.claude = { logged_in: false };
+  const panel = () => document.querySelector("#setup"), li = (cls) => panel()?.querySelector("." + cls);
+  await loadSetup();
+  seen.shown = !!panel() && panel().querySelectorAll("li").length === 5;
+  seen.quickStart = !!li("setup-latex").querySelector('[data-setup="install-tectonic"]');
+  seen.noFullButton = !li("setup-latex").querySelector('[data-setup="install-tex"]') && li("setup-latex").textContent.includes("tug.org/mactex");
+  seen.optional = li("setup-optional").textContent.includes("optional") && !li("setup-optional").querySelector(".primary");
+  li("setup-optional").querySelector('[data-setup="install-claude"]').click();
+  seen.aiInstalling = await T.until(() => li("setup-optional")?.textContent.includes("Installing the AI assistant"));
+  const before = asked.length;
+  seen.pollsWhileInstalling = await T.until(() => asked.length >= before + 1, 4000);
+  st.installing.claude = { state: "done" }; st.claude = "C:/claude.exe"; await loadSetup();
+  const login = li("setup-optional").querySelector('[data-setup="claude-login"]');
+  seen.loginHint = !!login && li("setup-optional").textContent.includes("a window opens");
+  login.click();
+  seen.loginPosted = await T.until(() => claudeLogin.length === 1 && T.toast().includes("window"));
+  st.can_install.tex = true; await loadSetup();
+  li("setup-latex").querySelector('[data-setup="install-tex"]').click();
+  seen.texSaysLong = await T.until(() => li("setup-latex")?.textContent.includes("an hour or more"));
+  st.installing.tex = { state: "failed", error: "MiKTeX could not be installed.", details: "winget: exit 1" }; await loadSetup();
+  seen.texFailed = li("setup-latex").textContent.includes("MiKTeX could not be installed")
+    && !!li("setup-latex").querySelector('[data-setup="install-tex"]') && !!li("setup-latex").querySelector("details")
+    && !!li("setup-latex").querySelector('[data-setup="install-tectonic"]');
+  st.installing.tex = { state: "done" }; st.tex.engine = "C:/miktex/pdflatex.exe"; await loadSetup();
+  seen.goneWithoutLoginToClaude = !panel();
+  clearTimeout(SETUP.timer); api = real; H.claude = realClaude;
+  return seen;`);
+check("getting started: LaTeX (Quick start, Full LaTeX or how) and the optional AI assistant (Install, Log in)", Object.values(latex).every(Boolean), JSON.stringify(latex));
 const clone = await ev(`
   const real = api, seen = {}; let asked = null;
   api = async (path, body) => path === "/api/github/repos"

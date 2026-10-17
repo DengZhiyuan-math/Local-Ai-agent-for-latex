@@ -1391,13 +1391,18 @@ function renderGhStatus() {
   f.elements.github_owner.placeholder = gh.account || "";
   renderClaudeStatus();
 }
-// git and the GitHub CLI, as the Getting started panel has them, with the same buttons.
+// git, the GitHub CLI, LaTeX and the AI assistant, as the Getting started panel has them,
+// with the same buttons. The AI assistant is optional: not having it is not said in red.
 function renderToolsStatus() {
   const el = $("#tools-status"), r = SETUP.st;
   if (!r) return;
   const row = (name, what) => r[name] ? `<div class="gh-status ok">✓ ${what} is installed</div>`
     : `<div class="gh-status err">${what} is not installed. ${setupInstall(r, name)}</div>`;
-  const html = row("git", "git") + row("gh", "The GitHub CLI");
+  const latex = setupTexReady(r) ? `<div class="gh-status ok">✓ ${setupTexName(r)}</div>`
+    : `<div class="gh-status err">LaTeX is not installed. ${setupLatex(r)}</div>`;
+  const ai = !r.claude ? `<div class="gh-status">The AI assistant (Claude Code, optional) is not installed. ${setupInstall(r, "claude", false)}</div>`
+    : `<div class="gh-status ok">✓ The AI assistant (Claude Code) is installed${setupClaudeLoggedIn() ? "" : ". " + setupClaude(r)}</div>`;
+  const html = row("git", "git") + row("gh", "The GitHub CLI") + latex + ai;
   if (el._html !== html) { el.innerHTML = html; el._html = html; }
 }
 // Which account Claude Code uses now, and whether it matches the one allowed.
@@ -1408,7 +1413,7 @@ function renderClaudeStatus() {
   let ok = !!c.logged_in && !c.error && !(c.overrides || []).length;
   let text;
   if (c.error) text = "Could not check: " + c.error;
-  else if (!c.logged_in) text = "Claude Code is not logged in. Run claude in a terminal and log in.";
+  else if (!c.logged_in) text = "Claude Code is not logged in: see the AI assistant under Programs, above.";
   else if ((c.overrides || []).length) text = `Logged in as ${who}, but overridden by ${c.overrides.join("; ")}.`;
   else if (want && c.email && want !== c.email.toLowerCase()) { ok = false; text = `Logged in as ${who}, not the allowed account: the agent will refuse to run.`; }
   else text = `✓ Claude Code is logged in as ${who}`;
@@ -1573,11 +1578,13 @@ async function watchFetch() {
 /* ------------------------------------------------------------------ start */
 load().then(loadAllGit).then(watchFetch);
 /* ------------------------------------------------------------------ getting started */
-// git, the GitHub CLI and a GitHub login (tools.py, github.py): until all three are
+// git, the GitHub CLI, a GitHub login and LaTeX (tools.py, github.py): until all four are
 // there, a panel above the list does each with one button, for someone who has never
-// used a terminal. What went wrong is said in a sentence; the installer's or gh's own
+// used a terminal. The AI assistant (Claude Code) is a fifth row, optional: it does not
+// keep the panel open. What went wrong is said in a sentence; the installer's or gh's own
 // words are folded under Details. The Settings dialog shows the same (renderToolsStatus).
-const SETUP = { st: null, timer: null, loggingIn: false };
+// claudeLogin: a window to log in to Claude was opened; coming back to the page asks again.
+const SETUP = { st: null, timer: null, loggingIn: false, claudeLogin: false };
 // refresh: ask gh again whether you are logged in (slow: only when asked, not while polling).
 async function loadSetup(refresh = false) {
   const r = await api("/api/tools" + (refresh === true ? "?refresh=1" : ""));
@@ -1597,18 +1604,54 @@ async function loadSetup(refresh = false) {
   clearTimeout(SETUP.timer);
   if (busy) SETUP.timer = setTimeout(loadSetup, 1500);
 }
+const setupTexReady = (r) => !!(r.tex && (r.tex.engine || r.tex.tectonic));
+const setupTexName = (r) => r.tex.engine ? "LaTeX: TeX installed" : "LaTeX: Tectonic (downloads packages as needed)";
+const setupClaudeLoggedIn = () => !!(H.claude && H.claude.logged_in);
+// What the panel waits for (the AI assistant is optional and does not count).
+const setupReady = (r) => !!(r.git && r.gh && r.github && r.github.logged_in && setupTexReady(r));
 // Not all there yet: you may have installed something, or logged in, meanwhile.
-const setupMissing = () => !!SETUP.st && !(SETUP.st.git && SETUP.st.gh && SETUP.st.github && SETUP.st.github.logged_in);
+const setupMissing = () => !!SETUP.st && !setupReady(SETUP.st);
+// can_install is per program; an older server said one true or false for all.
+const setupCan = (r, name) => r.can_install && typeof r.can_install === "object" ? !!r.can_install[name] : !!r.can_install;
+const setupHow = (r, name) => esc((r.how || {})[name] || "");
 function setupFailure(x, retry) {
   return `<span class="setup-err">${esc(x.error || "It did not work.")}</span> <button type="button" data-setup="${retry}">Try again</button>`
     + (x.details ? `<details><summary>Details</summary><pre>${esc(x.details)}</pre></details>` : "");
 }
-function setupInstall(r, name) {
+// What is said while a program installs: a full TeX takes long, so it says so.
+function setupBusy(name) {
+  const what = { tectonic: "Downloading Tectonic…", claude: "Installing the AI assistant…",
+                 tex: "Installing the full LaTeX… This can take an hour or more; you can keep working meanwhile." }[name] || "Installing…";
+  const ask = ["git", "gh", "tex"].includes(name) && /Windows/.test(navigator.userAgent) ? " Windows may ask for your permission." : "";
+  return `<span class="setup-busy">${what}${ask}</span>`;
+}
+function setupInstall(r, name, primary = true) {
   const x = (r.installing || {})[name] || {};
-  if (x.state === "running") return `<span class="setup-busy">Installing… Windows may ask for your permission.</span>`;
+  if (x.state === "running") return setupBusy(name);
   if (x.state === "failed") return setupFailure(x, "install-" + name);
-  if (!r.can_install) return `<span class="setup-how">${esc(r.how[name])}</span> <button type="button" data-setup="recheck">Check again</button>`;
-  return `<button type="button" class="primary" data-setup="install-${name}">Install</button>`;
+  if (!setupCan(r, name)) return `<span class="setup-how">${setupHow(r, name)}</span> <button type="button" data-setup="recheck">Check again</button>`;
+  return `<button type="button"${primary ? ` class="primary"` : ""} data-setup="install-${name}">Install</button>`;
+}
+// LaTeX: Quick start is Tectonic, one download that fetches packages as a paper needs them;
+// Full LaTeX is MiKTeX or MacTeX, several GB. Either will do. One line, no line breaks:
+// Settings shows it in a pre-wrap line.
+function setupLatex(r) {
+  const inst = r.installing || {}, st = (n) => (inst[n] || {}).state;
+  const busy = ["tectonic", "tex"].find((n) => st(n) === "running");
+  if (busy) return setupBusy(busy);
+  const quick = st("tectonic") === "failed" ? setupFailure(inst.tectonic, "install-tectonic")
+    : setupCan(r, "tectonic") ? `<button type="button" class="primary" data-setup="install-tectonic">Quick start</button> <small class="setup-note">one download; the packages a paper needs come when it is first compiled, which needs the internet</small>`
+    : `<span class="setup-how">${setupHow(r, "tectonic")}</span>`;
+  const full = st("tex") === "failed" ? setupFailure(inst.tex, "install-tex")
+    : setupCan(r, "tex") ? `<button type="button" data-setup="install-tex" title="All of LaTeX, several GB: it can take an hour or more">Full LaTeX</button>`
+    : `<span class="setup-how">${setupHow(r, "tex")}</span>`;
+  const recheck = setupCan(r, "tectonic") || setupCan(r, "tex") ? "" : ` <button type="button" data-setup="recheck">Check again</button>`;
+  return `${quick} ${full}${recheck}`;
+}
+// The AI assistant: installed, Claude Code is logged in to once, in a window it opens.
+function setupClaude(r) {
+  if (!r.claude) return setupInstall(r, "claude", false);
+  return `<button type="button" data-setup="claude-login">Log in</button> <small class="setup-note">a window opens where you log in to Claude once</small>`;
 }
 function setupLogin(r) {
   const x = r.login || {};
@@ -1625,20 +1668,25 @@ function renderSetup() {
   if (!r) return;
   const loggedIn = !!(r.github && r.github.logged_in);
   let el = $("#setup");
-  if (r.git && r.gh && loggedIn) { if (el) el.remove(); return; }
+  if (setupReady(r)) { if (el) el.remove(); return; }
   if (!el) {
     el = document.createElement("section");
     el.id = "setup"; el.setAttribute("aria-label", "Getting started");
     $("#home-main").before(el);
   }
-  const row = (done, what, why, action) => `<li class="${done ? "done" : ""}"><span class="setup-mark">${done ? "✓" : "○"}</span>
+  const row = (done, what, why, action, cls = "") => `<li class="${done ? "done" : ""} ${cls}"><span class="setup-mark">${done ? "✓" : "○"}</span>
     <span class="setup-what"><b>${what}</b> <small>${why}</small></span><span class="setup-do">${done ? "" : action}</span></li>`;
-  const html = `<h2>Getting started</h2><p>Prism keeps every version of your papers and saves them to your own private
-    GitHub repositories. It needs two free programs and your GitHub account; each takes one click.</p><ol>`
+  const tex = setupTexReady(r), ai = !!r.claude && setupClaudeLoggedIn();
+  const html = `<h2>Getting started</h2><p>Prism keeps every version of your papers, saves them to your own private
+    GitHub repositories and turns them into PDFs with LaTeX. It needs a few free programs and your GitHub account;
+    each takes one click.</p><ol>`
     + row(!!r.git, "git", "keeps every version of your papers", setupInstall(r, "git"))
     + row(!!r.gh, "GitHub CLI", "lets Prism create repositories on GitHub for you", setupInstall(r, "gh"))
     + row(loggedIn, loggedIn ? `GitHub: ${esc(r.github.account || "")}` : "Your GitHub account",
           "a free account at github.com; your papers stay private", setupLogin(r))
+    + row(tex, tex ? setupTexName(r) : "LaTeX", "turns your papers into PDFs", setupLatex(r), "setup-latex")
+    + row(ai, ai ? "AI assistant: Claude Code" : "AI assistant", "optional: Claude helps you write and fix your LaTeX",
+          setupClaude(r), "setup-optional")
     + `</ol>`;
   if (el._html !== html) { el.innerHTML = html; el._html = html; }
 }
@@ -1651,15 +1699,20 @@ document.addEventListener("click", async (e) => {
     const r = what.startsWith("install-") ? await api("/api/tools/install", { name: what.slice(8) })
       : what === "login" ? await api("/api/github/login", {})
       : what === "login-cancel" ? await api("/api/github/login/cancel", {})
+      : what === "claude-login" ? await api("/api/tools/claude-login", {})
       : { _status: 200 };
     if (r._status !== 200) toast(r.error || "It did not work", true);
+    else if (what === "claude-login") {
+      SETUP.claudeLogin = true;
+      toast("A window opened: log in to Claude there once, then come back here.");
+    }
     await loadSetup(what === "recheck");
   } finally {
     b.disabled = false;     // still there when nothing changed (still missing, a refusal): usable again
   }
 });
 
-loadSettings();
+loadSettings().then(renderSetup);           // whether Claude is logged in: the panel's last row
 loadSetup();
 // Every 10 s while the page is shown and no dialog is open (see poller).
 load.start(() => !document.querySelector("dialog[open]"));
@@ -1667,4 +1720,8 @@ document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   load().then(loadOpenedGit);
   if (setupMissing()) loadSetup(true);
+  if (SETUP.claudeLogin) loadSettings(true).then(() => {     // back from the window to log in to Claude
+    if (setupClaudeLoggedIn()) SETUP.claudeLogin = false;
+    renderSetup(); renderGhStatus();
+  });
 });

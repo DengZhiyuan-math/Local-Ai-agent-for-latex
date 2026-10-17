@@ -221,6 +221,7 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
 #setup ol { list-style: none; margin: 0; padding: 0; }
 #setup li { display: flex; align-items: center; gap: 10px; padding: 6px 0; flex-wrap: wrap; }
 #setup li.done { color: var(--muted); }
+#setup li.setup-optional { color: var(--muted); }          /* optional: not a step you must do */
 #setup .setup-mark { width: 1.2em; text-align: center; }
 #setup .setup-what { flex: 1 1 260px; }
 #setup .setup-do { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -229,6 +230,7 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
 #setup details pre, #tools-status details pre { white-space: pre-wrap; max-width: 640px; font-size: 11px; }
 #tools-status > div { margin-bottom: 4px; }
 #tools-status button { margin-left: 4px; }
+#setup .setup-note, #tools-status .setup-note { color: var(--muted); }
 
 /* ---------- open from GitHub */
 .clone-list { max-height: 50vh; overflow: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }

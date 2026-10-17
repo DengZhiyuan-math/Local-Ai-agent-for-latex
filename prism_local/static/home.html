@@ -126,6 +126,10 @@
         <button type="button" data-browse="default_parent">Browse…</button></span></label>
     <label class="check"><input type="checkbox" name="git_init"> Initialize a git repository for new projects</label>
     <fieldset class="gh-set">
+      <legend>Programs</legend>
+      <div id="tools-status"></div>
+    </fieldset>
+    <fieldset class="gh-set">
       <legend>Claude account</legend>
       <div id="claude-status" class="gh-status"></div>
       <label class="field"><span>Claude Code profile folder <i>(CLAUDE_CONFIG_DIR; empty: as prism-local was started, usually ~/.claude)</i></span>
@@ -142,7 +146,6 @@
     </fieldset>
     <fieldset class="gh-set">
       <legend>GitHub</legend>
-      <div id="tools-status"></div>
       <div id="gh-status" class="gh-status"></div>
       <div id="gh-warning" class="gh-status err" hidden></div>
       <label class="check"><input type="checkbox" name="github_repo"> Create a private GitHub repository for each new project</label>
