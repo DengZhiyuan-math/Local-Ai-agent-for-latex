@@ -54,12 +54,17 @@ const cm = CodeMirror($("#editor"), {
     "Cmd-J": () => forwardSync(), "Ctrl-J": () => forwardSync(),
     "Ctrl-Space": (ed) => showCompletions(ed, true),
     "Cmd-/": "toggleTexComment", "Ctrl-/": "toggleTexComment",
+    // Find and replace (below).
+    "Cmd-F": () => findOpen(false), "Ctrl-F": () => findOpen(false),
+    "Cmd-Alt-F": () => findOpen(true), "Ctrl-H": () => findOpen(true),
+    F3: () => findStep(1), "Shift-F3": () => findStep(-1),
     // Snippets first (see below): expand, next field, out of a bracket, & in a matrix row.
     Tab: () => SNIP.tab(indentOrSpaces),
     "Shift-Tab": () => SNIP.shiftTab(),
     Enter: () => SNIP.enter(),
     "Shift-Enter": "newlineAndIndent",
-    Esc: () => SNIP.escape(),
+    // A snippet's fields first, then the find bar.
+    Esc: () => { const r = SNIP.escape(); if (r === CodeMirror.Pass && !findBar.hidden) return findClose(); return r; },
   },
 });
 function indentOrSpaces(ed) { return ed.somethingSelected() ? ed.indentSelection("add") : ed.replaceSelection("  "); }
@@ -75,6 +80,165 @@ CodeMirror.commands.toggleTexComment = (ed) => {
     }
   });
 };
+/* ------------------------------------------------------------------ find and replace */
+// The bar over the open file (findlogic.js decides what matches): every match is marked
+// and counted, the current one selected. Replace changes the selected match and goes to the
+// next; Replace all changes every one in one step, which one ⌘Z takes back.
+const FIND_MARKS = 2000;               // matches marked in the text (all of them are counted)
+const findBar = $("#find"), findQ = $("#find-q"), findR = $("#find-r");
+const FIND = {
+  opts: { caseSensitive: false, wholeWord: false, regex: false, ...store.get("find.opts", {}) },
+  list: [], more: false, error: null, cur: -1, marks: [], curMark: null, timer: null,
+};
+const findOpts = () => ({ ...FIND.opts, query: findQ.value });
+const regexEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function findOpen(replace) {
+  if (!activeTab()) return;
+  const sel = cm.hasFocus() ? cm.getSelection() : "";     // a match selected by the bar is not new
+  if (sel && !sel.includes("\n") && sel.length < 200) findQ.value = FIND.opts.regex ? regexEscape(sel) : sel;
+  findBar.hidden = false;
+  if (replace) findShowReplace(true);
+  const input = replace && findQ.value ? findR : findQ;
+  input.focus(); input.select();
+  findRun(true);
+}
+function findClose() {
+  findBar.hidden = true;
+  findUnmark();
+  FIND.list = []; FIND.cur = -1;
+  cm.focus();
+}
+function findShowReplace(on) {
+  $("#find-replace").hidden = !on;
+  $("#find-more").setAttribute("aria-expanded", String(on));
+}
+function findUnmark() {
+  for (const m of FIND.marks) m.clear();
+  if (FIND.curMark) FIND.curMark.clear();
+  FIND.marks = []; FIND.curMark = null;
+}
+// Finds again in the open file. select: go to the first match from the selection on (you
+// typed in the bar); otherwise the current match is the one the cursor is in, if any.
+function findRun(select) {
+  clearTimeout(FIND.timer);
+  if (findBar.hidden || !activeTab()) return;
+  const r = FindLogic.matches(cm.getValue(), findOpts());
+  Object.assign(FIND, { list: r.list, more: r.more, error: r.error || null });
+  findUnmark();
+  cm.operation(() => {
+    for (const x of r.list.slice(0, FIND_MARKS))
+      FIND.marks.push(cm.markText(cm.posFromIndex(x.from), cm.posFromIndex(x.to), { className: "cm-find-hit" }));
+  });
+  const from = cm.indexFromPos(cm.getCursor("from")), to = cm.indexFromPos(cm.getCursor("to"));
+  FIND.cur = select ? r.list.findIndex((x) => x.from >= from) : r.list.findIndex((x) => x.from <= from && to <= x.to);
+  if (select && FIND.cur < 0 && r.list.length) FIND.cur = 0;                 // from the top again
+  if (select && FIND.cur >= 0) findSelect(); else findShow();
+}
+// Selects the current match and shows it.
+function findSelect() {
+  const x = FIND.list[FIND.cur];
+  if (!x) return findShow();
+  const from = cm.posFromIndex(x.from), to = cm.posFromIndex(x.to);
+  cm.setSelection(from, to);
+  cm.scrollIntoView({ from, to }, 80);
+  findShow();
+}
+function findShow() {
+  if (FIND.curMark) { FIND.curMark.clear(); FIND.curMark = null; }
+  const x = FIND.list[FIND.cur];
+  if (x) FIND.curMark = cm.markText(cm.posFromIndex(x.from), cm.posFromIndex(x.to), { className: "cm-find-cur" });
+  const n = FIND.list.length, count = $("#find-count");
+  count.textContent = FIND.error || (!findQ.value ? "" : !n ? "No results"
+    : (FIND.cur >= 0 ? `${FIND.cur + 1} of ` : "") + n.toLocaleString() + (FIND.more ? "+" : ""));
+  count.classList.toggle("bad", !!FIND.error);
+  findQ.classList.toggle("bad", !!FIND.error);
+}
+// The next (d = 1) or previous (-1) match; from the cursor when none is current.
+function findStep(d) {
+  if (findBar.hidden) return findOpen(false);
+  findRun(false);
+  const n = FIND.list.length;
+  if (!n) return;
+  if (FIND.cur >= 0) FIND.cur = (FIND.cur + d + n) % n;
+  else {
+    const at = cm.indexFromPos(cm.getCursor(d > 0 ? "to" : "from"));
+    FIND.cur = d > 0 ? FIND.list.findIndex((x) => x.from >= at) : FIND.list.findLastIndex((x) => x.to <= at);
+    if (FIND.cur < 0) FIND.cur = d > 0 ? 0 : n - 1;
+  }
+  findSelect();
+}
+function findReplaceOne() {
+  findRun(false);
+  const x = FIND.list[FIND.cur];
+  const at = cm.indexFromPos(cm.getCursor("from"));
+  if (!x || at !== x.from || cm.indexFromPos(cm.getCursor("to")) !== x.to) {
+    // No match selected yet: select the one the cursor is in, or the next, and replace it on the next click.
+    FIND.cur = FIND.list.findIndex((y) => y.to > at);
+    if (FIND.cur < 0 && FIND.list.length) FIND.cur = 0;
+    return findSelect();
+  }
+  const text = FindLogic.expand(findR.value, x.m, findOpts());
+  cm.replaceRange(text, cm.posFromIndex(x.from), cm.posFromIndex(x.to), "+find");
+  findRun(false);
+  const after = x.from + text.length;
+  FIND.cur = FIND.list.findIndex((y) => y.from >= after);
+  if (FIND.cur < 0 && FIND.list.length) FIND.cur = 0;
+  findSelect();
+}
+function findReplaceAll() {
+  const opts = findOpts(), { list } = FindLogic.matches(cm.getValue(), opts, Infinity);
+  if (!list.length) return;
+  // From the last to the first, so each match's place is still where it was found.
+  cm.operation(() => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      cm.replaceRange(FindLogic.expand(findR.value, x.m, opts), cm.posFromIndex(x.from), cm.posFromIndex(x.to), "+find");
+    }
+  });
+  toast(`Replaced ${Util.plural(list.length, "match", "matches")}.`);
+  findRun(false);
+}
+function findToggle(opt) {
+  FIND.opts[opt] = !FIND.opts[opt];
+  store.set("find.opts", FIND.opts);
+  findOptsShown();
+  findRun(true);
+}
+function findOptsShown() {
+  for (const b of findBar.querySelectorAll("[data-opt]")) b.setAttribute("aria-pressed", String(!!FIND.opts[b.dataset.opt]));
+}
+findOptsShown();
+// The bar's own keys. Alt+C/W/R by the key's place: on a Mac, Option+C types "ç".
+const FIND_OPT_KEYS = { KeyC: "caseSensitive", KeyW: "wholeWord", KeyR: "regex" };
+function findKeys(e) {
+  if (e.key === "Escape") { e.preventDefault(); findClose(); }
+  else if (e.altKey && !e.ctrlKey && !e.metaKey && FIND_OPT_KEYS[e.code]) { e.preventDefault(); findToggle(FIND_OPT_KEYS[e.code]); }
+  else if (e.key === "F3") { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); }
+  else return false;
+  return true;
+}
+findQ.addEventListener("input", () => { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(true), 120); });
+findQ.addEventListener("keydown", (e) => {
+  if (findKeys(e)) return;
+  if (e.key === "Enter") { e.preventDefault(); clearTimeout(FIND.timer); findStep(e.shiftKey ? -1 : 1); }
+});
+findR.addEventListener("keydown", (e) => {
+  if (findKeys(e)) return;
+  if (e.key === "Enter" && e.altKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); findReplaceAll(); }
+  else if (e.key === "Enter") { e.preventDefault(); findReplaceOne(); }
+});
+findBar.addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.opt) findToggle(b.dataset.opt);
+  else if (b.dataset.step) findStep(+b.dataset.step);
+  else if (b.dataset.close) findClose();
+});
+$("#find-more").onclick = () => { const on = $("#find-replace").hidden; findShowReplace(on); (on ? findR : findQ).focus(); };
+$("#find-one").onclick = () => findReplaceOne();
+$("#find-all").onclick = () => findReplaceAll();
+$("#btn-find").onclick = () => findOpen(false);
+// Your edits, an agent's, a reload from disk: the matches are found again a moment later.
+cm.on("changes", () => { if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); } });
 /* ------------------------------------------------------------------ snippets */
 // Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours, and how
 // they expand, are set in Home → Settings (~/.prism-local/snippets.js and settings.json), so
@@ -147,6 +311,7 @@ async function openFile(path, line, following = false) {
   S.active = path;
   cm.swapDoc(t.doc);
   AH.apply(path);
+  findRun(false);                    // the find bar, open, counts in this file
   cm.getWrapperElement().style.display = "";
   $("#empty-editor").hidden = true;
   applyDiagnostics();
@@ -156,6 +321,12 @@ async function openFile(path, line, following = false) {
   if (!$("#history").hidden && !$("#panel").classList.contains("collapsed")) showHistory(path);   // follows the file
   cm.focus();
   cm.refresh();
+}
+
+// The last tab closed: no file in the editor, nor a find bar over it.
+function showNoFile() {
+  S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false;
+  if (!findBar.hidden) { findBar.hidden = true; findUnmark(); }
 }
 
 function jumpToLine(line) {
@@ -177,7 +348,7 @@ async function closeTab(path) {
   if (S.active === path) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) return openFile(next.path);
-    S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false;
+    showNoFile();
   }
   renderTabs(); renderTree(); persistSession();
 }
@@ -431,7 +602,7 @@ async function trashItems(target) {
   if (S.active && within(S.active, target.path)) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) openFile(next.path);
-    else { S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false; }
+    else showNoFile();
   }
   renderTabs(); persistSession(); await poll();
   toast(`Moved ${target.path} to the ${TRASH}`);
@@ -1195,6 +1366,9 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key === "s") { e.preventDefault(); saveActive(); }
   else if (mod && e.key === "Enter") { e.preventDefault(); compile(); }
   else if (mod && e.key === "b" && !e.shiftKey) { e.preventDefault(); sidebarHidden(!$("#sidebar").classList.contains("hidden")); }
+  // Find in the open file, from wherever the focus is but the agent's panel (the editor has its own keys).
+  else if (mod && e.code === "KeyF" && !e.shiftKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
+  else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
 });
 window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.preventDefault(); e.returnValue = ""; } });
 

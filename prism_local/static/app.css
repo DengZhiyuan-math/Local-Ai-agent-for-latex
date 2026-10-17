@@ -301,7 +301,22 @@ button.flip .ico { transform: rotate(180deg); }
 .cm-line-error { background: rgba(179, 38, 30, .12); }
 .cm-line-warning { background: rgba(154, 100, 0, .10); }
 .cm-line-flash { background: var(--hl); transition: background 1s; }
-.CodeMirror-dialog { background: var(--panel); color: var(--text); }
+/* Find and replace in the open file (app.js FIND): every match, and the one selected. */
+.cm-find-hit { background: rgba(255, 196, 0, .32); border-radius: 2px; }
+.cm-find-cur { background: rgba(255, 128, 0, .45); outline: 1px solid rgba(230, 100, 0, .9); }
+#find { position: absolute; top: calc(var(--bar-h) + 6px); right: 18px; z-index: 6; display: flex; align-items: flex-start; gap: 2px;
+  padding: 4px 6px 4px 2px; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.25); }
+#find[hidden], #find-replace[hidden] { display: none; }
+#find .find-rows { display: flex; flex-direction: column; gap: 4px; }
+#find .find-row { display: flex; align-items: center; gap: 3px; }
+#find input { width: 210px; font: 13px var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
+#find input.bad { border-color: var(--err); }
+#find .opt { font: 600 11.5px var(--mono); min-width: 24px; padding: 2px 4px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 4px; }
+#find .opt[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+#find .count { min-width: 70px; text-align: center; font-size: 11.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+#find .count.bad { color: var(--err); }
+#find-more svg { transition: transform .12s; }
+#find-more[aria-expanded="true"] svg { transform: rotate(90deg); }
 .CodeMirror-hints { font-family: var(--mono); font-size: 12px; background: var(--panel); border-color: var(--border); z-index: 50; }
 .CodeMirror-hint { color: var(--text); }
 li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text); }

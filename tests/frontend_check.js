@@ -485,6 +485,77 @@ check("math: KaTeX gets the project's macros and what it lacks, mapped", () => {
   assert.ok(unknown.includes('class="katex"') && unknown.includes("#cc0000"), unknown.slice(0, 300));
 });
 
+// ---------------------------------------------------------------- findlogic.js
+const FindLogic = require("../prism_local/static/findlogic.js");
+const spans = (text, opts) => FindLogic.matches(text, opts).list.map((x) => text.slice(x.from, x.to));
+check("find: match case, whole word and regular expressions", () => {
+  const text = "Cat cat, concat; cat_s. Ünter ünterm";
+  assert.deepStrictEqual(spans(text, { query: "cat" }), ["Cat", "cat", "cat", "cat"]);
+  assert.deepStrictEqual(spans(text, { query: "Cat", caseSensitive: true }), ["Cat"]);
+  assert.deepStrictEqual(spans(text, { query: "cat", wholeWord: true }), ["Cat", "cat"]);
+  assert.deepStrictEqual(spans(text, { query: "ünter", wholeWord: true }), ["Ünter"], "a letter of any script is a word's");
+  assert.deepStrictEqual(spans(text, { query: "c[a-z]+t", regex: true }), ["Cat", "cat", "concat", "cat"]);
+  assert.deepStrictEqual(spans("aab ab", { query: "ab", wholeWord: true }), ["ab"]);
+});
+check("find: typed text is literal; LaTeX's escapes are not errors", () => {
+  assert.deepStrictEqual(spans("a $x^2$ and \\frac{1}{2}", { query: "$x^2$" }), ["$x^2$"]);
+  assert.deepStrictEqual(spans("\\frac{1}{2}", { query: "\\frac{" }), ["\\frac{"]);
+  assert.deepStrictEqual(spans("50\\% off", { query: "\\%", regex: true }), ["%"]);
+  assert.deepStrictEqual(spans("a\\{b", { query: "\\\\\\{", regex: true }), ["\\{"]);
+});
+check("find: an invalid expression is said, not thrown; empty matches are left out", () => {
+  const r = FindLogic.matches("abc", { query: "(a", regex: true });
+  assert.deepStrictEqual([r.list.length, r.error], [0, "Invalid pattern"]);
+  assert.deepStrictEqual(FindLogic.matches("abc", { query: "" }).list, []);
+  assert.deepStrictEqual(spans("ab\nab", { query: "^|x*", regex: true }), []);
+  assert.deepStrictEqual(spans("ab\nab", { query: "^a", regex: true }), ["a", "a"], "^ is each line's start");
+  const capped = FindLogic.matches("aaaa", { query: "a" }, 3);
+  assert.deepStrictEqual([capped.list.length, capped.more], [3, true]);
+});
+check("replace: $1, $&, $$ in a regular expression; as typed otherwise", () => {
+  const opts = { query: "(\\w+)@(\\w+)", regex: true };
+  const text = "x a@b y c@d";
+  const { list } = FindLogic.matches(text, opts);
+  assert.strictEqual(FindLogic.replaceAll(text, list, "$2 at $1 [$&] $$ $3 $0", opts), "x b at a [a@b] $ $3 $0 y d at c [c@d] $ $3 $0");
+  assert.strictEqual(FindLogic.replaceAll(text, list, "$10", opts), "x a0 y c0", "$10 with one digit's group, as String.replace");
+  const lit = { query: "a@b" };
+  assert.strictEqual(FindLogic.replaceAll(text, FindLogic.matches(text, lit).list, "$1$&", lit), "x $1$& y c@d");
+  // the same as String.prototype.replace
+  const re = /(\w+)@(\w+)/g;
+  assert.strictEqual(FindLogic.replaceAll(text, list, "<$2|$1|$&>", opts), text.replace(re, "<$2|$1|$&>"));
+});
+check("find: lines and columns of the matches, and a long line's excerpt", () => {
+  const text = "one\r\ntwo cat\n\ncat";
+  const where = FindLogic.lines(text, FindLogic.matches(text, { query: "cat" }).list);
+  assert.deepStrictEqual(where, [{ line: 1, ch: 4, len: 3, text: "two cat" }, { line: 3, ch: 0, len: 3, text: "cat" }]);
+  const long = "x".repeat(100) + "HIT" + "y".repeat(100);
+  const e = FindLogic.excerpt(long, 100, 3);
+  assert.strictEqual(e.hit, "HIT");
+  assert.ok(e.before.startsWith("…") && e.after.endsWith("…") && e.before.length + e.after.length < 90, JSON.stringify(e));
+  assert.deepStrictEqual(FindLogic.excerpt("  short cat", 8, 3), { before: "short ", hit: "cat", after: "" });
+});
+check("words: comments, the preamble, math and commands are not words", () => {
+  const W = (s, o) => FindLogic.wordCount(s, "tex", o);
+  assert.strictEqual(W("\\documentclass{article}\n\\usepackage{amsmath}\nPreamble words\n\\begin{document}\nOne two\n\\end{document}\nafter"), 2);
+  assert.strictEqual(W("One % two three\nfour 50\\% five"), 4, "a comment to the line's end; \\% is not one");
+  assert.strictEqual(W("a line\\\\% comment\nnext"), 3, "\\\\ then % is a comment");
+  assert.strictEqual(W("Let $x^2 + y$ be \\(z\\) and \\[ w \\] or $$ v $$ done"), 5);
+  assert.strictEqual(W("Text \\begin{align*} a &= b \\\\ c \\end{align*} more \\begin{equation}\\label{e} x \\end{equation} end"), 3);
+  assert.strictEqual(W("\\section{Main result}\\label{sec:main} By \\cref{thm:a} and \\cite[p.~3]{knuth} we \\emph{see}."), 6);
+  assert.strictEqual(W("\\href{https://example.com/a-b}{the site} \\includegraphics[width=3cm]{fig/one.pdf}"), 2);
+  assert.strictEqual(W("\\begin{theorem}[Fermat] It's well-known.\\end{theorem}"), 3, "inner ' and - keep a word whole");
+  assert.strictEqual(W("Line one\\\\[2pt] line two"), 4, "\\\\[2pt] is a line break, not \\[");
+  assert.strictEqual(W("Price \\$5 and \\$6"), 4);
+  assert.strictEqual(W("Preamble \\begin{document} body"), 1);
+  assert.strictEqual(W("Preamble \\begin{document} body", { body: false }), 2, "a selection has no preamble");
+});
+check("words: CJK characters each count; Markdown without code and math", () => {
+  assert.strictEqual(FindLogic.wordCount("中文字数 and English", "tex"), 6);
+  assert.strictEqual(FindLogic.wordCount("# Title\n\nSome `code here` text $x+y$ [link](http://a.b/c d).\n```\nnot words\n```\nend", "md"), 5);
+  assert.strictEqual(FindLogic.wordCount("plain % text", "txt"), 2);
+  assert.deepStrictEqual(["a.tex", "b.md", "c.txt", "d.bib", "e.sty"].map(FindLogic.wordKind), ["tex", "md", "txt", null, null]);
+});
+
 Promise.all(pending).then(() => {
   if (failures.length) {
     console.error(failures.join("\n"));

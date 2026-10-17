@@ -5,7 +5,6 @@
 <title>prism-local</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/vendor/codemirror.css">
-<link rel="stylesheet" href="/static/vendor/dialog.css">
 <link rel="stylesheet" href="/static/vendor/show-hint.css">
 <link rel="stylesheet" href="/static/vendor/foldgutter.css">
 <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
@@ -72,9 +71,30 @@
   <section id="editor-pane">
     <div id="editor-head">
       <div id="tabs"></div>
-      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. ⌘F search · Ctrl-Space complete">PDF</button>
+      <button id="btn-find" class="icon ghost" data-icon="search" title="Find and replace in this file (⌘F, ⌘⌥F / Ctrl+H)" aria-label="Find and replace"></button>
+      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. Ctrl-Space complete">PDF</button>
     </div>
     <div id="banner" hidden></div>
+    <div id="find" hidden role="search">
+      <button id="find-more" class="icon tiny ghost" data-icon="right" title="Replace (⌘⌥F / Ctrl+H)" aria-label="Show replace" aria-expanded="false"></button>
+      <div class="find-rows">
+        <div class="find-row">
+          <input id="find-q" type="text" placeholder="Find" spellcheck="false" autocomplete="off" aria-label="Find">
+          <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
+          <button type="button" class="opt" data-opt="wholeWord" title="Whole word (Alt+W)" aria-pressed="false"><u>ab</u></button>
+          <button type="button" class="opt" data-opt="regex" title="Regular expression (Alt+R)" aria-pressed="false">.*</button>
+          <span id="find-count" class="count" role="status"></span>
+          <button type="button" class="icon tiny" data-step="-1" data-icon="up" title="Previous (Shift+Enter)" aria-label="Previous"></button>
+          <button type="button" class="icon tiny" data-step="1" data-icon="down" title="Next (Enter)" aria-label="Next"></button>
+          <button type="button" class="icon tiny" data-close="1" title="Close (Esc)" aria-label="Close">×</button>
+        </div>
+        <div class="find-row" id="find-replace" hidden>
+          <input id="find-r" type="text" placeholder="Replace" spellcheck="false" autocomplete="off" aria-label="Replace">
+          <button type="button" id="find-one" class="tiny" title="Replace this one (Enter)">Replace</button>
+          <button type="button" id="find-all" class="tiny" title="Replace all (Ctrl+Alt+Enter)">Replace all</button>
+        </div>
+      </div>
+    </div>
     <div id="editor"></div>
     <div id="empty-editor">Select a file on the left.</div>
     <div id="agent-view" hidden>
@@ -166,9 +186,6 @@
 <script src="/static/vendor/stex.js"></script>
 <script src="/static/texhighlight.js"></script>
 <script src="/static/vendor/markdown.js"></script>
-<script src="/static/vendor/searchcursor.js"></script>
-<script src="/static/vendor/dialog.js"></script>
-<script src="/static/vendor/search.js"></script>
 <script src="/static/vendor/matchbrackets.js"></script>
 <script src="/static/vendor/closebrackets.js"></script>
 <script src="/static/vendor/active-line.js"></script>
@@ -185,6 +202,7 @@
 <script src="/static/syncstate.js"></script>
 <script src="/static/texcomplete.js"></script>
 <script src="/static/chatlogic.js"></script>
+<script src="/static/findlogic.js"></script>
 <script src="/static/tabs.js"></script>
 <script src="/static/watch.js"></script>
 <script src="/static/turn.js"></script>
