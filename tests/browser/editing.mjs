@@ -1,7 +1,7 @@
 import { closeSocket } from "./close.mjs";
 // The editor's basics on the real page, with real keys: find and replace in the open file, search the project.
 // usage: node editing.mjs <editor url> <project folder>
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const [url, root] = process.argv.slice(2);
@@ -9,6 +9,7 @@ const results = [];
 const check = (name, ok, detail = "") => results.push(`${ok ? "PASS" : "FAIL"} ${name}${detail ? ": " + detail : ""}`);
 const FIND_TEXT = "alpha beta alpha\nGamma Alpha\nalphabet\n";
 writeFileSync(join(root, "find.tex"), FIND_TEXT);
+mkdirSync(join(root, "sec"), { recursive: true });      // the checks before may have moved it
 
 const tab = await (await fetch("http://127.0.0.1:9333/json/new?" + encodeURIComponent(url), { method: "PUT" })).json();
 const ws = new WebSocket(tab.webSocketDebuggerUrl);
