@@ -375,7 +375,10 @@ function psOpen() {
   PS.open = true;
   $("#search-pane").hidden = false;
   $("#sidebar").classList.add("searching");
+  const mode = store.get("psearch.mode", "find");
   const sel = cm.hasFocus() ? cm.getSelection() : "";
+  psMode(mode);                      // the one used last
+  if (mode === "agent") return;
   if (sel && !sel.includes("\n") && sel.length < 200) psQ.value = PS.opts.regex ? regexEscape(sel) : sel;
   psQ.focus(); psQ.select();
   psRun();
@@ -384,6 +387,7 @@ function psClose() {
   PS.open = false; PS.seq++;
   $("#search-pane").hidden = true;
   $("#sidebar").classList.remove("searching");
+  asWide(false);
   if (activeTab()) cm.focus();
 }
 function psSchedule(ms = 250) { clearTimeout(PS.timer); PS.timer = setTimeout(psRun, ms); }
@@ -436,13 +440,14 @@ function psRender() {
 }
 // Opens a result's file and selects the match; if the file changed since the search, the
 // match nearest to where it was.
-async function psGo(r, x) {
+// again: the matches in the file as it is now (the search's by default).
+async function psGo(r, x, again = (now) => FindLogic.matches(now, psOpts()).list) {
   await openFile(r.path);
   if (S.active !== r.path) return;
   let { from, to } = x;
   const now = cm.getValue();
   if (now !== r.text) {
-    const again = FindLogic.matches(now, psOpts()).list;
+    again = again(now);
     if (!again.length) return;
     ({ from, to } = again.reduce((a, b) => Math.abs(b.from - x.from) < Math.abs(a.from - x.from) ? b : a));
   }
@@ -468,31 +473,40 @@ async function psReplaceAll() {
   if (C.editTurn && closedFiles.length)
     return toast("The agent is editing the files: replace in the project once its turn has ended.", true);
   if (!confirm(`Replace ${Util.plural(n, "match", "matches")} in ${Util.plural(todo.length, "file")} with “${repl}”?`)) return;
+  const failed = await applyChanges(todo.map(({ path, f, list }) =>
+    ({ path, f, list: list.map((x) => ({ from: x.from, to: x.to, text: FindLogic.expand(repl, x.m, opts) })) })));
+  const done = todo.length - failed.length;
+  toast(`Replaced in ${Util.plural(done, "file")}.` + (failed.length ? ` Not replaced in: ${failed.join(", ")}.` : ""), failed.length > 0);
+  await poll();
+  psRun();
+}
+// Makes changes ({from, to, text}, in order) in files as they were read (f: from
+// projectTexts): an open file in its tab (one ⌘Z there takes them back; saved as typed),
+// the others on disk, each only if unchanged since it was read. The files not changed, and why.
+async function applyChanges(todo) {
   const failed = [];
   for (const { path, f, list } of todo) {
     const t = TABS.get(path);
+    if (t && t.doc.getValue() !== f.content) { failed.push(path + " (edited since)"); continue; }
     if (t && t === activeTab()) {
       // as Replace all in the file: one step to take back
       cm.operation(() => {
         for (let i = list.length - 1; i >= 0; i--)
-          cm.replaceRange(FindLogic.expand(repl, list[i].m, opts), cm.posFromIndex(list[i].from), cm.posFromIndex(list[i].to), "+find");
+          cm.replaceRange(list[i].text, cm.posFromIndex(list[i].from), cm.posFromIndex(list[i].to), "+find");
       });
     } else if (t) {
-      // a tab in the background: one change from the first match to the last, so one ⌘Z there
-      const a = list[0].from, b = list[list.length - 1].to, text = FindLogic.replaceAll(f.content, list, repl, opts);
+      // a tab in the background: one change from the first to the last, so one ⌘Z there
+      const a = list[0].from, b = list[list.length - 1].to, text = AgentSearch.apply(f.content, list);
       t.doc.replaceRange(text.slice(a, text.length - (f.content.length - b)), t.doc.posFromIndex(a), t.doc.posFromIndex(b), "+find");
       updateTabState(t); scheduleSave(t);
     } else {
-      const content = FindLogic.replaceAll(f.content, list, repl, opts);
+      const content = AgentSearch.apply(f.content, list);
       const r = await Q.saveFile({ path, content, base_mtime: f.mtime });
       if (r._status === 200) TEXTS.set(path, { path, mtime: r.mtime, content });
       else failed.push(path + (r.conflict ? " (changed on disk meanwhile)" : r.error ? ` (${r.error})` : ""));
     }
   }
-  const done = todo.length - failed.length;
-  toast(`Replaced in ${Util.plural(done, "file")}.` + (failed.length ? ` Not replaced in: ${failed.join(", ")}.` : ""), failed.length > 0);
-  await poll();
-  psRun();
+  return failed;
 }
 function psToggle(opt) {
   PS.opts[opt] = !PS.opts[opt];
@@ -536,6 +550,203 @@ $("#ps-results").addEventListener("click", (e) => {
   li.classList.add("cur");
   psGo(r, r.list[+li.dataset.k]);
 });
+
+/* ------------------------------------------------------------------ search with the agent */
+// You describe a change ("rename the index i to j in every formula"); the agent (the one
+// chosen in its panel) reads the project in an Ask turn of its own, not in the panel's
+// conversation, and proposes rules and changes (agentsearch.js). Every change is listed to
+// review, the rules can be edited here, and Apply makes the ones ticked.
+const AS_WIDTH = 400;                  // the sidebar is widened to this while the agent's changes show
+const asQ = $("#as-q");
+const AS = { job: null, stopping: false, proposal: null, result: null, texts: null, off: new Set(), seq: 0, width: null };
+const asKey = (path, c) => `${path}:${c.from}:${c.to}`;
+function psMode(mode) {
+  const agent = mode === "agent";
+  for (const b of $("#search-pane").querySelectorAll("[data-psmode]")) b.setAttribute("aria-selected", String(b.dataset.psmode === mode));
+  $("#ps-find").hidden = agent; $("#ps-agent").hidden = !agent;
+  store.set("psearch.mode", mode);
+  asWide(agent && !!AS.result);
+  if (agent) { $("#as-who").textContent = `with ${provLabel()}`; asQ.focus(); } else psQ.focus();
+}
+// The changes need room: the sidebar is widened while they show, and given back after.
+function asWide(on) {
+  const bar = $("#sidebar");
+  if (on && AS.width === null && bar.offsetWidth < AS_WIDTH) { AS.width = bar.style.width; bar.style.width = AS_WIDTH + "px"; }
+  else if (!on && AS.width !== null) { bar.style.width = AS.width; AS.width = null; }
+}
+function asStatus(text, bad = false) { const s = $("#as-status"); s.textContent = text; s.classList.toggle("bad", bad); }
+function asBusy(on) {
+  const b = $("#as-go");
+  b.textContent = on ? "Stop" : "Ask the agent";
+  b.classList.toggle("primary", !on);
+}
+async function asAsk() {
+  if (AS.job) {                        // the button is Stop meanwhile
+    AS.stopping = true; asStatus("Stopping…");
+    return Q.stop(AS.job);
+  }
+  const request = asQ.value.trim();
+  if (!request) return asQ.focus();
+  if (C.job) return asStatus("The agent is busy with a message in its panel: ask again when it has finished.", true);
+  if (!P.projectKey) return asStatus("Wait a moment: the project is still loading.", true);
+  const saved = await TABS.saveAll();                       // the agent reads the files on disk
+  if (!saved.ok) return asStatus(Tabs.unsavedWhy(saved), true);
+  const provider = C.provider;
+  const prompt = AgentSearch.prompt(request, { main: S.document[0] || BUILD.main, documentFiles: S.document });
+  const r = await Q.agent({ prompt, session_id: null, mode: "ask", model: C.model, effort: C.effort, provider, project_key: P.projectKey });
+  if (r.error || r._status !== 200) return asStatus(r.error || "The agent could not start.", true);
+  AS.job = r.job; AS.stopping = false; asBusy(true);
+  asClear();                           // the last proposal goes: this one replaces it
+  const t = Turn.create(), t0 = Date.now();
+  let reply = "", failed = null, outcome = null, after = 0, attempts = 0;
+  const timer = setInterval(() => asStatus(`${provLabel()}: ${t.status} ${Math.round((Date.now() - t0) / 1000)}s`), 1000);
+  try {
+    for (let done = false; !done;) {
+      const d = await Q.events(AS.job, after, document.visibilityState === "hidden" ? 0 : undefined);
+      if (d._status !== 200) {
+        if (Turn.pollFailed(d._status, attempts) === "retry") { await new Promise((res) => setTimeout(res, Turn.pollDelay(attempts++))); continue; }
+        failed = "The connection to the agent was lost."; break;
+      }
+      attempts = 0;
+      for (const s of t.feed(d.events)) {
+        if (s.draw === "message") reply = s.text;
+        else if (s.draw === "error") failed = s.event.message;
+        else if (s.draw === "done") outcome = s.event.outcome;
+      }
+      after += d.events.length; done = d.done;
+      if (document.visibilityState === "hidden") await new Promise((res) => setTimeout(res, 2000));
+    }
+  } finally {
+    clearInterval(timer);
+    for (const s of t.end()) if (s.draw === "message") reply = s.text;
+    AS.job = null; asBusy(false);
+  }
+  if (AS.stopping) return asStatus("Stopped.");
+  const p = AgentSearch.parse(reply);
+  if (p.error) {
+    asStatus((failed ? failed + " " : "") + p.error, true);
+    $("#as-summary").innerHTML = reply ? `<details><summary>The agent's answer</summary>${renderMd(reply)}</details>` : "";
+    return;
+  }
+  asStatus(outcome === "failed" && failed ? failed : "");
+  AS.proposal = p; AS.off.clear();
+  $("#as-summary").innerHTML = renderMd(p.summary || "");
+  asRules();
+  await asPreview();
+}
+function asClear() {
+  AS.proposal = AS.result = null; AS.seq++;
+  for (const id of ["#as-summary", "#as-rules", "#as-results"]) $(id).innerHTML = "";
+  $("#as-applybar").hidden = $("#as-problems").hidden = true;
+  asWide(false);
+}
+// The rules, each editable: what to find, what to put, where; switched off by its box.
+function asRules() {
+  const where = (w) => ["math", "text", "anywhere"].map((x) =>
+    `<option value="${x}"${x === w ? " selected" : ""}>${{ math: "in formulas", text: "in the text", anywhere: "anywhere" }[x]}</option>`).join("");
+  $("#as-rules").innerHTML = AS.proposal.rules.map((r, k) => `<li data-k="${k}" class="${r.off ? "off" : ""}">
+    <div class="rule-head"><input type="checkbox" data-f="on"${r.off ? "" : " checked"} title="Use this rule"> Rule ${k + 1}
+      <select data-f="where" title="Where it changes">${where(r.where)}</select>
+      <label title="Match case"><input type="checkbox" data-f="caseSensitive"${r.caseSensitive ? " checked" : ""}> Aa</label>
+      <span class="n"></span></div>
+    <div class="rule-row"><span>Find</span><input type="text" data-f="find" value="${esc(r.find)}" spellcheck="false"></div>
+    <div class="rule-row"><span>Replace</span><input type="text" data-f="replace" value="${esc(r.replace)}" spellcheck="false"></div>
+    ${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}</li>`).join("");
+}
+let asEditTimer = null;
+function asRuleEdited(e) {
+  const li = e.target.closest("li[data-k]"), f = e.target.dataset.f;
+  if (!li || !f) return;
+  const r = AS.proposal.rules[+li.dataset.k];
+  if (f === "on") { r.off = !e.target.checked; li.classList.toggle("off", r.off); }
+  else if (f === "caseSensitive") r.caseSensitive = e.target.checked;
+  else if (f === "where") r.where = e.target.value;
+  else if (f === "replace") r.replace = e.target.value;
+  else if (f === "find") {
+    const bad = !e.target.value || !!FindLogic.pattern({ query: e.target.value, regex: true }).error;
+    e.target.classList.toggle("bad", bad);
+    if (bad) return;                   // the last valid expression stays until this one is
+    r.find = e.target.value;
+  }
+  clearTimeout(asEditTimer); asEditTimer = setTimeout(asPreview, f === "find" || f === "replace" ? 300 : 0);
+}
+$("#as-rules").addEventListener("input", asRuleEdited);
+$("#as-rules").addEventListener("change", asRuleEdited);
+// Each change the proposal makes in the project, as the files are now.
+async function asPreview() {
+  if (!AS.proposal) return;
+  const seq = ++AS.seq, paths = editablePaths(), texts = await projectTexts(paths);
+  if (seq !== AS.seq) return;
+  AS.texts = texts;
+  AS.result = AgentSearch.changes(paths.filter((p) => texts.get(p)?.content !== undefined).map((p) => [p, texts.get(p).content]), AS.proposal);
+  asWide(true);
+  asRender();
+}
+function asRender() {
+  const { files, problems, counts } = AS.result;
+  for (const li of $("#as-rules").children) li.querySelector(".n").textContent = Util.plural(counts.rules[+li.dataset.k], "change");
+  const prob = $("#as-problems");
+  prob.hidden = !problems.length;
+  prob.querySelector("summary").textContent = `${Util.plural(problems.length, "proposal")} could not be used`;
+  prob.querySelector("ul").innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join("");
+  let html = "", n = 0, on = 0;
+  files.forEach((f, i) => {
+    const name = f.path.split("/").pop(), mine = f.changes.filter((c) => !AS.off.has(asKey(f.path, c))).length;
+    n += f.changes.length; on += mine;
+    html += `<li class="as-file" data-i="${i}" title="${esc(f.path)}"><input type="checkbox" data-file="${i}"${mine === f.changes.length ? " checked" : ""}>`
+      + `<span>${esc(name)}</span><span class="dir">${esc(parentDir(f.path))}</span><span class="n">${mine}/${f.changes.length}</span></li>`;
+    f.changes.forEach((c, k) => {
+      const off = AS.off.has(asKey(f.path, c));
+      const e = FindLogic.excerpt(c.before, c.ch, Math.min(c.to - c.from, c.before.length - c.ch), 70);
+      const by = c.by === "rule" ? `rule ${c.index + 1}` : (AS.proposal.edits[c.index].note || "listed by the agent");
+      html += `<li class="as-change${off ? " off" : ""}"><input type="checkbox" data-c="${i}:${k}"${off ? "" : " checked"}>`
+        + `<span class="ln">${c.line + 1}</span><span class="diff" data-go="${i}:${k}" title="Show it in the file">`
+        + `${esc(e.before)}<del>${esc(e.hit)}</del><ins>${esc(c.text)}</ins>${esc(e.after)}<span class="by">${esc(by)}</span></span></li>`;
+    });
+  });
+  $("#as-results").innerHTML = html || `<li class="muted">The proposal changes nothing in the project's files.</li>`;
+  $("#as-applybar").hidden = !n;
+  $("#as-count").textContent = `${on} of ${Util.plural(n, "change")} in ${Util.plural(files.length, "file")}`;
+  $("#as-all").checked = on === n; $("#as-all").indeterminate = on > 0 && on < n;
+  $("#as-apply").disabled = !on;
+}
+$("#as-results").addEventListener("change", (e) => {
+  const { files } = AS.result, box = e.target;
+  const set = (path, c, keep) => { if (keep) AS.off.delete(asKey(path, c)); else AS.off.add(asKey(path, c)); };
+  if (box.dataset.file) { const f = files[+box.dataset.file]; for (const c of f.changes) set(f.path, c, box.checked); }
+  else if (box.dataset.c) { const [i, k] = box.dataset.c.split(":").map(Number); set(files[i].path, files[i].changes[k], box.checked); }
+  asRender();
+});
+$("#as-all").addEventListener("change", (e) => {
+  for (const f of AS.result.files) for (const c of f.changes) { if (e.target.checked) AS.off.delete(asKey(f.path, c)); else AS.off.add(asKey(f.path, c)); }
+  asRender();
+});
+$("#as-results").addEventListener("click", (e) => {
+  const d = e.target.closest("[data-go]"); if (!d) return;
+  const [i, k] = d.dataset.go.split(":").map(Number), f = AS.result.files[i];
+  psGo({ path: f.path, text: AS.texts.get(f.path).content }, f.changes[k], (now) =>
+    AgentSearch.changes([[f.path, now]], AS.proposal).files[0]?.changes || []);
+});
+async function asApply() {
+  const todo = AS.result.files.map((f) => ({ path: f.path, f: AS.texts.get(f.path), list: f.changes.filter((c) => !AS.off.has(asKey(f.path, c))) }))
+    .filter((x) => x.list.length);
+  const n = todo.reduce((k, x) => k + x.list.length, 0);
+  if (!n) return;
+  if (C.editTurn && todo.some((x) => !TABS.get(x.path)))
+    return toast("The agent is editing the files: apply once its turn has ended.", true);
+  if (!confirm(`Apply ${Util.plural(n, "change")} in ${Util.plural(todo.length, "file")}?`)) return;
+  const failed = await applyChanges(todo);
+  toast(`Changed ${Util.plural(todo.length - failed.length, "file")}.` + (failed.length ? ` Not changed: ${failed.join(", ")}; preview again and apply.` : ""), failed.length > 0);
+  await poll();
+  await asPreview();
+}
+$("#as-apply").onclick = () => asApply();
+$("#as-go").onclick = () => asAsk();
+asQ.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); asAsk(); }
+  else if (e.key === "Escape") { e.preventDefault(); psClose(); }
+});
+$("#search-pane .ps-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-psmode]"); if (b) psMode(b.dataset.psmode); });
 /* ------------------------------------------------------------------ snippets */
 // Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours, and how
 // they expand, are set in Home → Settings (~/.prism-local/snippets.js and settings.json), so

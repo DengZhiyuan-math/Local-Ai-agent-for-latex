@@ -84,6 +84,7 @@ ${FENCE}
       const regs = hasMath(path) ? FL.regions(content) : { comments: [], math: [[0, 0]] };
       const found = [];
       proposal.rules.forEach((r, k) => {
+        if (r.off) return;                       // switched off in the panel
         const list = FL.matches(content, { query: r.find, regex: true, caseSensitive: r.caseSensitive }, Infinity).list;
         for (const x of FL.scoped(list, regs, r.where)) {
           const text = FL.expand(r.replace, x.m, { regex: true });

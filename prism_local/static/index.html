@@ -56,7 +56,13 @@
 <main id="layout">
   <aside id="sidebar">
     <section id="search-pane" hidden role="search">
-      <h3>Search <button id="ps-close" class="tiny icon ghost" title="Back to the files (Esc)" aria-label="Close search">×</button></h3>
+      <h3>Search
+        <span class="ps-modes" role="tablist">
+          <button type="button" role="tab" data-psmode="find" aria-selected="true" title="Find and replace text">Find</button>
+          <button type="button" role="tab" data-psmode="agent" aria-selected="false" title="Describe a change; the agent proposes it, you review each place">✦ With the agent</button>
+        </span>
+        <button id="ps-close" class="tiny icon ghost" title="Back to the files (Esc)" aria-label="Close search">×</button></h3>
+      <div id="ps-find" class="ps-body">
       <div class="ps-form">
         <div class="ps-row">
           <button id="ps-more" class="icon tiny ghost" data-icon="right" title="Replace in the project" aria-label="Show replace" aria-expanded="false"></button>
@@ -74,6 +80,26 @@
       </div>
       <p id="ps-summary" role="status"></p>
       <ul id="ps-results"></ul>
+      </div>
+      <div id="ps-agent" class="ps-body" hidden>
+        <textarea id="as-q" rows="3" spellcheck="true" aria-label="The change to look for"
+          placeholder="Describe the change, e.g. “rename the index i to j in every formula”, or “write \mathscr{O} instead of \mathcal{O}”"></textarea>
+        <div class="ps-row as-go-row">
+          <button type="button" id="as-go" class="primary tiny" title="The agent reads the project and proposes the changes; nothing changes until you apply them (Ctrl+Enter)">Ask the agent</button>
+          <span id="as-who"></span>
+        </div>
+        <p id="as-status" role="status"></p>
+        <div id="as-out">
+          <div id="as-summary"></div>
+          <ul id="as-rules"></ul>
+          <details id="as-problems" hidden><summary></summary><ul></ul></details>
+          <div class="ps-row" id="as-applybar" hidden>
+            <label><input type="checkbox" id="as-all" checked> <span id="as-count"></span></label>
+            <button type="button" id="as-apply" class="primary tiny">Apply</button>
+          </div>
+          <ul id="as-results"></ul>
+        </div>
+      </div>
     </section>
     <section>
       <h3>Files <button id="btn-search" class="tiny icon ghost" data-icon="search" title="Search the project (⌘⇧F)" aria-label="Search the project"></button></h3>
@@ -229,6 +255,7 @@
 <script src="/static/texcomplete.js"></script>
 <script src="/static/chatlogic.js"></script>
 <script src="/static/findlogic.js"></script>
+<script src="/static/agentsearch.js"></script>
 <script src="/static/tabs.js"></script>
 <script src="/static/watch.js"></script>
 <script src="/static/turn.js"></script>

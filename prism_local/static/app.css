@@ -222,8 +222,8 @@ button.flip .ico { transform: rotate(180deg); }
 #search-pane .ps-row { display: flex; align-items: center; gap: 3px; }
 #search-pane .ps-row[hidden] { display: none; }
 #search-pane .ps-opts { padding-left: 24px; }
-#search-pane input { flex: 1; min-width: 0; font: 13px var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
-#search-pane input.bad { border-color: var(--err); }
+#search-pane .ps-form input { flex: 1; min-width: 0; font: 13px var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
+#search-pane .ps-form input.bad { border-color: var(--err); }
 #search-pane #ps-replace input { margin-left: 24px; }
 #search-pane .opt { font: 600 11.5px var(--mono); min-width: 24px; padding: 2px 4px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 4px; }
 #search-pane .opt[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
@@ -243,6 +243,48 @@ button.flip .ico { transform: rotate(180deg); }
 #ps-results li.ps-hit .ln { color: var(--muted); display: inline-block; min-width: 2.6em; margin-right: 4px; text-align: right; }
 #ps-results li.ps-hit mark { background: rgba(255, 196, 0, .45); color: inherit; border-radius: 2px; }
 #ps-results li.ps-hit.cur { background: var(--sel); }
+#search-pane .ps-body { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+#search-pane .ps-body[hidden] { display: none; }
+#search-pane .ps-modes { display: inline-flex; gap: 2px; margin-left: 8px; margin-right: auto; text-transform: none; letter-spacing: 0; }
+#search-pane .ps-modes button { font-size: 11px; height: 20px; padding: 0 7px; border-radius: 10px; color: var(--muted); background: none; border: 1px solid transparent; }
+#search-pane .ps-modes button[aria-selected="true"] { color: var(--accent); border-color: var(--accent); background: var(--sel); }
+/* With the agent (app.js AS): your request, the agent's rules and each change to review. */
+#ps-agent { overflow: auto; padding: 2px 8px 8px; gap: 6px; }
+#ps-agent > * { flex: none; }          /* it scrolls: nothing in it is squeezed */
+#ps-agent input[type="checkbox"] { margin: 0; flex: none; }
+#as-q { width: 100%; box-sizing: border-box; resize: vertical; font: 13px var(--sans); color: var(--text); background: var(--cm-bg);
+  border: 1px solid var(--border); border-radius: 5px; padding: 5px 6px; }
+#as-who { font-size: 11px; color: var(--muted); }
+#as-status { margin: 0; font-size: 11.5px; color: var(--muted); }
+#as-status.bad { color: var(--err); }
+#as-summary { font-size: 12px; white-space: pre-wrap; }
+#as-rules { display: flex; flex-direction: column; gap: 6px; }
+#as-rules li { padding: 5px 6px !important; border: 1px solid var(--border); border-radius: 6px; cursor: default !important; white-space: normal !important; }
+#as-rules li:hover { background: none !important; }
+#as-rules li.off { opacity: .55; }
+#as-rules .rule-head { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }
+#as-rules .rule-head .n { margin-left: auto; }
+#as-rules .rule-row { display: flex; align-items: center; gap: 4px; margin-top: 4px; }
+#as-rules .rule-row span { width: 50px; flex: none; font-size: 11px; color: var(--muted); }
+#as-rules input[type="text"] { flex: 1; min-width: 0; font: 12px var(--mono); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 4px; padding: 3px 5px; }
+#as-rules input.bad { border-color: var(--err); }
+#as-rules select { font-size: 11.5px; }
+#as-rules .note { margin-top: 4px; font-size: 11.5px; color: var(--text); }
+#as-problems { font-size: 11.5px; color: var(--warn); }
+#as-problems li { white-space: normal !important; cursor: default !important; padding: 1px 0 !important; }
+#as-applybar { justify-content: space-between; position: sticky; top: -2px; background: var(--panel); padding: 4px 0; z-index: 1; }
+#as-applybar label { font-size: 12px; display: flex; align-items: center; gap: 5px; }
+#as-results li { font-size: 12px; padding: 1px 0 !important; white-space: normal !important; }
+#as-results li.as-file { display: flex; align-items: center; gap: 5px; padding-top: 6px !important; font-weight: 600; }
+#as-results li.as-file .dir { color: var(--muted); font-weight: 400; font-size: 11px; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#as-results li.as-file .n { color: var(--muted); font-weight: 400; font-size: 11px; }
+#as-results li.as-change { display: flex; align-items: flex-start; gap: 5px; padding-left: 4px !important; }
+#as-results li.as-change .ln { color: var(--muted); font: 11px var(--mono); min-width: 2.4em; text-align: right; padding-top: 1px; }
+#as-results li.as-change .diff { font: 11.5px var(--mono); overflow-wrap: anywhere; cursor: pointer; flex: 1; }
+#as-results li.as-change.off .diff { opacity: .5; }
+#as-results del { background: var(--cm-del-word); color: var(--cm-del); text-decoration: line-through; border-radius: 2px; }
+#as-results ins { background: var(--cm-add-word); color: var(--cm-add); text-decoration: none; border-radius: 2px; }
+#as-results .by { font: 10.5px var(--sans); color: var(--muted); margin-left: 4px; }
 #top #btn-home { font-size: 17px; margin-left: -6px; }
 .gutter { width: 5px; flex: none; cursor: col-resize; background: var(--border); }
 .gutter:hover, .gutter.drag { background: var(--accent); }
