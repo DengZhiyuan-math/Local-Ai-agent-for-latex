@@ -389,6 +389,50 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual(self.last(), ("Agent: Expand the remark into a paragraph", ["main.tex"]))
         self.assertIn("sec.tex", git(self.root, "status", "--porcelain"), "your edit is not in it")
 
+    @unittest.skipUnless(sys.platform in ('win32', 'darwin'), 'native filesystem notifications')
+    def test_worker_syncs_external_edits_without_an_editor_save(self):
+        """Edits by Codex/Explorer must enter the same automatic schedule as browser saves."""
+        self.assert_external_autosave(lambda: self.clock.advance(gitsync.IDLE + 1))
+
+    @unittest.skipUnless(sys.platform in ('win32', 'darwin'), 'native filesystem notifications')
+    def test_external_edit_is_pushed_by_the_real_timer_without_a_manual_action(self):
+        from syncschedule import Schedule
+        self.g.schedule = Schedule()  # actual wall clock, not the fixture's movable clock
+        with mock.patch('syncschedule.IDLE', .15):
+            self.assert_external_autosave()
+
+    def assert_external_autosave(self, advance=None):
+        started = threading.Event()
+        original_start = self.g._start
+
+        def start():
+            original_start()
+            started.set()
+
+        with mock.patch.object(gitsync, 'TICK', .01), mock.patch.object(self.g, '_start', start):
+            worker = threading.Thread(target=self.g.run)
+            worker.start()
+            try:
+                self.assertTrue(started.wait(10))
+                self.assertTrue(self.g.status()['external_watch'])
+                (self.root / 'main.tex').write_text('external edit\n', encoding='utf-8')
+                deadline = time.monotonic() + 2
+                while not self.g.schedule.pending and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(self.g.schedule.pending, 'external edits never reached the automatic sync schedule')
+                if advance:
+                    advance()
+                deadline = time.monotonic() + 10
+                while not self.g.last_push and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(self.g.last_push, self.g.error)
+                self.assertEqual(git(self.remote, 'show', 'main:main.tex'), 'external edit')
+                self.assertTrue(self.last()[0].startswith('Autosave:'))
+            finally:
+                self.g.stop.set()
+                worker.join(10)
+                self.assertFalse(worker.is_alive())
+
     def test_agent_turn_skips_ignored_build_output(self):
         (self.root / ".gitignore").write_text("build/\n", encoding="utf-8")
         git(self.root, "add", ".gitignore")

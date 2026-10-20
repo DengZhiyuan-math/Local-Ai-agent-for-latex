@@ -202,6 +202,19 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
   or change its color from its ⋯ menu.
 - Folders and tags exist only in this list. No file moves on disk unless you choose one
   repository for a folder (below).
+- **Changes in Explorer / Finder**: Windows directory notifications and macOS FSEvents
+  trigger reconciliation. Home receives server-sent events and updates automatically;
+  it does not poll the project list or periodically scan directories. A missing path triggers a recovery
+  scan once, and a persistent missing path is not searched repeatedly. Startup and changes
+  to the registered directory set also reconcile once. On other platforms, missing-path
+  recovery is available without automatic discovery notifications. A group whose name matches its projects' containing
+  disk folder is linked automatically (shown as **Disk folder** in its preview).
+  Inside these containers, new projects with `main.tex` or `prism.json` appear with their
+  subfolders. Same-volume moves and renames within the watched directory trees keep the
+  project's tags, pinned state and history. Deleted or unavailable folders stay listed as
+  missing, so restoring them works; projects explicitly removed from Home stay removed.
+  Hidden folders, build output and directory links are excluded. For a move outside these
+  trees or onto another drive, use **Add existing…** at the new location.
 
 **GitHub**
 
@@ -246,6 +259,9 @@ there by itself:
 - your changes are saved to the project's history two minutes after you stop editing (at
   the latest ten minutes after the first), and every agent turn is saved on its own, with
   your request as its description;
+- on Windows and macOS, native filesystem events also schedule edits made by another
+  editor or an external Codex session while the project is open. They use the same
+  automatic commit and upload flow; build output and git metadata do not schedule saves;
 - everything saved is uploaded to GitHub, and what changed on GitHub (another computer, a
   co-author) is brought in: right when the project opens, then every five minutes. Where
   you and a co-author changed the same lines, both versions are kept for you to choose;

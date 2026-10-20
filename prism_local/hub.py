@@ -49,6 +49,8 @@ from errors import NotFound, say  # noqa: E402
 from proc import NO_WINDOW  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
+import diskprojects  # noqa: E402
+import projectevents  # noqa: E402
 import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
@@ -126,7 +128,7 @@ def _stat(p: Path):
         return None
 
 
-# The Home page asks for every project's facts every ten seconds, and most are the same as
+# The Home page polls project facts, and most are the same as
 # the last time: each is worked out again only when what it is made of changed.
 _TITLES: dict[str, tuple] = {}       # main file -> (its stat, its title)
 _SYNC_FACTS: dict[str, tuple] = {}   # git dir -> (what they depend on, the sync facts)
@@ -193,10 +195,21 @@ def project_info(entry: dict) -> dict:
 
 
 def list_projects() -> dict:
-    data = registry.load_projects()
+    data = diskprojects.refresh()
+    stamp = diskprojects.notifications().stamp()
+    cache_key = (str(registry.state_dir()), stamp)
+    if getattr(list_projects, "event_stamp", None) != cache_key:
+        _SCANS.clear()
+        list_projects.event_stamp = cache_key
     entries = data["projects"]
     with ThreadPoolExecutor(max_workers=8) as ex:
         projects = list(ex.map(project_info, entries))
+    missing = {p["path"] for p in projects if not p["exists"]}
+    recovered = diskprojects.refresh(missing)
+    if recovered != data:
+        data = recovered
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            projects = list(ex.map(project_info, data["projects"]))
     return {"projects": projects, "folders": data.get("folders", []),
             "tags": data.get("tags", {}), "default_parent": default_parent(data),
             "home": str(Path.home())}
@@ -464,6 +477,12 @@ def _add(data: dict, p: Path, folder_id: str = "") -> None:
         data["projects"].append(entry)
     if folder_id:
         entry["folder_id"] = _folder(data, folder_id)["id"]
+    ident = diskprojects.identity(p)
+    if ident is not None:
+        entry["disk_identity"] = ident
+    ignored = data.get("disk_ignored", [])
+    if registry.norm(p) in ignored:
+        ignored.remove(registry.norm(p))
 
 
 # ---------------------------------------------------------------- folders and tags
@@ -861,6 +880,12 @@ def remove_project(pid: str) -> dict:
     """Forget a project. Its files are not touched."""
     def fn(data):
         before = len(data["projects"])
+        for e in data["projects"]:
+            if registry.project_key(Path(e["path"])) == pid:
+                ignored = data.setdefault("disk_ignored", [])
+                key = registry.norm(Path(e["path"]))
+                if key not in ignored:
+                    ignored.append(key)
         data["projects"] = [e for e in data["projects"]
                             if registry.project_key(Path(e["path"])) != pid]
         return len(data["projects"]) < before
@@ -987,6 +1012,8 @@ class Handler(httpbase.Handler):
         if path == "/api/projects":
             return self._json({**list_projects(),
                                "updated": APP.updated()})
+        if path == "/api/projects/events":
+            return projectevents.serve(self)
         if path == "/api/github/repos":
             return self._json({"repos": github.GITHUB.repos()})
         if path == "/api/tools":                  # Getting started: git, gh, LaTeX, Claude Code, the login

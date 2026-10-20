@@ -44,6 +44,7 @@ import keepboth
 import registry
 import gitenv
 import repoview
+import diskwatch
 from errors import say
 from repository import SHARED_MARKER, FilesLock, Place, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
@@ -222,6 +223,8 @@ class GitSync:
         self.clash: list[str] = []            # files you and GitHub both changed (project paths)
         self.kept: list[dict] = []            # where both versions were kept: {"path", "line", "who", "mtime"}
         self.stop = threading.Event()
+        self.source_events = None
+        self.source_generation = 0
 
     @property
     def notice(self) -> str | None:
@@ -826,14 +829,29 @@ class GitSync:
     def tick(self) -> None:
         if not self.active():
             return
+        if self.source_events is not None:
+            generation = self.source_events.stamp()
+            if generation != self.source_generation:
+                self.source_generation = generation
+                self.touched()
         steps = {"commit": lambda: self.commit_all("Autosave"), "push": self.push, "pull": self.pull}
         for step in self.schedule.due(self.busy_fn()):
             self._safe(steps[step])
 
     def run(self) -> None:
-        self._guarded("start", self._start)
-        while not self.stop.wait(TICK):
-            self._guarded("tick", self.tick)
+        # Browser saves call touched(), but files written by another editor or an
+        # external Codex session do not pass through Project.save. Native events
+        # feed those edits into the same schedule, without scanning on every tick.
+        root = self.root_fn()
+        self.source_events = diskwatch.Changes(excluded=(root / self.outdir_fn(),))
+        try:
+            self.source_events.configure([root])
+            self._guarded("start", self._start)
+            while not self.stop.wait(TICK):
+                self._guarded("tick", self.tick)
+        finally:
+            self.source_events.close()
+            self.source_events = None
 
     def _guarded(self, stage: str, fn) -> None:
         """A failure, or a bug, in one step must not end autosave for the session."""
@@ -915,6 +933,7 @@ class GitSync:
               "error": said(self.error), "error_details": details(self.error),
               "remote": self.has_remote, "upstream": self.upstream, "ahead": self.ahead,
               "behind": self.behind, "last_commit": self.last_commit, "last_push": self.last_push or None,
+              "external_watch": bool(self.source_events and self.source_events.watches),
               "pending": self.schedule.pending, "next_autosave": self.schedule.next_autosave()}
         # Kept, not taken by the first who asks: each page shows each notice (by its number)
         # once, also when several ask (the tree's poll, a button's answer, another tab).
