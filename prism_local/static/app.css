@@ -12,6 +12,7 @@
   --cm-selection: rgba(9,105,218,.2); --cm-active-line: #f6f8fa;
   --cm-add: #044f1e; --cm-del: #82071e;
   --cm-add-line: #edf7e3; --cm-add-word: #c0e8a2;
+  --cm-change-edge: rgba(69,119,38,.65); --cm-change-light: #ffffff; --cm-change-shadow: rgba(30,52,19,.44);
   --cm-del-line: #fff0ee; --cm-del-word: #ffc7c4;
   --cm-change-command: #0072a4; --cm-change-environment: #665800; --cm-change-reference: #914900;
   --cm-change-symbol: #3d7600; --cm-change-operator: #a90044; --cm-change-number: #914900;
@@ -37,6 +38,7 @@
     --cm-selection: rgba(135,139,145,.35); --cm-active-line: #22231e;
     --cm-add: #4ccc4c; --cm-del: #ff6b6b;
     --cm-add-line: #002600; --cm-add-word: #003000;
+    --cm-change-edge: rgba(166,226,46,.62); --cm-change-light: rgba(216,255,177,.6); --cm-change-shadow: rgba(0,0,0,.88);
     --cm-del-line: #390000; --cm-del-word: #550000;
     --cm-change-command: #66d9ef; --cm-change-environment: #e6db74; --cm-change-reference: #fd971f;
     --cm-change-symbol: #a6e22e; --cm-change-operator: #ff4689; --cm-change-number: #fd971f;
@@ -56,6 +58,7 @@
   --cm-selection: rgba(135,139,145,.35); --cm-active-line: #22231e;
   --cm-add: #4ccc4c; --cm-del: #ff6b6b;
   --cm-add-line: #002600; --cm-add-word: #003000;
+  --cm-change-edge: rgba(166,226,46,.62); --cm-change-light: rgba(216,255,177,.6); --cm-change-shadow: rgba(0,0,0,.88);
   --cm-del-line: #390000; --cm-del-word: #550000;
   --cm-change-command: #66d9ef; --cm-change-environment: #e6db74; --cm-change-reference: #fd971f;
   --cm-change-symbol: #a6e22e; --cm-change-operator: #ff4689; --cm-change-number: #fd971f;
@@ -333,7 +336,33 @@ button.flip .ico { transform: rotate(180deg); }
 .cm-agent-read-g { box-shadow: inset 3px 0 0 var(--accent); }
 .cm-agent-edit { background: color-mix(in srgb, var(--warn) 22%, transparent); animation: agent-pulse 1.4s ease-in-out infinite; }
 .cm-agent-edit-g { box-shadow: inset 3px 0 0 var(--warn); }
-.cm-agent-changed { background: var(--cm-add-line); }
+.cm-agent-changed {
+  background: var(--cm-add-line); pointer-events: none;
+  box-shadow: inset 1px 0 var(--cm-change-light), inset 2px 0 var(--cm-change-edge), inset -1px 0 var(--cm-change-edge),
+    inset -3px 0 var(--cm-change-shadow);
+}
+/* Only the ends cast a vertical shadow: a continuous edit reads as one raised
+   panel. Background layers leave text, selection and CodeMirror's geometry alone. */
+.cm-agent-changed-start {
+  border-radius: 6px 6px 0 0;
+  box-shadow: inset 0 2px var(--cm-change-light), inset 1px 0 var(--cm-change-light),
+    inset 2px 0 var(--cm-change-edge), inset -1px 0 var(--cm-change-edge),
+    inset -3px 0 var(--cm-change-shadow), 0 -3px 8px -3px var(--cm-change-shadow);
+}
+.cm-agent-changed-end {
+  border-radius: 0 0 6px 6px;
+  box-shadow: inset 1px 0 var(--cm-change-light), inset 2px 0 var(--cm-change-edge),
+    inset -1px 0 var(--cm-change-edge), inset 0 -2px var(--cm-change-edge),
+    inset -3px 0 var(--cm-change-shadow),
+    0 3px 4px -1px var(--cm-change-shadow), 0 10px 18px -5px var(--cm-change-shadow);
+}
+.cm-agent-changed-start.cm-agent-changed-end {
+  border-radius: 6px;
+  box-shadow: inset 0 2px var(--cm-change-light), inset 1px 0 var(--cm-change-light),
+    inset 2px 0 var(--cm-change-edge), inset -1px 0 var(--cm-change-edge), inset 0 -2px var(--cm-change-edge),
+    inset -3px 0 var(--cm-change-shadow),
+    0 3px 4px -1px var(--cm-change-shadow), 0 10px 18px -5px var(--cm-change-shadow);
+}
 .cm-agent-changed-g { box-shadow: inset 3px 0 0 var(--cm-add); }
 @keyframes agent-pulse { 50% { background: color-mix(in srgb, var(--warn) 8%, transparent); } }
 /* The file the agent is on: a pulsing dot in its tab and in the file list. */

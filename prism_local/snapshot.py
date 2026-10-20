@@ -4,7 +4,7 @@ it changed, and putting back what it wrote.
     before, issues = take(root)             # every file: its bytes, mode, link
     ... the turn ...
     after, issues = take(root, since=before)    # what did not change is not read again
-    changes(before, after)                  # [{"path", "diff", "created", "deleted", "undoable"}]
+    changes(before, after)                  # [{"path", "diff", "lines", "created", "deleted", "undoable"}]
     restore(root, before, after, paths)     # back to `before`, where still as `after`
 
 Files are kept as bytes: Undo puts back exactly what was there (line ends, encoding), and a
@@ -16,6 +16,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import os
+import re
 import stat
 import time
 from dataclasses import dataclass, field
@@ -129,10 +130,16 @@ def take(root: Path, skip: str | None = None, since: dict | None = None) -> tupl
 
 def diff(rel: str, a: FileState | None, b: FileState | None) -> str:
     """How `rel` changed from `a` to `b` (None: absent), for the author to read."""
+    return _diff(rel, a, b)[0]
+
+
+def _diff(rel: str, a: FileState | None, b: FileState | None) -> tuple[str, list[list[int]]]:
+    """The readable diff and its added/replaced lines in the final file (0-based,
+    end-exclusive). Derive both from the same diff, before its display is shortened."""
     if any(s and s.link is not None for s in (a, b)):
-        return f"Link changed: {a.link if a else '(absent)'} -> {b.link if b else '(absent)'}\n"
+        return f"Link changed: {a.link if a else '(absent)'} -> {b.link if b else '(absent)'}\n", []
     if any(s and s.data is None for s in (a, b)):
-        return "File changed; content exceeds the Undo snapshot limit.\n"
+        return "File changed; content exceeds the Undo snapshot limit.\n", []
     ad, bd = a.data if a else b"", b.data if b else b""
     try:
         for data in (ad, bd):
@@ -140,19 +147,33 @@ def diff(rel: str, a: FileState | None, b: FileState | None) -> str:
             if b"\x00" in data:
                 raise UnicodeError
     except UnicodeError:
-        return f"Binary file changed ({len(ad)} -> {len(bd)} bytes).\n"
+        return f"Binary file changed ({len(ad)} -> {len(bd)} bytes).\n", []
     text = lambda d: d.decode("utf-8", "replace").replace("\r\n", "\n")  # noqa: E731
     a_lines, b_lines = text(ad).splitlines(keepends=True), text(bd).splitlines(keepends=True)
     if max(len(ad), len(bd)) > DIFF_BYTES or max(len(a_lines), len(b_lines)) > DIFF_LINES:
         return (f"Large file changed ({len(ad)} -> {len(bd)} bytes, {len(a_lines)} -> {len(b_lines)} "
-                "lines): too big to show here; Undo works as for any file.\n")
-    out = "".join(difflib.unified_diff(
+                "lines): too big to show here; Undo works as for any file.\n"), []
+    chunks = list(difflib.unified_diff(
         a_lines, b_lines,
         fromfile=f"a/{rel}" if a is not None else "/dev/null",
         tofile=f"b/{rel}" if b is not None else "/dev/null", n=2))
+    lines, at = [], None
+    for chunk in chunks:
+        header = re.match(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@", chunk)
+        if header:
+            at = int(header[1]) - 1
+        elif at is not None and chunk.startswith("+"):
+            if lines and lines[-1][1] == at:
+                lines[-1][1] = at + 1
+            else:
+                lines.append([at, at + 1])
+            at += 1
+        elif at is not None and chunk.startswith(" "):
+            at += 1
+    out = "".join(chunks)
     if len(out) > DIFF_MAX:
         out = out[:DIFF_MAX] + "\n… (the rest of this diff is not shown)\n"
-    return out or f"(line ends, encoding or file permissions of {rel} changed)\n"
+    return out or f"(line ends, encoding or file permissions of {rel} changed)\n", lines
 
 
 def changed_paths(before: dict, after: dict) -> list[str]:
@@ -164,7 +185,8 @@ def changes(before: dict, after: dict) -> list[dict]:
     out = []
     for rel in changed_paths(before, after):
         a, b = before.get(rel), after.get(rel)
-        out.append({"path": rel, "diff": diff(rel, a, b), "created": a is None, "deleted": b is None,
+        text, lines = _diff(rel, a, b)
+        out.append({"path": rel, "diff": text, "lines": lines, "created": a is None, "deleted": b is None,
                     "undoable": not any(s and s.data is None for s in (a, b))})
     return out
 

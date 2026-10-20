@@ -955,11 +955,11 @@ async function reloadFromDisk(t, discard = false) {
   if (what === "replace") {                          // else the same text: keep cursor and undo
     const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
     t.doc.setValue(r.content);
-    AH.apply(t.path);                                // setValue drops line classes
     t.doc.setCursor(cur);
     if (scroll) cm.scrollTo(scroll.left, scroll.top);
   }
   TABS.synced(t, r.mtime);
+  AH.apply(t.path);                                  // setValue drops classes; a resolved conflict may show them now
   if (t === activeTab()) applyDiagnostics();
 }
 
@@ -2175,6 +2175,21 @@ const AH = {
     }
   },
 
+  // The same final snapshot as the turn card, after its files have reloaded. No
+  // streamed tool arguments or intermediate line numbers are used for green marks.
+  complete(changes) {
+    cm.operation(() => {
+      this.clear("changed");
+      for (const c of changes) {
+        if (c.deleted) continue;
+        const list = Turn.changedLines(c).map(([from, end]) => ({ kind: "changed", from, to: end - 1 }));
+        if (!list.length) continue;
+        this.marks.set(c.path, [...(this.marks.get(c.path) || []), ...list]);
+        this.apply(c.path);
+      }
+    });
+  },
+
   // Put the marks of `path` on its tab's document (after a swap, a reload, a change).
   apply(path) { cm.operation(() => this.applyNow(path)); },
   applyNow(path) {
@@ -2184,14 +2199,25 @@ const AH = {
     }
     const t = S.tabs.find((x) => x.path === path), out = [];
     if (t) {
-      const last = t.doc.lineCount() - 1;
+      const last = t.doc.lineCount() - 1, changed = new Set();
       for (const m of this.marks.get(path) || []) {
         const cls = "cm-agent-" + m.kind;
-        for (let l = m.from; l <= Math.min(m.to, last, m.from + 3000); l++) {
+        if (m.kind === "changed" && t.conflict) continue;   // your unsaved version is not the agent's result
+        for (let l = m.from; l <= Math.min(m.to, last, m.kind === "changed" ? last : m.from + 3000); l++) {
           const h = t.doc.addLineClass(l, "background", cls);
           t.doc.addLineClass(h, "gutter", cls + "-g");
           t.doc.addLineClass(h, "wrap", cls + "-w");      // the line's text: its colours (app.css)
           out.push([t.doc, h, cls]);
+          if (m.kind === "changed") changed.add(l);
+        }
+      }
+      // Adjacent and overlapping edits form one raised surface, including a
+      // one-line edit. Keep its edges on line handles so wrapping/folding works.
+      for (const l of changed) {
+        for (const [edge, neighbour] of [["start", l - 1], ["end", l + 1]]) {
+          if (changed.has(neighbour)) continue;
+          const cls = "cm-agent-changed-" + edge;
+          out.push([t.doc, t.doc.addLineClass(l, "background", cls), cls]);
         }
       }
     }
@@ -2214,7 +2240,7 @@ const AH = {
 /* The file the agent is writing, live, over the editor. A read-only view: your tabs, their
    saving and their undo history are not touched. For an Edit, the text it replaces has a red
    background and the new text appears after it in green; for a Write, the file appears from the top.
-   When the step ends the view closes and the editor shows the changed lines. */
+   When the step ends the view closes; the final snapshot marks the changed lines. */
 const AV = {
   cm: null, id: null, path: null, name: null, hidden: false,
   base: null, old: "", oldDone: false, text: "", shown: 0, at: null, marks: [],
@@ -2279,22 +2305,12 @@ const AV = {
   async end(id, ok) {
     if (this.id === null || (id !== null && id !== this.id)) return;
     const turnJob = C.job;
-    const { path, name, text, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
-    const start = Math.max(0, (at || 0) - this.old.length);   // where the edit was, in the old file
+    const { path, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
     this.id = null;
     await new Promise((res) => setTimeout(res, 400));
     AH.clear("edit");
     if (!ok) { if (this.id === null) $("#agent-view").hidden = true; return; }
     await poll();                                       // take in the new file (a new one is listed now)
-    const t = S.tabs.find((x) => x.path === path);
-    if (t && name === "Edit") {                         // mark the lines it changed
-      const doc = t.doc.getValue(), nt = text.replace(/\r\n/g, "\n");
-      let i = nt ? doc.indexOf(nt, Math.max(0, start - 2000)) : -1;
-      if (nt && i < 0) i = doc.indexOf(nt);
-      const from = i >= 0 ? t.doc.posFromIndex(i).line : Math.min(line - 1, t.doc.lineCount() - 1);
-      const to = i >= 0 ? t.doc.posFromIndex(i + nt.length).line : from;
-      AH.set(path, "changed", from, to);
-    }
     if (this.id !== null) return;                       // the next step already took the view
     $("#agent-view").hidden = true;
     // Show the result where it is, unless you hid the agent's view.
@@ -2475,6 +2491,7 @@ async function followTurn(job, provider, mode) {
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
   const t = Turn.create();
+  let changes = null;
   const log = $("#chat-log");
   const status = (s) => { $("#chat-status").textContent = C.stopping ? "Stopping…" : s; };
   const messages = new Map();    // message id -> element
@@ -2559,6 +2576,7 @@ async function followTurn(job, provider, mode) {
         if (C.provider === provider) renderContext({ ...s.event, window: s.event.window || (provGet("context") || {}).window });
       } else if (s.draw === "done") {
         const e = s.event;
+        changes = e.changed || [];
         renderTurnCard(e); loadAccount();
         if (e.context && C.provider === provider) {
           const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
@@ -2600,6 +2618,7 @@ async function followTurn(job, provider, mode) {
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
     saveChatLog();
     await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
+    if (changes && !C.job) AH.complete(changes);
     flushSaves();        // … then save what you typed meanwhile
     // Auto-compile the agent's changes too, unless its own last build already has them.
     if ($("#auto-compile").checked && Turn.needsCompile(t.changed, S.files, S.pdfMtime))

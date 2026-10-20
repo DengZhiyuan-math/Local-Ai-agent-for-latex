@@ -167,7 +167,25 @@ const Turn = (() => {
   // since the turn began (`touched`: typed, or moved the focus out of the editor) and have
   // not opened another file.
   const mayFollow = ({ started, current, touched, hidden }) => started === current && !touched && !hidden;
-  return { create, needsCompile, pollFailed, pollDelay, result, mayFollow };
+  // Final-file positions, never an indexOf(new_string): one Edit may replace many
+  // occurrences, and later steps may move or undo earlier edits. Older servers have
+  // only the readable diff; current snapshots also carry complete, untruncated ranges.
+  function changedLines(change) {
+    if (Array.isArray(change.lines)) return change.lines;
+    const ranges = [];
+    let at = null;
+    for (const line of (change.diff || "").split("\n")) {
+      const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (h) at = Number(h[1]) - 1;
+      else if (at !== null && line[0] === "+") {
+        if (ranges.length && ranges[ranges.length - 1][1] === at) ranges[ranges.length - 1][1] = at + 1;
+        else ranges.push([at, at + 1]);
+        at++;
+      } else if (at !== null && line[0] === " ") at++;
+    }
+    return ranges;
+  }
+  return { create, needsCompile, pollFailed, pollDelay, result, mayFollow, changedLines };
 })();
 
 if (typeof module !== "undefined") module.exports = Turn;

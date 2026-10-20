@@ -47,6 +47,25 @@ class Snapshot(unittest.TestCase):
         self.assertEqual((self.root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
         self.assertEqual((self.root / "new.tex").read_text(encoding="utf-8"), "then yours\n")
 
+    def test_highlight_lines_follow_the_final_diff_not_replacement_text(self):
+        before = snapshot.FileState(b"definition\r\nA=g0\r\ncontext\r\nB=g0\r\ntail\r\n", 0o644, digest="before")
+        after = snapshot.FileState(b"A=ha\r\ncontext\r\nB=ha\r\ninserted\r\ntail\r\n", 0o644, digest="after")
+        [change] = snapshot.changes({"a.tex": before}, {"a.tex": after})
+        self.assertEqual(change["lines"], [[0, 1], [2, 4]])
+        # Line ranges are computed before the display diff is shortened.
+        with mock.patch.object(snapshot, "DIFF_MAX", 15):
+            [short] = snapshot.changes({"a.tex": before}, {"a.tex": after})
+        self.assertEqual(short["lines"], change["lines"])
+
+    def test_highlight_lines_for_creation_deletion_and_no_final_newline(self):
+        old = snapshot.FileState(b"unchanged\nold", 0o644, digest="before")
+        new = snapshot.FileState(b"unchanged\nnew", 0o644, digest="after")
+        for a, b, expected in [(old, new, [[1, 2]]), (None, new, [[0, 2]]),
+                               (old, None, []), (old, snapshot.FileState(b"unchanged\n", 0o644), [])]:
+            with self.subTest(a=a, b=b):
+                [change] = snapshot.changes({"a.tex": a} if a else {}, {"a.tex": b} if b else {})
+                self.assertEqual(change["lines"], expected)
+
     def test_a_file_too_big_to_keep_is_seen_but_not_undone(self):
         with mock.patch.object(snapshot, "MAX_FILE", 4):
             before, _ = snapshot.take(self.root)

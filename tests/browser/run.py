@@ -80,6 +80,7 @@ try:
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
     results["turn view"] = node(scripts / "turn_view.mjs", editor)
+    results["agent change highlights"] = node(scripts / "agent_marks.mjs", editor)
     results["saving"] = node(scripts / "saving.mjs", editor, str(work / "proj"))
     results["home menu"] = node(scripts / "home_menu.mjs", home, str(work / "proj"), str(work / "proj2"))
     results["pages load"] = node(scripts / "pages.mjs", editor, home)
