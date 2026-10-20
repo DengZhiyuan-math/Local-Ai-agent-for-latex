@@ -23,7 +23,7 @@ const byId = (id) => H.projects.find((p) => p.id === id);
 /* ------------------------------------------------------------------ data */
 // Never two at a time (see poller), so an older answer cannot land after a newer one; a
 // call during a load asks for one more after it.
-const load = poller(loadOnce, 10000);
+const load = poller(loadOnce, 0); // coalesce invalidations; never start a polling timer
 async function loadOnce() {
   const r = await api("/api/projects");
   showDamaged(r, "projects.json");
@@ -125,8 +125,8 @@ async function loadOpenedGit() {
 }
 
 /* ------------------------------------------------------------------ folders and tags
-   Folders (a research topic, its sub-projects, …) and tags only organize this list;
-   hub.py keeps them in projects.json, and no file moves on disk. */
+   Folders and tags organize this list; disk-linked folders also follow Explorer changes.
+   Home grouping actions do not move files on disk. */
 // Folders, their trees and the tags (homeview.js, on this page's state H).
 const folderById = (id) => HomeView.folderById(H, id);
 const byName = HomeView.byName;
@@ -454,6 +454,7 @@ function previewHTML() {
         <dt>In total</dt><dd>${plural(all, "project")}</dd>
         <dt>Modified</dt><dd>${folderTime(f, "edited") ? fmtDate(folderTime(f, "edited")) : "—"}</dd>
         <dt>In</dt><dd>${esc(whereText(f.parent))}</dd>
+        ${f.disk_path ? `<dt>Disk folder</dt><dd class="pv-path">${esc(f.disk_path)}<br><span class="muted">Follows changes in Explorer / Finder automatically</span></dd>` : ""}
         <dt>GitHub</dt><dd>${syncChip(f.id) || `<button class="linkish" data-act="sync" data-fid="${esc(f.id)}">Set up sync…</button>`}</dd></dl></div>`;
   }
   return `<div class="pv-none">${icon("doc")}<p>Select a project to see its first page and details.</p></div>`;
@@ -895,7 +896,7 @@ document.addEventListener("dragstart", (e) => {
   e.dataTransfer.setData(DRAG, JSON.stringify(dragKeys));
   e.dataTransfer.effectAllowed = "move"; H.dragging = true; closeMenu();
 });
-document.addEventListener("dragend", () => { H.dragging = false; dragKeys = []; markDrop(null); });
+document.addEventListener("dragend", () => { H.dragging = false; dragKeys = []; markDrop(null); load(); });
 document.addEventListener("dragover", (e) => {
   const el = dropTarget(e);
   markDrop(el);
@@ -1714,8 +1715,13 @@ document.addEventListener("click", async (e) => {
 
 loadSettings().then(renderSetup);           // whether Claude is logged in: the panel's last row
 loadSetup();
-// Every 10 s while the page is shown and no dialog is open (see poller).
-load.start(() => !document.querySelector("dialog[open]"));
+// One push connection per Home page. EventSource reconnects after service restarts;
+// the server sends an initial invalidation so changes during disconnection are seen.
+const projectEvents = new EventSource("/api/projects/events");
+projectEvents.addEventListener("changed", () => load());
+window.addEventListener("pagehide", () => projectEvents.close());
+window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
+window.addEventListener("focus", () => load());
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState !== "visible") return;
   load().then(loadOpenedGit);
