@@ -812,8 +812,14 @@ class GitSync:
         first = next((ln.strip() for ln in prompt.splitlines()
                       if ln.strip() and not ln.startswith("[")), "") or "(no message)"
         first = first if len(first) <= 72 else first[:71] + "…"
-        self._safe(lambda: self._record(lambda: [p for p in self.changes() if p in changed],
-                                        lambda _: f"Agent: {first}"))
+        def record_turn():
+            with self.lock, self._changing():
+                mark = self.schedule.mark()
+                self._record(lambda: [p for p in self.changes() if p in changed],
+                             lambda _: f"Agent: {first}")
+                if not self.changes():
+                    self.schedule.recorded(mark)
+        self._safe(record_turn)
 
     def _safe(self, fn):
         """fn(), what it returns; a failure is kept for the pages and returned as an Outcome."""
@@ -832,8 +838,16 @@ class GitSync:
         if self.source_events is not None:
             generation = self.source_events.stamp()
             if generation != self.source_generation:
-                self.source_generation = generation
-                self.touched()
+                # Notifications may arrive after an agent committed the write, or
+                # describe generated/ignored files. Only actual source changes
+                # need autosave; a clean tree must not restart its countdown.
+                with self.lock, self.writes:
+                    mark = self.schedule.mark()
+                    if self.changes():
+                        self.touched()
+                    else:
+                        self.schedule.recorded(mark)
+                    self.source_generation = generation
         steps = {"commit": lambda: self.commit_all("Autosave"), "push": self.push, "pull": self.pull}
         for step in self.schedule.due(self.busy_fn()):
             self._safe(steps[step])

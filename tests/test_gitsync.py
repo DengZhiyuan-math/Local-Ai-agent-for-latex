@@ -389,6 +389,34 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual(self.last(), ("Agent: Expand the remark into a paragraph", ["main.tex"]))
         self.assertIn("sec.tex", git(self.root, "status", "--porcelain"), "your edit is not in it")
 
+    def test_delayed_watch_event_after_agent_commit_does_not_report_pending(self):
+        self.g.source_events = gitsync.diskwatch.Changes()
+        (self.root / "main.tex").write_text("agent\n", encoding="utf-8")
+        self.g.after_turn(["main.tex"], "Improve the proof")
+        self.g.source_events.changed()  # OS notification delivered after the commit
+        self.g.tick()
+        self.assertEqual(git(self.remote, "show", "main:main.tex"), "agent")
+        self.assertFalse(self.g.status()["pending"], "already uploaded edits must not show as pending")
+
+    def test_agent_commit_clears_watched_pending_but_keeps_other_edits_due(self):
+        self.g.source_events = gitsync.diskwatch.Changes()
+        (self.root / "main.tex").write_text("agent\n", encoding="utf-8")
+        self.g.source_events.changed()
+        self.g.tick()  # notification arrives before the agent commits
+        self.assertTrue(self.g.schedule.pending)
+        self.g.after_turn(["main.tex"], "Improve the proof")
+        self.assertFalse(self.g.schedule.pending, "the agent already committed the watched edit")
+        self.g.source_events.changed()
+        self.g.tick()
+        self.assertFalse(self.g.schedule.pending)
+        (self.root / "sec.tex").write_text("your separate edit\n", encoding="utf-8")
+        self.g.source_events.changed()
+        self.g.tick()
+        self.assertTrue(self.g.schedule.pending, "uncommitted edits still need autosave")
+        self.clock.advance(gitsync.IDLE + 1)
+        self.g.tick()
+        self.assertEqual(git(self.remote, "show", "main:sec.tex"), "your separate edit")
+
     @unittest.skipUnless(sys.platform in ('win32', 'darwin'), 'native filesystem notifications')
     def test_worker_syncs_external_edits_without_an_editor_save(self):
         """Edits by Codex/Explorer must enter the same automatic schedule as browser saves."""
