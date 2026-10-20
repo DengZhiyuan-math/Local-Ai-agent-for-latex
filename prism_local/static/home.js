@@ -1010,37 +1010,66 @@ $("#form-new").addEventListener("submit", async (e) => {
   if (f.elements.open.checked) openProject(r.id);
 });
 
-// Open from GitHub: a project of yours made on another computer (hub.open_from_github).
-const CLONE = { repos: [] };
+// Open from GitHub: choose from your repositories or paste a repository link.
+const CLONE = { repos: [], loading: false, busy: false };
+function githubFullName(value) {
+  const full = value.trim().replace(/^(?:https?:\/\/github\.com\/|git@github\.com:|github\.com\/)/i, "")
+    .split(/[?#]/, 1)[0].replace(/\/+$/, "").replace(/\.git$/, "");
+  return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(full)
+    && !full.split("/").some((p) => p === "." || p === "..") ? full : null;
+}
 async function openClone() {
   const f = $("#form-clone"), dlg = $("#dlg-clone");
   f.reset(); dlgError(dlg, "");
-  $("#clone-list").textContent = "Asking GitHub…";
+  CLONE.repos = []; CLONE.loading = true; CLONE.busy = false;
+  f.elements.filter.disabled = false;
+  renderClone();
   dlg.showModal(); f.elements.filter.focus();
   const r = await api("/api/github/repos");
-  if (r._status !== 200) { $("#clone-list").textContent = ""; return dlgError(dlg, r.error || "Could not ask GitHub"); }
+  CLONE.loading = false;
+  if (r._status !== 200) { renderClone(); return dlgError(dlg, (r.error || "Could not ask GitHub") + ". You can still paste a repository link."); }
   CLONE.repos = r.repos || [];
   renderClone();
 }
 function renderClone() {
-  const want = $("#form-clone").elements.filter.value.trim().toLowerCase();
+  if (CLONE.busy) return;
+  const value = $("#form-clone").elements.filter.value.trim();
+  const full = githubFullName(value), want = (full || value).toLowerCase();
   const rows = CLONE.repos.filter((x) => !want || x.full.toLowerCase().includes(want));
-  $("#clone-list").innerHTML = rows.length ? rows.map((x) => `<button type="button" class="clone-it" data-full="${esc(x.full)}">
+  const direct = full && !rows.some((x) => x.full.toLowerCase() === full.toLowerCase())
+    ? `<button type="button" class="clone-it" data-full="${esc(full)}"><b>Open ${esc(full)}</b><small>Copy this repository to this computer</small></button>` : "";
+  $("#clone-list").innerHTML = direct + (rows.length ? rows.map((x) => `<button type="button" class="clone-it" data-full="${esc(x.full)}">
       <b>${esc(x.name)}</b> <small>${esc(x.full)}${x.private ? " · private" : ""}${x.updated ? " · changed " + esc(x.updated.slice(0, 10)) : ""}</small></button>`).join("")
-    : `<p class="hint">${CLONE.repos.length ? "Nothing matches." : "You have no repositories on GitHub yet."}</p>`;
+    : direct ? "" : `<p class="hint">${CLONE.loading ? "Asking GitHub…" : value ? "Nothing matches. Paste a GitHub repository link or enter owner/name." : "No repositories listed. You can paste a GitHub repository link."}</p>`);
 }
-$("#form-clone").elements.filter.addEventListener("input", renderClone);
-$("#clone-list").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-full]"); if (!b) return;
+$("#form-clone").elements.filter.addEventListener("input", () => { dlgError($("#dlg-clone"), ""); renderClone(); });
+$("#form-clone").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const full = githubFullName(e.target.elements.filter.value);
+  const buttons = $("#clone-list").querySelectorAll("[data-full]");
+  const b = [...buttons].find((x) => full && x.dataset.full.toLowerCase() === full.toLowerCase())
+    || (buttons.length === 1 ? buttons[0] : null);
+  if (b) cloneRepository(b);
+});
+$("#clone-list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-full]"); if (b) cloneRepository(b);
+});
+async function cloneRepository(b) {
+  if (CLONE.busy) return;
+  CLONE.busy = true;
   const dlg = $("#dlg-clone");
+  dlgError(dlg, "");
+  $("#form-clone").elements.filter.disabled = true;
   for (const x of $("#clone-list").querySelectorAll("button")) x.disabled = true;
   b.querySelector("small").textContent = "copying to this computer…";
   const r = await api("/api/github/open", { full: b.dataset.full });
+  CLONE.busy = false;
+  $("#form-clone").elements.filter.disabled = false;
   if (r._status !== 200) { renderClone(); return dlgError(dlg, r.error || "Could not open it"); }
   dlg.close();
   toast(r.cloned ? `Copied ${b.dataset.full} to ${r.path}` : `${b.dataset.full} is already here: ${r.path}`);
   H.sig = null; await load(); loadAllGit();
-});
+}
 $("#btn-clone").onclick = openClone;
 
 function openAdd() {

@@ -252,6 +252,29 @@ const clone = await ev(`
   seen.closed = await T.until(() => !$("#dlg-clone").open);
   seen.asked = asked === "me/thesis";
   seen.said = T.toast().includes("Copied me/thesis");
+  await openClone();
+  f.elements.filter.value = "https://github.com/me/thesis.git/";
+  f.elements.filter.dispatchEvent(new Event("input"));
+  seen.linkMatches = $("#clone-list").querySelectorAll("[data-full]").length === 1
+    && $("#clone-list").querySelector("[data-full]").dataset.full === "me/thesis";
+  f.elements.filter.value = "https://github.com/other/new-paper?tab=readme-ov-file#readme";
+  f.elements.filter.dispatchEvent(new Event("input"));
+  seen.unlistedLink = $("#clone-list").querySelector('[data-full="other/new-paper"]')?.textContent.includes("Open");
+  asked = null; f.requestSubmit();
+  seen.enterOpens = await T.until(() => asked === "other/new-paper" && !$("#dlg-clone").open);
+  api = async (path, body) => path === "/api/github/repos" ? { _status: 500, error: "Unavailable" }
+    : path === "/api/github/open" ? { _status: 400, error: "Repository not found" } : real(path, body);
+  await openClone();
+  f.elements.filter.value = "https://github.com/other/private.git";
+  f.elements.filter.dispatchEvent(new Event("input"));
+  seen.listFailureAllowsLink = !!$("#clone-list").querySelector('[data-full="other/private"]');
+  f.requestSubmit();
+  seen.cloneFailureRetry = await T.until(() => !f.elements.filter.disabled && $("#dlg-clone .dlg-error").textContent.includes("Repository not found"))
+    && $("#dlg-clone").open && !$("#clone-list button").disabled;
+  f.elements.filter.value = "https://example.com/me/paper";
+  f.elements.filter.dispatchEvent(new Event("input"));
+  seen.foreignLinkRejected = !$("#clone-list").querySelector("[data-full]");
+  $("#dlg-clone").close();
   api = real;
   return seen;`);
 check("open from GitHub lists your repositories and copies the one chosen", Object.values(clone).every(Boolean), JSON.stringify(clone));

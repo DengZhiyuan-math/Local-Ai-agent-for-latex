@@ -372,6 +372,19 @@ def add_project(path: str, folder_id: str = "") -> dict:
 
 FULL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
 
+
+def github_full_name(value: str) -> str:
+    """Normalize a repository name or a copied GitHub repository/clone URL."""
+    full = re.sub(r"^(?:https?://github\.com/|git@github\.com:|github\.com/)", "",
+                  value.strip(), flags=re.IGNORECASE)
+    full = re.split(r"[?#]", full, maxsplit=1)[0].rstrip("/")
+    if full.endswith(".git"):
+        full = full[:-4]
+    if not FULL_NAME.fullmatch(full) or any(p in (".", "..") for p in full.split("/")):
+        raise ValueError("Enter a GitHub repository URL or owner/name")
+    return full
+
+
 # One opening at a time per repository: a second one (another tab, a double click) waits
 # for the first one's clone, then finds it listed instead of cloning it again. Others go
 # on meanwhile, since a clone can take minutes.
@@ -380,14 +393,13 @@ _opening_lock = threading.Lock()
 
 
 def open_from_github(full: str) -> dict:
-    """A project of yours on GitHub ("owner/name") on this computer, as on another one
+    """A GitHub repository ("owner/name" or a copied link) on this computer
     (Home: Open from GitHub): cloned into the default folder, Prism's to keep (managed,
     force pushes refused: publish.py set it up so where it was made), and listed. A folder's
     shared repository (its top has SHARED_MARKER) comes as that folder, with its projects.
     One already listed here (synced with the same repository) is not cloned again.
     Returns {"ids": [project ids], "path", "cloned"}."""
-    if not FULL_NAME.fullmatch(full or ""):
-        raise ValueError("not a GitHub repository")
+    full = github_full_name(full)
     identity = f"github.com/{full}".lower()
     with _opening_lock:
         lock = _opening.setdefault(identity, threading.Lock())

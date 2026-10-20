@@ -211,6 +211,42 @@ check("a line the agent changed gets its class on the line itself, not through :
   const css = [...document.styleSheets].flatMap((s) => { try { return [...s.cssRules]; } catch { return []; } }).map((r) => r.cssText).join("");
   return wrap.includes("cm-agent-changed-w") && !(cm.getLineHandle(0).wrapClass || "").includes("cm-agent")
     && !css.includes(":has(> .cm-agent");`));
+check("agent edit surfaces merge adjacent ranges and clean up without moving text", await ed.ev(`
+  const path = "__agent-surface-test__.tex", savedTabs = S.tabs;
+  const host = document.createElement("div");
+  host.style.cssText = "position:fixed;left:-10000px;top:0;width:360px;height:240px";
+  document.body.append(host);
+  const source = ["Unchanged", "First changed", "a long wrapped passage ".repeat(12), "Middle", "End",
+    "Gap", "Single changed", "Unchanged tail"].join("\\n");
+  const doc = CodeMirror.Doc(source, "prism-stex");
+  const preview = CodeMirror(host, { value: doc, lineNumbers: true, lineWrapping: true });
+  preview.setSize("100%", "240px");
+  S.tabs = [...savedTabs, { path, doc }];
+  const bg = l => doc.lineInfo(l).bgClass || "";
+  const has = (l, edge) => bg(l).split(" ").includes("cm-agent-changed-" + edge);
+  const geometry = () => JSON.stringify({
+    heights: Array.from({ length: doc.lineCount() }, (_, l) => doc.getLineHandle(l).height),
+    points: [0, 1, 4, 6, 7].map(line => preview.charCoords({ line, ch: 0 }, "local")),
+    scroll: preview.getScrollInfo(),
+  });
+  try {
+    preview.setSelection({ line: 1, ch: 2 }, { line: 4, ch: 2 });
+    const before = geometry(), selected = preview.getSelection(), history = JSON.stringify(doc.historySize());
+    AH.set(path, "read", 0, 0);
+    AH.set(path, "changed", 1, 3); AH.set(path, "changed", 3, 4); AH.set(path, "changed", 6, 6);
+    if (!has(1, "start") || has(1, "end") || has(3, "start") || has(3, "end")
+        || !has(4, "end") || has(4, "start") || !has(6, "start") || !has(6, "end")
+        || before !== geometry() || selected !== preview.getSelection() || history !== JSON.stringify(doc.historySize())) return false;
+    AH.set(path, "changed", 5, 5);                  // bridge the blocks into one surface
+    if (!has(1, "start") || !has(6, "end") || has(4, "end") || has(6, "start")) return false;
+    AH.clear("changed");
+    if (!bg(0).includes("cm-agent-read") || Array.from({ length: 7 }, (_, l) => bg(l+1)).some(c => c.includes("cm-agent-changed"))) return false;
+    AH.set(path, "changed", 1, 2); doc.setValue(source); AH.apply(path);
+    return has(1, "start") && has(2, "end") && doc.getValue() === source;
+  } finally {
+    AH.marks.delete(path); AH.apply(path); AH.handles.delete(path);
+    S.tabs = savedTabs; host.remove();
+  }`));
 // Typed through an input method (a Chinese one, say), each key comes as a composition.
 await ed.ev(`SNIP_SET.on = true; cm.setValue(""); cm.focus(); cm.setCursor({ line: 0, ch: 0 });`);
 for (const key of "mk@a") {

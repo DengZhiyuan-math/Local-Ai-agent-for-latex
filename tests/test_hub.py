@@ -571,6 +571,22 @@ class FoldersAndTags(TempState):
 
 @unittest.skipUnless(hub.shutil.which("git"), "needs git")
 class OpenFromGitHub(TempState):
+    def test_repository_links_are_normalized_before_opening(self):
+        for value in ("me/paper", " https://github.com/me/paper ",
+                      "https://github.com/me/paper.git", "https://github.com/me/paper/",
+                      "https://github.com/me/paper?tab=readme-ov-file#readme",
+                      "git@github.com:me/paper.git", "github.com/me/paper"):
+            with self.subTest(value=value), mock.patch.object(hub, "_open_from_github", return_value={}) as opening:
+                hub.open_from_github(value)
+                opening.assert_called_once_with("me/paper", "github.com/me/paper")
+        for value in ("", "https://example.com/me/paper", "https://github.com.evil/me/paper",
+                      "https://github.com/me/paper/tree/main", "me/..", "../paper",
+                      "https://user:secret@github.com/me/paper", "--help"):
+            with self.subTest(value=value), mock.patch.object(hub, "_open_from_github") as opening:
+                with self.assertRaises(ValueError):
+                    hub.open_from_github(value)
+                opening.assert_not_called()
+
     """A project of yours on GitHub, opened on another computer from the Home page."""
 
     def setUp(self):
@@ -607,7 +623,7 @@ class OpenFromGitHub(TempState):
         (paper / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
         pid = hub.add_project(str(paper))["id"]
         self.assertNotIn("error", publish.publish_project(paper))
-        self.assertEqual(hub.open_from_github("me/paper"), {"ids": [pid], "path": str(paper.resolve()), "cloned": False},
+        self.assertEqual(hub.open_from_github("https://github.com/me/paper.git"), {"ids": [pid], "path": str(paper.resolve()), "cloned": False},
                          "listed already: opened, not cloned again")
         self.forget({pid})                                         # as on another computer
         r = hub.open_from_github("me/paper")
