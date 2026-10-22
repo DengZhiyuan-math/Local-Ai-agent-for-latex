@@ -76,7 +76,13 @@ const TexComplete = (() => {
       if (pending === 0) { hasEnd = true; break; }
     }
     if (hasEnd) {
-      const nextLine = source.slice(to).match(/^[\t ]*\n[\t ]*/);
+      const tail = source.slice(to), emptyEnd = tail.match(/^[\t ]*(?:\n[\t ]*)?\\end\{([^}]+)\}/);
+      if (emptyEnd && emptyEnd[1] === name) {
+        const onNextLine = /^[\t ]*\n/.test(tail);
+        return { from, to, text: name + "}\n" + body + (onNextLine ? "" : "\n" + leading),
+          cursor: from + name.length + 2 + body.length };
+      }
+      const nextLine = tail.match(/^[\t ]*\n[\t ]*/);
       return { from, to, text: name + "}", cursor: from + name.length + 1 + (nextLine ? nextLine[0].length : 0) };
     }
     const text = name + "}\n" + body + "\n" + leading + "\\end{" + name + "}";

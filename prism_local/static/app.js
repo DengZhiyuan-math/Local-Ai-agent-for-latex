@@ -795,6 +795,15 @@ cm.on("change", (ed, ch) => {
   if (ch.origin !== "setValue") stopFollowing();      // you typed (a reload from disk does not count)
 });
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
+// autoCloseBrackets inserts {} without inputRead. Wait until the previous command
+// widget closes on { before offering environments at the cursor between the braces.
+cm.on("cursorActivity", (ed) => {
+  const before = lineBefore(ed);
+  if (!/\\begin\{[A-Za-z*]*$/.test(before)) return;
+  setTimeout(() => {
+    if (lineBefore(ed) === before && !ed.somethingSelected()) showCompletions(ed, false);
+  }, 0);
+});
 
 function modeFor(path) { return path.endsWith(".md") ? "markdown" : "prism-stex"; }
 function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }

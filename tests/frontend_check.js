@@ -447,6 +447,10 @@ check("existing environment ends are reused without taking a nested parent's end
     "\\begin{align}\n\\begin{align}\nx\n\\end{align}\n\\end{align}");
   assert.strictEqual(accept("\\begin{ali|} % \\end{align}").text,
     "\\begin{align}\n\t\n\\end{align} % \\end{align}");
+  assert.deepStrictEqual(accept("\\begin{ali|}\n\\end{align}"),
+    { text: "\\begin{align}\n\t\n\\end{align}", cursor: 15 });
+  assert.deepStrictEqual(accept("\\begin{ali|}\\end{align}", "  "),
+    { text: "\\begin{align}\n  \n\\end{align}", cursor: 16 });
 });
 
 check("message composition keeps commands first and scopes only mentioned files", () => {
