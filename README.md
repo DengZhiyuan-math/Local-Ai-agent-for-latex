@@ -387,6 +387,22 @@ name is typed once, for both). The ⚡ menu above the editor lists them all.
 `{trigger, replacement, options}`, in the format of obsidian-latex-suite. They come before the
 built-in ones; `{snippets: [...], defaults: false}` drops the built-in ones.
 
+The app also distributes `prism_local/shared-snippets.js` with its updates. Without a
+local snippets file, every project uses this bundle. An existing local file (including
+one selected by `PRISM_SNIPPETS`) replaces the bundle completely; it is never overwritten
+by an app update. Saving in Home → Settings creates or updates that local override. To
+return to the distributed rules, remove or rename the local snippets file.
+
+To distribute later changes to your local rules, run `python bin/export-snippets.py`
+from the app checkout, review `prism_local/shared-snippets.js`, and commit and push it
+with the app update. This copies the configured local file into the tracked bundle;
+it does not change the local file or publish anything by itself.
+
+Typing `\begin{` opens environment candidates (for example `equation`, `align`,
+`itemize` and `enumerate`). Type a prefix, select with the arrow keys and confirm with
+Enter or Tab to insert the matching `\end{...}` and move into the indented body.
+Escape cancels. An existing matching end is reused.
+
 | Option | Meaning |
 |---|---|
 | `t` / `m` (`M` display, `n` inline) | only in text / only in math |
@@ -556,7 +572,11 @@ selected in the editor (also: select text and press ⌘L). A selection becomes a
   asked: the turn runs in Claude Code's default permission mode with `Edit`/`Write` allowed
   for those files only, so any other write is refused. For a line range, Claude is asked to
   keep to those lines.
-- **Without @-mentions**, Claude may change any file in the project and create new ones.
+- **Without @-mentions**, edits default to the file open when you send the message.
+  Explicit requests to edit other files take priority. The compile main file is not an
+  automatic edit target. This default guides the agent; it retains permission to edit
+  other project files and create files. If no file is open and the target is unclear,
+  the agent is instructed to ask which file to edit.
 - The line above the message box shows the scope before you send. The card at the end of a
   turn reports blocked edits, and any change outside the mentioned files (for example made
   by an allowed shell command), which **Undo this turn** reverts.
@@ -576,7 +596,8 @@ Consequences:
   `.claude/settings.json` (for example `"Bash(make:*)"`); it then has the shell, limited to
   those commands. The card at the end of a turn names any step that was refused.
 - **Ask** mode (`plan`) is read-only.
-- Nothing from the editor is sent unless you @-mention it.
+- The active file's path is sent with each message; selected source text is sent when
+  you @-mention it.
 - **Add files** to a message with **+**, by dragging them onto the panel, or by pasting an
   image. They are saved in the project's `prism-uploads/` folder (up to 25 MB each) and the
   message tells the agent where they are; Claude Code also reads PDFs and images.

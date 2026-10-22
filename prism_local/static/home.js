@@ -1488,7 +1488,8 @@ async function loadSnippetsFile() {
   try {
     const u = Snippets.load(r.content);
     el.className = "gh-status ok";
-    el.textContent = r.content == null ? "No file of your own yet: the built-in snippets are used."
+    el.textContent = r.bundled ? `✓ ${u.list.length} distributed snippets (updated with the app). Saving creates your local override.`
+      : r.content == null ? "No file of your own yet: the built-in snippets are used."
       : `✓ ${u.list.length} of your own` + (u.defaults ? ", and the built-in ones" : " (the built-in ones are off)");
   } catch (e) {
     el.className = "gh-status err";

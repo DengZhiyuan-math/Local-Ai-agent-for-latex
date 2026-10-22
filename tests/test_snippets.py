@@ -60,7 +60,8 @@ class SnippetsFile(unittest.TestCase):
 
     def test_saved_in_your_settings_and_read_by_the_editor(self):
         r = self.editor()
-        self.assertIsNone(r["content"], "no file yet: Home offers a template")
+        self.assertIsInstance(r["content"], str, "without a local file, use the distributed snippets")
+        self.assertTrue(r["bundled"])
         self.assertEqual(Path(r["path"]), self.file)
         self.assertEqual((r["on"], r["fraction"], r["matrix"]), (True, True, True), "on until you turn them off")
         text = '[{trigger: "Rn", replacement: "\\\\mathbb{R}^{$0}", options: "mA"}]\n'
@@ -70,6 +71,7 @@ class SnippetsFile(unittest.TestCase):
         self.assertEqual(self.file.read_text(encoding="utf-8"), text)
         r = self.editor()
         self.assertEqual(r["content"], text)
+        self.assertFalse(r["bundled"], "an existing local file takes priority")
         self.assertEqual((r["on"], r["fraction"], r["matrix"]), (True, False, False))
 
     def test_a_save_replaces_the_whole_file_and_keeps_its_line_ends(self):

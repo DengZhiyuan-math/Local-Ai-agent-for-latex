@@ -411,6 +411,44 @@ check("needsCompile: a changed file newer than the PDF, or not listed yet", () =
   assert.strictEqual(Turn.needsCompile(["a.tex"], files, null), true, "no PDF yet");
 });
 
+check("environment candidates appear inside begin braces and filter by prefix", () => {
+  const symbols = { labels: [], bibkeys: [], macros: [] };
+  const all = Chat.completions("\\begin{", symbols, false);
+  for (const name of ["equation", "align", "itemize", "enumerate"])
+    assert.ok(all.items.some((i) => i.text === name && i.kind === "environment"), name);
+  const filtered = Chat.completions("\\begin{ali", symbols, false);
+  assert.ok(filtered.items.some((i) => i.text === "align"));
+  assert.ok(filtered.items.every((i) => i.text.startsWith("ali")));
+  assert.ok(Chat.completions("\\begin{align", symbols, false).items.some((i) => i.text === "align"));
+  assert.strictEqual(Chat.completions("% \\begin{ali", symbols, false), null);
+  assert.strictEqual(Chat.completions("\\\\begin{ali", symbols, false), null);
+});
+
+check("accepting an environment inserts its end and puts the cursor in the indented body", () => {
+  const source = "  \\begin{ali}";
+  const edit = Chat.environmentEdit(source, source.length - 1, "align", "    ");
+  const result = source.slice(0, edit.from) + edit.text + source.slice(edit.to);
+  assert.strictEqual(result, "  \\begin{align}\n      \n  \\end{align}");
+  assert.strictEqual(edit.cursor, result.indexOf("\n") + 7);
+});
+
+check("existing environment ends are reused without taking a nested parent's end", () => {
+  const accept = (source, indent = "\t") => {
+    const cursor = source.indexOf("|");
+    source = source.replace("|", "");
+    const edit = Chat.environmentEdit(source, cursor, "align", indent);
+    return { text: source.slice(0, edit.from) + edit.text + source.slice(edit.to), cursor: edit.cursor };
+  };
+  assert.deepStrictEqual(accept("\\begin{ali|}\n  x &= y\n\\end{align}"),
+    { text: "\\begin{align}\n  x &= y\n\\end{align}", cursor: 16 });
+  assert.strictEqual(accept("\\begin{align}\n\t\\begin{ali|}\n\\end{align}").text,
+    "\\begin{align}\n\t\\begin{align}\n\t\t\n\t\\end{align}\n\\end{align}");
+  assert.strictEqual(accept("\\begin{ali|}\n\\begin{align}\nx\n\\end{align}\n\\end{align}").text,
+    "\\begin{align}\n\\begin{align}\nx\n\\end{align}\n\\end{align}");
+  assert.strictEqual(accept("\\begin{ali|} % \\end{align}").text,
+    "\\begin{align}\n\t\n\\end{align} % \\end{align}");
+});
+
 check("message composition keeps commands first and scopes only mentioned files", () => {
   assert.deepStrictEqual(Chat.compose({ text: "/review", refs: "REF", attached: "FILE", mode: "edit",
     mentions: [{ file: "a.tex" }, { file: "a.tex" }, { file: "b.tex" }] }),

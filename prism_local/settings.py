@@ -5,7 +5,7 @@ expand). Your snippets file is here too: also one for every project.
 
     settings.load()          # every setting, the defaults for those not set
     settings.save(changes)   # checked, then written; returns the settings now
-    settings.snippets()      # {"path", "content" (None: no file yet)}
+    settings.snippets()      # {"path", "content", "bundled"}; local overrides the bundle
     settings.save_snippets(text)
 
 A file that cannot be read raises registry.StateUnreadable: it is never taken for the
@@ -65,15 +65,19 @@ def save(changes: dict) -> dict:
         return cur
 
 
-# Your snippets (static/snippets.js): JavaScript, run by the editor page, so it lives with
-# your settings and not in a project co-authors share.
+# Local overrides stay with your settings; the distributed file follows app updates.
+BUNDLED_SNIPPETS = Path(__file__).with_name("shared-snippets.js")
+
+
 def snippets_file() -> Path:
     return Path(os.environ.get("PRISM_SNIPPETS") or Path.home() / ".prism-local" / "snippets.js")
 
 
 def snippets() -> dict:
     f = snippets_file()
-    return {"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None}
+    bundled = not f.exists()
+    source = BUNDLED_SNIPPETS if bundled else f
+    return {"path": str(f), "content": source.read_text(encoding="utf-8"), "bundled": bundled}
 
 
 def save_snippets(content: str) -> dict:

@@ -765,7 +765,7 @@ asQ.addEventListener("keydown", (e) => {
 $("#search-pane .ps-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-psmode]"); if (b) psMode(b.dataset.psmode); });
 /* ------------------------------------------------------------------ snippets */
 // Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours, and how
-// they expand, are set in Home → Settings (~/.prism-local/snippets.js and settings.json), so
+// they expand, are set in Home → Settings (a local override or the distributed bundle, and settings.json), so
 // they are read again whenever you come back to this page.
 const SNIP_SET = { on: true, fraction: true, matrix: true };
 const SNIP = Snippets.attach(cm, {
@@ -895,6 +895,7 @@ function renderTabs() {
       <span class="name">${esc(t.path.split("/").pop())}</span><span class="close" data-close="${esc(t.path)}">×</span>
     </div>`).join("");
   AH.refresh();
+  updateScope();
 }
 $("#tabs").addEventListener("click", (e) => {
   const c = e.target.closest("[data-close]"); if (c) { e.stopPropagation(); return closeTab(c.dataset.close); }
@@ -1562,7 +1563,17 @@ function lineBefore(ed) { const c = ed.getCursor(); return ed.getLine(c.line).sl
 function computeHints(ed, explicit) {
   const cur = ed.getCursor(), found = TexComplete.completions(lineBefore(ed), S.symbols, explicit);
   if (!found) return null;
-  const list = found.items.map((i) => ({ text: i.text, render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
+  const list = found.items.map((i) => ({ text: i.text,
+    ...(i.kind === "environment" ? { hint: (editor) => {
+      const indent = editor.getOption("indentWithTabs") ? "\t" : " ".repeat(editor.getOption("indentUnit"));
+      const edit = TexComplete.environmentEdit(editor.getValue(), editor.indexFromPos(editor.getCursor()), i.text, indent);
+      if (!edit) return;
+      editor.operation(() => {
+        editor.replaceRange(edit.text, editor.posFromIndex(edit.from), editor.posFromIndex(edit.to), "complete");
+        editor.setCursor(editor.posFromIndex(edit.cursor));
+      });
+    } } : {}),
+    render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
   return { list, from: { line: cur.line, ch: cur.ch - found.word.length }, to: cur };
 }
 
@@ -2111,10 +2122,11 @@ async function referenceBlock(mentions) {
   }
   return b + "[/Referenced]";
 }
-function describeScope(mentions, mode) {
+function describeScope(mentions, mode, activeFile = S.active) {
   if (mode === "ask") return prov().read_only_ask === false
     ? "Ask: writes denied by category; changes restored after the turn (no OS sandbox)" : "Ask mode: read-only, no agent compilation";
-  if (!mentions.length) return "Scope: whole workspace (any file, new files allowed)";
+  if (!mentions.length) return activeFile ? `Default edit target: ${activeFile} (explicit file requests take priority)`
+    : "No default edit target: specify a file in your request";
   return "Scope: only " + mentions.map(rangeLabel).join(", ")
     + (prov().enforces_scope === false ? " (restored after the turn; not a write boundary)" : "");
 }
@@ -2124,7 +2136,7 @@ function updateScope() {
   el.textContent = describeScope(ms, mode);
   el.className = mode === "ask" ? "ask" : ms.length ? "narrow" : "wide";
   el.title = "Type @ to point the agent at a file or at the editor selection. "
-    + "With @-mentions it may change only those files; without, any file in the project.";
+    + "With @-mentions it may change only those files. Otherwise edits default to the open file, unless you request other files.";
 }
 function mentionHtml(text) {
   return esc(text).replace(/(^|\s)(@[^\s@]+)/g, '$1<span class="mention">$2</span>');
@@ -2449,6 +2461,7 @@ async function chatSend() {
 async function sendMessage() {
   const text = $("#chat-input").value.trim();
   if (!text) return;
+  const activeFile = S.active;                 // capture before saving or fetching references
   $("#slash-menu").hidden = true;
   const slash = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(text);
   if (slash && LOCAL[slash[1]]) {          // handled here, without running the agent
@@ -2471,14 +2484,14 @@ async function sendMessage() {
   const provider = C.provider;
   if (!P.projectKey) return toast("Wait for the project identity to load.");
   const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
-    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path) });
+    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path), active_file: activeFile });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
   if ($("#chat-input").value.trim() === text) $("#chat-input").value = ""; updateScope();
   const sentIds = new Set(sentFiles.map((f) => f.id));
   ATT.files = ATT.files.filter((f) => !sentIds.has(f.id)); ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
   const extra = [provLabel(), r.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
-  chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
+  chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode, activeFile))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
   return followTurn(r.job, provider, mode);
 }
 

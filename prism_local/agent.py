@@ -134,7 +134,7 @@ class AgentManager:
     def start(self, prompt: str, session_id: str | None, mode: str,
               model: str | None = None, effort: str | None = None,
               scope: list[str] | None = None, provider: str | None = None,
-              attachments: list[str] | None = None) -> dict:
+              attachments: list[str] | None = None, active_file: str | None = None) -> dict:
         """Run one turn. `scope` (project-relative files) limits which files the agent may
         change in edit mode; None lets it change any file and create new ones."""
         backend = self.backend(provider)
@@ -147,6 +147,13 @@ class AgentManager:
         if model and not MODEL_RE.fullmatch(model):
             return {"error": f"Not a model name: {model}"}
         root = self.root_fn().resolve()
+        if active_file:
+            try:
+                active_file = project_path(root, active_file).relative_to(root).as_posix()
+                if not (root / active_file).is_file():
+                    return {"error": "The active file no longer exists. Open a file and try again."}
+            except (ValueError, OSError, RuntimeError) as e:
+                return {"error": f"Invalid active file: {e}"}
         bad = backend.check(model, effort) or backend.check_attachments(root, attachments or []) \
             or backend.preflight(root) or (backend.check_session(root, session_id) if session_id else None)
         if bad:
@@ -182,6 +189,16 @@ class AgentManager:
         # (Appended, not prepended: a /command must stay first.)
         if note:
             prompt = f"{prompt}\n\n[Scope for this turn] {note}"
+        if mode == "edit":
+            target = (f"Default edit target: {json.dumps(active_file, ensure_ascii=False)}. "
+                      "Make the requested edits in this file unless the user explicitly names other files. "
+                      "Do not switch to the compile main file just because it is the main file. "
+                      if active_file else
+                      "No active file was supplied. If the user has not identified the edit target "
+                      "and it is unclear, ask which file to edit before making changes. ")
+            prompt += ("\n\n[Edit target for this turn] " + target
+                       + "Explicit file requests and the scope for this turn take priority over this default. "
+                       "Targets from earlier turns no longer apply.")
         job.provider, job.prompt, job.session_id = backend.id, prompt, session_id
         job.mode, job.model, job.effort = mode if mode in ("edit", "ask") else "ask", model, effort
         job.root, job.files = self.root_fn().resolve(), self.files_fn

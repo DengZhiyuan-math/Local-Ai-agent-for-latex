@@ -505,6 +505,11 @@ class Handler(httpbase.Handler):
                 st["error"], st["error_details"] = gitsync.said(done.error), gitsync.details(done.error)
             return self._json({**st, "github": github_url()})
         if path == "/api/agent":
+            active_file = body.get("active_file") or None
+            if active_file is not None:
+                if not isinstance(active_file, str):
+                    raise ValueError("active_file must be a project-relative file path")
+                PROJECT.resolve(active_file)
             scope = body.get("scope") or None
             if scope is not None:
                 if not isinstance(scope, list) or not all(isinstance(f, str) for f in scope):
@@ -517,7 +522,7 @@ class Handler(httpbase.Handler):
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
                             body.get("effort") or None, scope, body.get("provider") or None,
-                            body.get("attachments") or [])
+                            body.get("attachments") or [], active_file=active_file)
             return self._json(r, 409 if "error" in r else 200)
         if path == "/api/home":
             r = instances.ensure(None)
