@@ -421,6 +421,8 @@ button.flip .ico { transform: rotate(180deg); }
 #find .find-rows { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
 #find .find-row { display: flex; flex-wrap: wrap; align-items: center; gap: 3px; min-width: 0; }
 #find .find-row > :not(input) { flex: none; }
+#find .find-modes { gap: 8px; font-size: 11.5px; color: var(--muted); }
+#find-agent { color: var(--accent); }
 #find input { flex: 1 1 210px; width: 210px; min-width: 60px; font: 13px var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 6px; }
 #find input.bad { border-color: var(--err); }
 #find .opt { font: 600 11.5px var(--mono); min-width: 24px; padding: 2px 4px; color: var(--muted); background: none; border: 1px solid transparent; border-radius: 4px; }

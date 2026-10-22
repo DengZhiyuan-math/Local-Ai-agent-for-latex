@@ -449,7 +449,8 @@ if nothing changed it since it was read.
 
 **Search with the agent.** For a change a plain search cannot express ("rename the index i
 to j in every formula", "write `\mathscr{O}` instead of `\mathcal{O}`"), open Search
-(⌘⇧F / Ctrl-Shift-F), choose **✦ With the agent** and describe it. The agent chosen in the
+(⌘⇧F / Ctrl-Shift-F), choose **✦ With the agent** and describe it. The same button in the
+file-search bar (⌘F / Ctrl-F) opens this project-wide agent search directly. The agent chosen in the
 agent panel reads the project in a read-only turn of its own (not in your conversation) and
 proposes rules (a regular expression, its replacement, and where it applies: in formulas,
 in the text, or anywhere) and, where no rule fits, single changes. Prism finds every place

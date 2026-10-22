@@ -126,6 +126,10 @@
     <div id="find" hidden role="search">
       <button id="find-more" class="icon tiny ghost" data-icon="right" title="Replace (⌘⌥F / Ctrl+H)" aria-label="Show replace" aria-expanded="false"></button>
       <div class="find-rows">
+        <div class="find-row find-modes" role="group" aria-label="Search mode">
+          <span>Find in file</span>
+          <button type="button" id="find-agent" class="tiny ghost" title="Search the project with the agent">✦ With the agent</button>
+        </div>
         <div class="find-row">
           <input id="find-q" type="text" placeholder="Find" title="Enter or ↓: next · Shift+Enter or ↑: previous" spellcheck="false" autocomplete="off" aria-label="Find">
           <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>

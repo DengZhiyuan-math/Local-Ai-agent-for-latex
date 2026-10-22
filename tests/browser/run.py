@@ -87,6 +87,7 @@ try:
     results["many pages"] = node(scripts / "many_pages.mjs", editor, str(work / "proj"))
     results["editing"] = node(scripts / "editing.mjs", editor, str(work / "proj"))
     results["environment completion"] = node(scripts / "completion.mjs", editor)
+    results["search modes"] = node(scripts / "search_modes.mjs", editor)
     results["search with the agent"] = node(scripts / "agent_search.mjs", editor, str(work / "proj"))
     trashed = sorted(p.name for p in (work / "trash").iterdir()) if (work / "trash").is_dir() else []
     results["trash folder"] = ("PASS" if trashed == ["intro.tex", "proj2"] else "FAIL") + f" deleted items: {trashed}"

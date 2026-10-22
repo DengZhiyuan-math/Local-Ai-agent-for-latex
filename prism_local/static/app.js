@@ -240,6 +240,7 @@ $("#find-more").onclick = () => { const on = $("#find-replace").hidden; findShow
 $("#find-one").onclick = () => findReplaceOne();
 $("#find-all").onclick = () => findReplaceAll();
 $("#btn-find").onclick = () => findOpen(false);
+$("#find-agent").onclick = () => { findClose(); psOpen("agent"); };
 // Your edits, an agent's, a reload from disk: the matches are found again a moment later.
 cm.on("changes", () => {
   if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
@@ -324,12 +325,11 @@ const PS = {
 const psOpts = () => ({ ...PS.opts, query: psQ.value });
 // What a search depends on besides the query: the files and their mtimes.
 const psStamp = () => S.files.map((f) => f.path + ":" + f.mtime).join("\n");
-function psOpen() {
+function psOpen(mode = store.get("psearch.mode", "find")) {
   if ($("#sidebar").classList.contains("hidden")) sidebarHidden(false);
   PS.open = true;
   $("#search-pane").hidden = false;
   $("#sidebar").classList.add("searching");
-  const mode = store.get("psearch.mode", "find");
   const sel = cm.hasFocus() ? cm.getSelection() : "";
   psMode(mode);                      // the one used last
   if (mode === "agent") return;
