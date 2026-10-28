@@ -486,12 +486,28 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 #pdf-empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); }
 
 /* ---------- Claude panel */
-#chat { width: 360px; flex: none; display: flex; flex-direction: column; background: var(--panel); min-width: 260px; }
+#chat { width: 360px; flex: none; display: flex; flex-direction: column; background: var(--panel); min-width: 260px; container-type: inline-size; }
 #chat.hidden, #chat-gutter.hidden { display: none; }
-#chat-head { display: flex; gap: 8px; align-items: center; padding: 0 10px; border-bottom: 1px solid var(--border); height: var(--bar-h); flex: none; }
-#chat-head b { margin-right: auto; color: var(--accent); }
+#chat-head { display: flex; gap: 6px; align-items: center; padding: 0 8px; border-bottom: 1px solid var(--border); height: var(--bar-h); flex: none; overflow-x: auto; scrollbar-width: thin; }
+#chat-head b { flex: none; color: var(--accent); }
 #chat-head select { min-width: 0; flex: 0 1 auto; text-overflow: ellipsis; }
 #chat-head button { flex: none; white-space: nowrap; }
+#chat-head #chat-mode { flex: none; width: 74px; }
+#chat-config { display: flex; gap: 6px; align-items: center; flex: 1 0 auto; }
+#chat-config label { display: flex; align-items: center; gap: 4px; white-space: nowrap; font-size: 12px; }
+#chat-model { width: 150px; }
+#chat-effort { width: 76px; }
+#chat-config-status { padding: 5px 10px; border-bottom: 1px solid var(--border); color: var(--err); overflow-wrap: anywhere; }
+@container (max-width: 480px) {
+  #chat-head { gap: 4px; padding: 0 6px; }
+  #chat-config { gap: 4px; }
+  #chat-config label > span { display: none; }
+  #chat-head select { padding-left: 6px; padding-right: 20px;
+    background-position: calc(100% - 10px) 52%, calc(100% - 6px) 52%; }
+  #chat-model { width: 88px; }
+  #chat-effort { width: 62px; }
+  #chat-head #chat-mode { width: 60px; }
+}
 #quota[hidden] { display: none; }
 #agent-account { padding: 5px 10px; border-bottom: 1px solid var(--border); font-size: 11px; color: var(--muted);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -683,10 +699,6 @@ pre.panel-view { font: 12px/1.45 var(--mono); white-space: pre-wrap; }
 .menu button:hover { background: var(--panel2); }
 .menu button.danger { color: var(--err); }
 .menu hr { border: none; border-top: 1px solid var(--border); margin: 4px 2px; }
-#chat-config { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--border); align-items: center; }
-#chat-config label { display: flex; align-items: center; gap: 4px; min-width: 0; font-size: 12px; }
-#chat-config select { max-width: 180px; min-width: 70px; }
-#chat-config-status { width: 100%; color: var(--muted); overflow-wrap: anywhere; }
 .permission-actions { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; }
 .permission-target { overflow-wrap: anywhere; white-space: pre-wrap; }
 a[data-label] { cursor: pointer; text-decoration: underline dotted; }

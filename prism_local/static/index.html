@@ -185,18 +185,18 @@
   <aside id="chat">
     <div id="chat-head">
       <b data-icon="spark" aria-label="Agent"></b>
-      <select id="chat-mode" title="Edit: may change files (you review a diff and can undo). Ask: read-only.">
+      <div id="chat-config">
+        <label><span>Model</span><select id="chat-model" aria-label="Agent model" title="Model"></select></label>
+        <label><span>Thinking</span><select id="chat-effort" aria-label="Thinking effort" title="Thinking effort"></select></label>
+        <button id="chat-model-refresh" class="tiny icon ghost" data-icon="refresh" aria-label="Refresh available models" title="Refresh available models"></button>
+      </div>
+      <select id="chat-mode" aria-label="Agent mode" title="Edit: may change files (you review a diff and can undo). Ask: read-only.">
         <option value="edit">Edit</option>
         <option value="ask">Ask (read-only)</option>
       </select>
       <button id="chat-new" title="Start a new conversation">New chat</button>
     </div>
-    <div id="chat-config">
-      <label>Model <select id="chat-model" aria-label="Agent model"></select></label>
-      <label>Thinking <select id="chat-effort" aria-label="Thinking effort"></select></label>
-      <button id="chat-model-refresh" class="tiny icon ghost" data-icon="refresh" aria-label="Refresh available models" title="Refresh available models"></button>
-      <small id="chat-config-status" role="status"></small>
-    </div>
+    <small id="chat-config-status" role="status" hidden></small>
     <div id="agent-account" hidden></div>
     <div id="quota"></div>
     <div id="chat-log"></div>

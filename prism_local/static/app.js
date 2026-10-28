@@ -1990,8 +1990,8 @@ function renderModelControls() {
   $("#chat-model").disabled = !!C.job || !!C.configSaving;
   $("#chat-effort").disabled = !!C.job || !!C.configSaving || !efforts.length;
   $("#chat-model-refresh").disabled = !!C.job || !!C.configSaving;
-  $("#chat-config-status").textContent = `${C.model || p.default_model || "Provider default"} · thinking: ${C.effort || "default"}`
-    + (p.catalogError ? ` · ${p.catalogError}` : "");
+  $("#chat-config-status").textContent = p.catalogError || "";
+  $("#chat-config-status").hidden = !p.catalogError;
 }
 async function loadModels(refresh = false) {
   const provider = C.provider, p = prov();
