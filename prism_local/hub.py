@@ -16,8 +16,6 @@ state-changing request, and uses the Python standard library only.
 """
 from __future__ import annotations
 
-import gitenv
-
 import argparse
 import json
 import os
@@ -28,61 +26,144 @@ import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import gitenv  # noqa: E402
 import gitsync  # noqa: E402
 import github  # noqa: E402
 import settings  # noqa: E402
-import sources  # noqa: E402
+import synctarget  # noqa: E402
+import tools  # noqa: E402
 from projectconfig import Config  # noqa: E402
-from publish import (create_github_repo, ensure_ignore, git_init, github_of, project_sync, publish_info,  # noqa: E402
-                     publish_project, repo_kind, repo_name, run_git, tell_editor, unstage_big)
-from repository import RepoBusy, Repository, locate  # noqa: E402
+from publish import (create_github_repo, git_init, github_of, project_sync, publish_info,  # noqa: E402
+                     publish_project, repo_kind)
+from repository import RepoBusy, refs_stamp  # noqa: E402
+import repoview  # noqa: E402
+import sharedrepo  # noqa: E402
+from sharedrepo import BAD_NAME, inside, is_running  # noqa: E402
 import httpbase  # noqa: E402
 import desktop  # noqa: E402
-from errors import Conflict, NotFound  # noqa: E402
+from errors import NotFound, say  # noqa: E402
+from proc import NO_WINDOW  # noqa: E402
 import instances  # noqa: E402
 import registry  # noqa: E402
+import diskprojects  # noqa: E402
+import projectevents  # noqa: E402
 import selfupdate  # noqa: E402
 from backend_claude import claude_account, claude_bin  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS, write_bytes  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES, SKIP_DIRS  # noqa: E402
 from presence import Presence  # noqa: E402
 from texutil import tex_title  # noqa: E402
 
 PRESENCE = Presence()
 # Like the editor, the Home page keeps running the code it started with; once prism-local
 # is updated, the page offers a restart (/api/restart) on the same command line.
-STARTED_CODE = httpbase.code_stamp()
-RESTART: dict = {"server": None, "again": False}
-LIFETIME: instances.Serving | None = None
+APP = httpbase.App("prism-home", PRESENCE)
 MAX_SCAN = 3000
-BAD_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
 
 # ---------------------------------------------------------------- project facts
 
-def scan_sources(root: Path, outdir: str) -> tuple[int, float | None]:
-    """How many editable source files the project has, and the newest mtime."""
-    count, newest = 0, None
+SCAN_TTL = 60.0
+_SCANS: dict[tuple, tuple] = {}      # (project folder, output folder) -> what the last walk saw
+
+
+def scan_sources(root: Path, outdir: str) -> tuple[int, float | None, bool]:
+    """How many editable source files the project has, the newest mtime, and whether it has
+    more than MAX_SCAN (the count then stops at MAX_SCAN).
+
+    The folders are walked again only when one of those walked last time changed (a file
+    added, removed or renamed in it, which a save by the editor is: it writes a new file
+    and renames it over the old one), the newest file changed, or SCAN_TTL went by. A file
+    edited in place, which changes no folder, is seen at the latest then: one stat per
+    folder instead of a walk of them all every ten seconds."""
+    key = (str(root), outdir)
+    hit = _SCANS.get(key)
+    if hit and time.monotonic() - hit[0] < SCAN_TTL \
+            and all(_stat(Path(p)) == st for p, st in hit[1].items()):
+        return hit[2]
+    when = time.monotonic()
+    # Each folder's stat is taken before it is listed, so a change while it is walked
+    # makes it differ next time.
+    stats = {str(root): _stat(root)}
+    count, newest, newest_path = 0, None, None
     for dirpath, dirnames, filenames in os.walk(root):
         rel = Path(dirpath).relative_to(root).as_posix()
         rel = "" if rel == "." else rel + "/"
         dirnames[:] = [d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS
                        and rel + d != outdir]
+        stats.update((os.path.join(dirpath, d), _stat(Path(dirpath, d))) for d in dirnames)
         for f in filenames:
             if Path(f).suffix in EDITABLE_SUFFIXES and not f.startswith("._"):
                 count += 1
                 try:
                     t = os.stat(os.path.join(dirpath, f)).st_mtime
-                    newest = t if newest is None or t > newest else newest
+                    if newest is None or t > newest:
+                        newest, newest_path = t, os.path.join(dirpath, f)
                 except OSError:
                     pass
         if count > MAX_SCAN:
             break
-    return count, newest
+    if newest_path:
+        stats[newest_path] = _stat(Path(newest_path))
+    summary = (min(count, MAX_SCAN), newest, count > MAX_SCAN)
+    _SCANS[key] = (when, stats, summary)
+    return summary
+
+
+def walked(root: Path, outdir: str) -> float:
+    """When scan_sources last walked the project's folders (walking them now if they
+    changed): the same while its files are, as far as that walk can tell."""
+    scan_sources(root, outdir)
+    return _SCANS[(str(root), outdir)][0]
+
+
+def _stat(p: Path):
+    try:
+        st = p.stat()
+        return st.st_mtime_ns, st.st_size
+    except OSError:
+        return None
+
+
+# The Home page polls project facts, and most are the same as
+# the last time: each is worked out again only when what it is made of changed.
+_TITLES: dict[str, tuple] = {}       # main file -> (its stat, its title)
+_SYNC_FACTS: dict[str, tuple] = {}   # git dir -> (what they depend on, the sync facts)
+
+
+def title_of(path: Path) -> str | None:
+    """tex_title, read again only when the file changed (it is read whole for it)."""
+    st = _stat(path)
+    hit = _TITLES.get(str(path))
+    if hit and st is not None and hit[0] == st:
+        return hit[1]
+    title = tex_title(path)
+    _TITLES[str(path)] = (st, title)
+    return title
+
+
+def sync_facts(root: Path, git_dir: Path) -> dict:
+    """What git_info shows of the project's sync (its GitHub page, why it is paused, its
+    target): a GitSync's status, some seven git commands, worked out again only when the
+    repository's refs or configuration (refs_stamp), its prism-local.json (the binding)
+    or what git reads of its configuration besides (your ~/.gitconfig and
+    $XDG_CONFIG_HOME/git/config with their URL rewrites, a worktree's config) changed."""
+    stamp = refs_stamp(git_dir)
+    key = (stamp, _stat(git_dir / "prism-local.json"), synctarget.config_key(git_dir))
+    hit = _SYNC_FACTS.get(str(git_dir))
+    if hit and stamp is not None and hit[0] == key:
+        return hit[1]
+    sync = project_sync(root)
+    sync.validate_target()          # a target not bound yet is bound, as the editor's worker does
+    status = sync.status()          # which binds nothing itself
+    facts = {k: status[k] for k in ("github", "blocked_reason", "target")}
+    # Asked again: validate_target may have bound the target, changing prism-local.json.
+    _SYNC_FACTS[str(git_dir)] = ((refs_stamp(git_dir), _stat(git_dir / "prism-local.json"),
+                                  synctarget.config_key(git_dir)), facts)
+    return facts
 
 
 def pdf_path(root: Path) -> tuple[Path | None, str | None, str]:
@@ -102,9 +183,9 @@ def project_info(entry: dict) -> dict:
     if not d["exists"]:
         return d
     pdf, main, outdir = pdf_path(root)
-    files, edited = scan_sources(root, outdir)
-    d.update(main=main, title=tex_title(root / main) if main else None,
-             files=files, edited=edited,
+    files, edited, capped = scan_sources(root, outdir)
+    d.update(main=main, title=title_of(root / main) if main else None,
+             files=files, files_capped=capped, edited=edited,
              pdf_mtime=pdf.stat().st_mtime if pdf and pdf.is_file() else None)
     # Only a look: a server that is slow to answer right now keeps its instance file.
     state = instances.inspect(root)
@@ -114,10 +195,21 @@ def project_info(entry: dict) -> dict:
 
 
 def list_projects() -> dict:
-    data = registry.load_projects()
+    data = diskprojects.refresh()
+    stamp = diskprojects.notifications().stamp()
+    cache_key = (str(registry.state_dir()), stamp)
+    if getattr(list_projects, "event_stamp", None) != cache_key:
+        _SCANS.clear()
+        list_projects.event_stamp = cache_key
     entries = data["projects"]
     with ThreadPoolExecutor(max_workers=8) as ex:
         projects = list(ex.map(project_info, entries))
+    missing = {p["path"] for p in projects if not p["exists"]}
+    recovered = diskprojects.refresh(missing)
+    if recovered != data:
+        data = recovered
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            projects = list(ex.map(project_info, data["projects"]))
     return {"projects": projects, "folders": data.get("folders", []),
             "tags": data.get("tags", {}), "default_parent": default_parent(data),
             "home": str(Path.home())}
@@ -154,35 +246,31 @@ def git_info(root: Path) -> dict | None:
     """Branch and changes of the project's repository: its own, or one shared by a folder of
     projects (then the changes are the project's own). A project folder inside some other
     repository (such as prism-local's) has none to sync with: report which one."""
-    def git(*args):
-        return gitenv.git(root, *args, timeout=8)
-    place = locate(root, timeout=8)
+    place = repoview.place(root)
     if place.kind == "none":
         return None
     toplevel = place.repo.top
     if place.kind == "nested":
         return {"nested": True, "toplevel": toplevel.name, "toplevel_path": str(toplevel)}
     shared = {"shared": toplevel.name, "toplevel_path": str(toplevel)} if place.kind == "shared" else None
-    try:
-        r = git("status", "--porcelain", "-b", "--", ".")
-    except (OSError, subprocess.SubprocessError):
+    outdir = pdf_path(root)[2]
+    # git's status is asked again only when the repository changed, or the files did as the
+    # card's walk sees them (scan_sources: a file added, removed or saved by the editor, or
+    # a minute gone by): coming back to the page then runs no git for an unchanged project.
+    found = repoview.changes(root, seen=walked(root, outdir), timeout=8)
+    if found is None:
         return None
-    if r.returncode != 0:
-        return None
-    lines = r.stdout.splitlines()
-    head = lines[0][3:] if lines and lines[0].startswith("## ") else ""
-    head = re.sub(r"^(No commits yet on|Initial commit on) ", "", head)
-    branch = re.split(r"\.\.\.| ", head)[0] if head else ""
-    ahead = re.search(r"ahead (\d+)", head)
-    behind = re.search(r"behind (\d+)", head)
-    sync = project_sync(root).status()
+    # What autosave would record, as the editor counts it: not build output or LaTeX's
+    # auxiliary files, which a folder added without ignore rules has many of.
+    changed = found.recordable(outdir)
+    sync = sync_facts(root, place.repo.git_dir)
     web = sync["github"]
     top_s = str(toplevel.resolve())
     fetch_error = next((v for k, v in FETCH["errors"].items() if registry.norm(k) == registry.norm(top_s)), None)
-    return {"branch": branch, "changes": len(lines) - 1,
-            "ahead": int(ahead.group(1)) if ahead else 0,
-            "behind": int(behind.group(1)) if behind else 0, "github": web,
-            "fetch_error": fetch_error or sync["blocked_reason"], "sync_target": sync["target"], **(shared or {})}
+    return {"branch": found.branch, "changes": len(changed), "ahead": found.ahead, "behind": found.behind,
+            "github": web, "fetch_error": fetch_error, "paused": synctarget.plain(sync["blocked_reason"]),
+            "paused_details": sync["blocked_reason"], "sync_target": sync["target"],
+            **(shared or {})}
 
 
 # ---------------------------------------------------------------- checking GitHub
@@ -204,9 +292,10 @@ def fetch_targets() -> list[Path]:
         root = Path(e["path"])
         if not root.is_dir():
             continue
-        kind, top = repo_kind(root)
-        if kind not in ("own", "shared"):
+        place = repoview.place(root)
+        if not place.syncs:
             continue
+        top = place.repo.top
         key = registry.norm(top)
         tops[key] = top
         if is_running(root):
@@ -228,7 +317,7 @@ def fetch_one(top: Path) -> str | None:
     except RepoBusy:
         return None
     except (OSError, subprocess.SubprocessError) as e:
-        return str(e)
+        return say(e)
     return None if r.returncode == 0 else ((r.stderr or r.stdout).strip()[-300:] or "git fetch failed")
 
 
@@ -237,8 +326,12 @@ def fetch_all() -> None:
     if not _fetch_lock.acquire(blocking=False):
         return
     try:
+        # Running from now: working out the targets (each project's repository and GitHub
+        # link) takes a while with many projects, and a page that saw "not running" then
+        # would stop watching and never show what the fetch found.
+        FETCH.update(running=True, done=0, total=0, errors={})
         targets = fetch_targets()
-        FETCH.update(running=True, done=0, total=len(targets), errors={})
+        FETCH["total"] = len(targets)
         with ThreadPoolExecutor(max_workers=4) as ex:
             for top, err in zip(targets, ex.map(fetch_one, targets)):
                 FETCH["done"] += 1
@@ -253,6 +346,8 @@ def fetch_all() -> None:
 
 
 def start_fetch_all() -> dict:
+    if not _fetch_lock.locked():
+        FETCH["running"] = True         # before the thread: the page's next look sees it
     threading.Thread(target=fetch_all, daemon=True).start()
     return {"ok": True}
 
@@ -275,6 +370,118 @@ def add_project(path: str, folder_id: str = "") -> dict:
     return {"id": registry.project_key(p), "path": str(p), "has_tex": has_tex}
 
 
+FULL_NAME = re.compile(r"[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}")
+
+
+def github_full_name(value: str) -> str:
+    """Normalize a repository name or a copied GitHub repository/clone URL."""
+    full = re.sub(r"^(?:https?://github\.com/|git@github\.com:|github\.com/)", "",
+                  value.strip(), flags=re.IGNORECASE)
+    full = re.split(r"[?#]", full, maxsplit=1)[0].rstrip("/")
+    if full.endswith(".git"):
+        full = full[:-4]
+    if not FULL_NAME.fullmatch(full) or any(p in (".", "..") for p in full.split("/")):
+        raise ValueError("Enter a GitHub repository URL or owner/name")
+    return full
+
+
+# One opening at a time per repository: a second one (another tab, a double click) waits
+# for the first one's clone, then finds it listed instead of cloning it again. Others go
+# on meanwhile, since a clone can take minutes.
+_opening: dict[str, threading.Lock] = {}
+_opening_lock = threading.Lock()
+
+
+def open_from_github(full: str) -> dict:
+    """A GitHub repository ("owner/name" or a copied link) on this computer
+    (Home: Open from GitHub): cloned into the default folder, Prism's to keep (managed,
+    force pushes refused: publish.py set it up so where it was made), and listed. A folder's
+    shared repository (its top has SHARED_MARKER) comes as that folder, with its projects.
+    One already listed here (synced with the same repository) is not cloned again.
+    Returns {"ids": [project ids], "path", "cloned"}."""
+    full = github_full_name(full)
+    identity = f"github.com/{full}".lower()
+    with _opening_lock:
+        lock = _opening.setdefault(identity, threading.Lock())
+    with lock:
+        return _open_from_github(full, identity)
+
+
+def _open_from_github(full: str, identity: str) -> dict:
+    data = registry.load_projects()
+    here = []
+    for e in data["projects"]:
+        root = Path(e["path"])
+        place = repoview.place(root) if root.is_dir() else None
+        if place is not None and place.syncs and \
+                ((sync_facts(root, place.repo.git_dir).get("target") or {}).get("repository_identity") == identity):
+            here.append((registry.project_key(root), place.repo.top))
+    if here:
+        return {"ids": [i for i, _ in here], "path": str(here[0][1]), "cloned": False}
+    parent = Path(default_parent(data))
+    name = full.split("/")[1]
+    dest, n = parent / name, 2
+    while dest.exists():
+        dest, n = parent / f"{name} ({n})", n + 1
+    r = gitenv.git(parent, "clone", "-q", "--", f"https://github.com/{full}.git", str(dest),
+                   timeout=900, interactive=True)
+    if r.returncode != 0:
+        raise ValueError(f"Could not get {full} from GitHub.\n" + synctarget.safe_git_message(
+            (r.stderr or r.stdout).strip())[-300:])
+    from repository import Repository
+    synctarget.RepoSettings(Repository(dest, dest / ".git")).update(managed=True)
+    gitsync.install_guard(dest / ".git")
+    if not gitsync.shared_marker(dest):
+        return {"ids": [add_project(str(dest))["id"]], "path": str(dest), "cloned": True}
+    return {"ids": _add_shared_clone(dest), "path": str(dest), "cloned": True}
+
+
+def _add_shared_clone(top: Path) -> list[str]:
+    """A folder's shared repository, cloned to `top`: its folder on the Home page (shared,
+    in `top`), subfolders as they are on disk, and each project in it (a folder, up to three
+    deep, with a document: a .tex with \\documentclass)."""
+    try:
+        marker = json.loads((top / gitsync.SHARED_MARKER).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        marker = {}
+    projects = []
+    for dirpath, dirnames, filenames in os.walk(top):
+        rel = Path(dirpath).relative_to(top)
+        dirnames[:] = [] if len(rel.parts) >= 3 else \
+            sorted(d for d in dirnames if not d.startswith(".") and d not in SKIP_DIRS)
+        if rel.parts and any(f.endswith(".tex") and "\\documentclass" in _head(Path(dirpath) / f) for f in filenames):
+            projects.append(Path(dirpath))
+
+    def fn(data):
+        made: dict[tuple, str] = {}
+
+        def folder(parts: tuple, name: str) -> str:
+            if parts not in made:
+                parent = folder(parts[:-1], parts[-2]) if len(parts) > 1 else None
+                f = {"id": secrets.token_hex(4), "name": name, "parent": parent, "note": ""}
+                data.setdefault("folders", []).append(f)
+                made[parts] = f["id"]
+            return made[parts]
+        top_id = folder(("",), str(marker.get("folder") or top.name))
+        _folder(data, top_id)["sync"] = {"mode": "shared", "repo": str(top)}
+        for root in projects:
+            parts = Path(root).relative_to(top).parts[:-1]
+            fid = top_id
+            for i in range(len(parts)):
+                fid = folder(("",) + parts[:i + 1], parts[i])
+            _add(data, root.resolve(), fid)
+        return [registry.project_key(root.resolve()) for root in projects]
+    return registry.update_projects(fn)
+
+
+def _head(path: Path) -> str:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            return f.read(4096)
+    except OSError:
+        return ""
+
+
 def _add(data: dict, p: Path, folder_id: str = "") -> None:
     entry = registry.find(data, p)
     if entry is None:
@@ -282,6 +489,12 @@ def _add(data: dict, p: Path, folder_id: str = "") -> None:
         data["projects"].append(entry)
     if folder_id:
         entry["folder_id"] = _folder(data, folder_id)["id"]
+    ident = diskprojects.identity(p)
+    if ident is not None:
+        entry["disk_identity"] = ident
+    ignored = data.get("disk_ignored", [])
+    if registry.norm(p) in ignored:
+        ignored.remove(registry.norm(p))
 
 
 # ---------------------------------------------------------------- folders and tags
@@ -365,38 +578,8 @@ def remove_folder(fid: str) -> dict:
 
 # ---------------------------------------------------------------- a folder's repositories
 #
-# A folder chooses how its projects (its own and its subfolders') are kept on GitHub:
-#     "separate"  every project has a repository of its own (the default);
-#     "shared"    one repository for all of them: the projects sit in one folder on disk
-#                 (subfolders become subdirectories), its top has gitsync.SHARED_MARKER,
-#                 and each editor records its own project there (gitsync.py).
-# The folder keeps {"sync": {"mode", "repo"}}. Switching never deletes anything: a project's
-# own history comes along into the shared repository, and back out of it (git subtree
-# split); a .git that is replaced is set aside, renamed.
-
-SPLIT_BACKUP = ".git-prism-separate"    # a project's own .git, after it joined a shared repository
-SHARED_BACKUP = ".git-prism-shared"     # a shared repository's .git, after its projects split up
-
-
-def disk_name(name: str) -> str:
-    """A folder name for disk from a Home folder's name ("Paper A: ergodicity")."""
-    return BAD_NAME.sub("-", name).strip(" .") or "folder"
-
-
-inside = registry.inside
-
-
-def folder_projects(data: dict, fid: str) -> list[tuple[dict, list[str]]]:
-    """The projects in folder fid and its subfolders, with the subfolders' path from fid."""
-    out = []
-
-    def walk(f: str, parts: list[str]) -> None:
-        out.extend((e, parts) for e in data["projects"] if e.get("folder_id") == f)
-        for c in sorted((c for c in data.get("folders", []) if c.get("parent") == f),
-                        key=lambda c: c["name"].lower()):
-            walk(c["id"], parts + [disk_name(c["name"])])
-    walk(fid, [])
-    return out
+# One repository shared by a folder's projects, or one each: what switching would do and
+# doing it are in sharedrepo.py. Here the folder is looked up, and the projects locked.
 
 
 def sync_owner(data: dict, fid: str) -> dict | None:
@@ -423,17 +606,6 @@ def shared_repo_of(fid: str) -> Path | None:
     return Path(sync["repo"]) if sync.get("mode") == "shared" and sync.get("repo") else None
 
 
-def is_running(root: Path) -> bool:
-    return instances.inspect(root, timeout=0.8).occupied
-
-
-def default_repo(data: dict, f: dict, entries: list[dict]) -> Path:
-    """Next to the projects when they share a parent folder, else in the default location."""
-    parents = {registry.norm(Path(e["path"]).parent): Path(e["path"]).parent for e in entries}
-    base = next(iter(parents.values())) if len(parents) == 1 else Path(default_parent(data))
-    return base / disk_name(f["name"])
-
-
 def sync_plan(fid: str, mode: str | None = None, repo: str | None = None) -> dict:
     """What the folder's projects have now, and what choosing `mode` would do to each."""
     data = registry.load_projects()
@@ -441,208 +613,7 @@ def sync_plan(fid: str, mode: str | None = None, repo: str | None = None) -> dic
     owner = sync_owner(data, fid)
     if owner["id"] != fid:
         return {"inherited": {"id": owner["id"], "name": owner["name"], "repo": owner["sync"]["repo"]}}
-    cur = f.get("sync") or {}
-    mode = mode or cur.get("mode") or "separate"
-    if mode not in ("shared", "separate"):
-        raise ValueError("unknown sync mode")
-    items = folder_projects(data, fid)
-    repo = (repo or "").strip().strip('"')
-    top = Path(os.path.expanduser(repo)).resolve() if repo else \
-        Path(cur["repo"]) if cur.get("repo") else default_repo(data, f, [e for e, _ in items])
-    if not top.is_absolute():
-        raise ValueError("choose a full path for the repository's folder")
-    top_kind, top_top = repo_kind(top) if top.is_dir() else ("none", None)
-    rows, taken = [], set()
-    for e, parts in items:
-        root = Path(e["path"])
-        row = {"id": registry.project_key(root), "name": e.get("name") or root.name,
-               "path": str(root), "exists": root.is_dir(), "running": False, "sub": "/".join(parts)}
-        if not row["exists"]:
-            row.update(kind="missing", action="skip")
-            rows.append(row)
-            continue
-        kind, ktop = repo_kind(root)
-        row.update(kind=kind, running=is_running(root), github=github_of(ktop) if kind in ("own", "shared") else None,
-                   repo=str(ktop) if ktop else None)
-        if mode == "shared":
-            if inside(root, top):
-                row.update(action="stays", target=str(root))
-            else:
-                dst = top.joinpath(*parts, root.name)
-                n = 2
-                while dst.exists() or registry.norm(dst) in taken:
-                    dst = top.joinpath(*parts, f"{root.name} ({n})")
-                    n += 1
-                taken.add(registry.norm(dst))
-                row.update(action="moves", target=str(dst))
-            if inside(top, root):
-                row["action"] = "blocked"
-                row["why"] = "the repository's folder would be inside this project"
-            row["history"] = kind == "own"
-        else:
-            row["action"] = {"own": "keeps", "shared": "splits", "none": "new", "nested": "blocked"}[kind]
-            if kind == "nested":
-                row["why"] = f"it is inside another repository ({ktop}); move it out first"
-        rows.append(row)
-    others = []
-    if mode == "shared" and top.is_dir():
-        targets = {registry.norm(Path(r.get("target", r["path"]))) for r in rows}
-        others = [c.name for c in top.iterdir() if not c.name.startswith(".")
-                  and c.name not in (gitsync.SHARED_MARKER, ".gitignore")
-                  and registry.norm(c) not in targets and not any(t.startswith(registry.norm(c) + os.sep) for t in targets)]
-    return {"folder": f["name"], "mode": cur.get("mode") or "separate", "plan_mode": mode,
-            "repo": str(top), "repo_exists": top.is_dir(), "repo_kind": top_kind,
-            "repo_github": github_of(top) if top_kind == "own" else None,
-            "repo_inside": str(top_top) if top_kind in ("shared", "nested") else None,
-            "others": others[:20], "projects": rows, "github": github.GITHUB.status()}
-
-
-def _publish(root: Path, create: bool, owner: str, name: str, report: list[str]) -> str | None:
-    """Push to origin, or, with `create`, make a private GitHub repository for `root` first."""
-    sync = project_sync(root)
-    if run_git(root, "remote").stdout.strip():
-        if not sync.validate_target():
-            report.append("Local files kept; sync paused: " + sync.blocked_reason)
-            return None
-        url = github_of(root)
-        pushed = sync.push(manual=True)
-        if pushed.state != "synced":
-            report.append("Not pushed: " + str(pushed.message))
-        return url
-    if not create:
-        return None
-    r = create_github_repo(root, owner, name)
-    if "error" in r:
-        report.append(f"GitHub repository for {root.name} not created: {r['error']}")
-        return None
-    report.append(f"Created {r['url']}")
-    return r["url"]
-
-
-def _apply_shared(f: dict, plan: dict, body: dict, report: list[str]) -> None:
-    top = Path(plan["repo"])
-    if plan["repo_kind"] == "shared" and plan["repo_inside"] and \
-            registry.norm(plan["repo_inside"]) != registry.norm(top):
-        raise ValueError(f"{top} is inside the repository {plan['repo_inside']}; choose another folder")
-    top.mkdir(parents=True, exist_ok=True)
-    if repo_kind(top)[0] != "own":
-        git_init(top)
-        report.append(f"New repository in {top}")
-    ensure_ignore(top)
-    marker = top / gitsync.SHARED_MARKER
-    if not gitsync.shared_marker(top):
-        marker.write_bytes((json.dumps({"shared": True, "folder": f["name"]}, ensure_ascii=False,
-                                       indent=2) + "\n").encode("utf-8"))
-    imports = []
-    for r in plan["projects"]:
-        if r["action"] not in ("moves", "stays"):
-            continue
-        root = Path(r["path"])
-        if r["action"] == "moves":
-            dst = Path(r["target"])
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            registry.move_folder(root, dst, across=True)
-            report.append(f"Moved {root.name} to {dst}")
-            root = dst
-        dot = root / ".git"
-        if dot.is_file():
-            raise ValueError(f"{root.name} is a git worktree or submodule; set it up by hand")
-        if dot.is_dir() and r["kind"] == "own":
-            ref = f"refs/prism/imported/{r['id']}"
-            got = gitenv.git(top, "fetch", "-q", "--no-tags", str(root), f"+HEAD:{ref}", timeout=300)
-            if got.returncode == 0:
-                imports.append(run_git(top, "rev-parse", ref).stdout.strip())
-            if (root / SPLIT_BACKUP).exists():
-                raise ValueError(f"{root / SPLIT_BACKUP} is in the way")
-            os.replace(dot, root / SPLIT_BACKUP)
-            report.append(f"{root.name}: its history is kept in the shared repository; "
-                          f"its own .git is now {SPLIT_BACKUP}")
-    repo = Repository.find(top)
-    with repo.changing():
-        repo.ok("add", "-A", timeout=300)
-        big = unstage_big(repo)
-        if big:
-            report.append("Not committed, too large for GitHub: " + ", ".join(big))
-        tree = repo.ok("write-tree").strip()
-        head = repo.git("rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
-        old_tree = repo.ok("rev-parse", "HEAD^{tree}").strip() if head else None
-        if imports or tree != old_tree:
-            parents = [x for h in ([head] if head else []) + imports for x in ("-p", h)]
-            n = len(plan["projects"])
-            msg = f"{f['name']}: {n} project{'s' if n != 1 else ''} in one repository"
-            sha = repo.ok("commit-tree", tree, *parents, "-m", msg).strip()
-            repo.ok("update-ref", "HEAD", sha)
-    _publish(top, bool(body.get("github")), str(body.get("github_owner") or ""),
-             str(body.get("github_name") or "") or repo_name(top.name), report)
-    f["sync"] = {"mode": "shared", "repo": str(top)}
-
-
-def _init_own(root: Path) -> None:
-    """A repository of the project's own, which leaves a set-aside .git out of it."""
-    git_init(root)
-    exclude = root / ".git" / "info" / "exclude"
-    exclude.parent.mkdir(parents=True, exist_ok=True)
-    have = exclude.read_text(encoding="utf-8") if exclude.exists() else ""
-    if ".git-prism-*/" not in have:
-        lines = [*have.splitlines(), ".git-prism-*/"]
-        write_bytes(exclude, ("\n".join(lines) + "\n").encode("utf-8"))
-
-
-def _apply_separate(f: dict, plan: dict, body: dict, report: list[str]) -> None:
-    rows = [r for r in plan["projects"] if r["action"] in ("keeps", "splits", "new")]
-    tops: dict[str, list[dict]] = {}
-    for r in rows:
-        if r["action"] == "splits":
-            tops.setdefault(r["repo"], []).append(r)
-    data = registry.load_projects()
-    for top_s, members in tops.items():
-        top, ids = Path(top_s), {r["id"] for r in members}
-        strangers = [e.get("name") or Path(e["path"]).name for e in data["projects"]
-                     if inside(Path(e["path"]), top) and registry.project_key(Path(e["path"])) not in ids]
-        if strangers:
-            raise ValueError(f"the repository {top} also holds {', '.join(strangers[:5])}, "
-                             "which are not in this folder; move them in first")
-        if (top / SHARED_BACKUP).exists():
-            raise ValueError(f"{top / SHARED_BACKUP} is in the way")
-        # Each project's history, cut out of the shared one.
-        for r in members:
-            prefix = Path(r["path"]).relative_to(top).as_posix()
-            try:
-                # quotepath: git subtree compares the prefix with paths git prints, and
-                # would print a non-ASCII path such as 练习/ex 1 escaped otherwise.
-                sha = run_git(top, "-c", "core.quotepath=false", "subtree", "split", "-q",
-                              f"--prefix={prefix}", timeout=600).stdout.strip()
-                run_git(top, "update-ref", f"refs/prism/split/{r['id']}", sha)
-                r["split"] = f"refs/prism/split/{r['id']}"
-            except subprocess.CalledProcessError as e:
-                if "no new revisions" in (e.stderr or ""):        # never committed: nothing to carry
-                    continue
-                report.append(f"{Path(r['path']).name}: history not carried over "
-                              f"({(e.stderr or '').strip()[-200:]}); it starts afresh")
-        os.replace(top / ".git", top / SHARED_BACKUP)
-        try:
-            (top / gitsync.SHARED_MARKER).unlink()
-        except OSError:
-            pass
-        report.append(f"The shared repository in {top} is set aside as {SHARED_BACKUP}")
-        for r in members:
-            root = Path(r["path"])
-            _init_own(root)
-            if r.get("split"):
-                run_git(root, "fetch", "-q", "--no-tags", str(top / SHARED_BACKUP), r["split"], timeout=300)
-                run_git(root, "reset", "-q", "FETCH_HEAD")
-            report.append(f"{root.name}: a repository of its own" + (", with its history" if r.get("split") else ""))
-    for r in rows:
-        if r["action"] == "new":
-            _init_own(Path(r["path"]))
-            report.append(f"{Path(r['path']).name}: new repository")
-    owner = str(body.get("github_owner") or "")
-    for r in rows:
-        root = Path(r["path"])
-        if body.get("github") or github_of(root):
-            _publish(root, bool(body.get("github")), owner, repo_name(root.name), report)
-        tell_editor(root)
-    f["sync"] = {"mode": "separate"}
+    return sharedrepo.plan(data, f, mode, repo, default_parent(data))
 
 
 def apply_sync(body: dict) -> dict:
@@ -680,7 +651,7 @@ def _apply_sync_locked(body: dict, fid: str, plan: dict) -> dict:
     data = registry.load_projects()
     f = _folder(data, fid)
     try:
-        (_apply_shared if plan["plan_mode"] == "shared" else _apply_separate)(f, plan, body, report)
+        sharedrepo.apply(f, plan, body, report)
     except subprocess.CalledProcessError as e:
         report.append(f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[-400:]}")
         return {"ok": False, "report": report}
@@ -921,6 +892,12 @@ def remove_project(pid: str) -> dict:
     """Forget a project. Its files are not touched."""
     def fn(data):
         before = len(data["projects"])
+        for e in data["projects"]:
+            if registry.project_key(Path(e["path"])) == pid:
+                ignored = data.setdefault("disk_ignored", [])
+                key = registry.norm(Path(e["path"]))
+                if key not in ignored:
+                    ignored.append(key)
         data["projects"] = [e for e in data["projects"]
                             if registry.project_key(Path(e["path"])) != pid]
         return len(data["projects"]) < before
@@ -1019,9 +996,10 @@ def pick_folder(start: str, title: str) -> dict:
             p = r.stdout.decode("utf-8", "replace").strip() if r.returncode == 0 else ""
             return {"path": str(Path(p).resolve()) if p else None}
     try:
+        # No console window of its own on Windows (Home runs without one): only the dialog.
         r = subprocess.run([sys.executable, "-c", PICK_FOLDER, start or "", title or "Choose a folder"],
                            capture_output=True, timeout=900,
-                           env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+                           env={**os.environ, "PYTHONIOENCODING": "utf-8"}, **NO_WINDOW)
     except (OSError, subprocess.SubprocessError) as e:
         return {"error": f"folder dialog unavailable: {e}"}
     if r.returncode != 0:
@@ -1041,174 +1019,136 @@ class Handler(httpbase.Handler):
     pages = {"/": "home.html", "/index.html": "home.html"}
 
     def get(self, path, q):
-        try:
-            if path == "/api/ping":
-                return self._json({"app": "prism-home", "pid": os.getpid(),
-                                   "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
-            if path == "/api/projects":
-                return self._json({**list_projects(),
-                                   "updated": httpbase.code_stamp() > STARTED_CODE + 1})
-            if path == "/api/settings":
-                return self._json({"settings": settings.load(),
-                                   "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
-                                   "claude": claude_status(q.get("refresh") == "1")})
-            if path == "/api/folders/sync":
-                return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
-            if path == "/api/projects/publish":
-                return self._json(publish_info(Path(entry_for(q["id"])["path"])))
-            if path == "/api/fetch":
-                return self._json({k: v for k, v in FETCH.items()})
-            if path == "/api/git":
-                return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
-            if path == "/api/git/all":
-                ids = set(filter(None, q["ids"].split(","))) if "ids" in q else None
-                return self._json({"git": all_git_info(ids)})
-            if path == "/api/pdf":
-                pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
-                if not pdf or not pdf.is_file():
-                    return self._err(404, "no PDF yet")
-                return self._send(200, pdf.read_bytes(), "application/pdf")
-            return self._err(404, "not found")
-        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
-            raise Conflict(f"{e}; try again") from e
+        if path == "/api/ping":
+            return self._json(APP.ping())
+        if path == "/api/projects":
+            return self._json({**list_projects(),
+                               "updated": APP.updated()})
+        if path == "/api/projects/events":
+            return projectevents.serve(self)
+        if path == "/api/github/repos":
+            return self._json({"repos": github.GITHUB.repos()})
+        if path == "/api/tools":                  # Getting started: git, gh, LaTeX, Claude Code, the login
+            return self._json({**tools.status(), "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
+                               "login": github.GITHUB.login_state()})
+        if path == "/api/settings":
+            return self._json({"settings": settings.load(),
+                               "github": github.GITHUB.status(refresh=q.get("refresh") == "1"),
+                               "claude": claude_status(q.get("refresh") == "1"),
+                               "update": selfupdate.last()})
+        if path == "/api/snippets":
+            return self._json(settings.snippets())
+        if path == "/api/folders/sync":
+            return self._json(sync_plan(q["id"], q.get("mode"), q.get("repo")))
+        if path == "/api/projects/publish":
+            return self._json(publish_info(Path(entry_for(q["id"])["path"])))
+        if path == "/api/fetch":
+            return self._json({k: v for k, v in FETCH.items()})
+        if path == "/api/git":
+            return self._json({"git": git_info(Path(entry_for(q["id"])["path"]))})
+        if path == "/api/git/all":
+            ids = set(filter(None, q["ids"].split(","))) if "ids" in q else None
+            return self._json({"git": all_git_info(ids)})
+        if path == "/api/pdf":
+            pdf, _, _ = pdf_path(Path(entry_for(q["id"])["path"]))
+            if not pdf or not pdf.is_file():
+                return self._err(404, "no PDF yet")
+            return self._send(200, pdf.read_bytes(), "application/pdf")
+        return self._err(404, "not found")
 
     def post(self, path, body):
-        try:
-            if path == "/api/settings":
-                return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
-                                   "claude": claude_status()})
-            if path == "/api/projects/add":
-                return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
-            if path == "/api/projects/create":
-                return self._json(create_project(body))
-            if path == "/api/projects/update":
-                return self._json(change_project(body["id"], body))
-            if path == "/api/projects/rename":
-                return self._json(rename_project(body["id"], str(body.get("name") or ""),
-                                                 bool(body.get("folder"))))
-            if path == "/api/projects/publish":
-                r = publish_project(Path(entry_for(body["id"])["path"]), str(body.get("name") or ""),
-                                    str(body.get("owner") or ""), list(body.get("leave_out") or []))
-                return self._json(r, 502 if "error" in r else 200)
-            if path == "/api/projects/remove":
-                return self._json(remove_project(body["id"]))
-            if path == "/api/projects/trash":
-                return self._json(trash_project(body["id"]))
-            if path == "/api/projects/copy":
-                return self._json(copy_project(body["id"]))
-            if path == "/api/projects/paste":
-                return self._json(paste_projects(str(body.get("folder_id") or "")))
-            if path == "/api/fetch":
-                return self._json(start_fetch_all())
-            if path == "/api/folders/create":
-                return self._json(create_folder(body))
-            if path == "/api/folders/update":
-                return self._json(change_folder(body))
-            if path == "/api/folders/sync":
-                return self._json(apply_sync(body))
-            if path == "/api/folders/remove":
-                return self._json(remove_folder(str(body["id"])))
-            if path == "/api/tags/update":
-                return self._json(change_tag(body))
-            if path == "/api/tags/remove":
-                return self._json(remove_tag(str(body["name"])))
-            if path == "/api/restart":
-                if RESTART["server"] is None:
-                    return self._err(409, "not ready to restart")
-                if LIFETIME is None:
-                    return self._err(409, "not ready to restart")
-                try:
-                    LIFETIME.transition()
-                except (instances.Busy, TimeoutError, OSError) as exc:
-                    return self._err(409, str(exc))
-                RESTART["again"] = True
-                threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
-                return self._json({"ok": True})
-            if path == "/api/projects/open":
-                r = open_project(body["id"])
-                return self._json(r, 502 if "error" in r else 200)
-            if path == "/api/projects/reveal":
-                p = Path(entry_for(body["id"])["path"])
-                if not p.is_dir():
-                    raise ValueError(f"folder not found: {p}")
-                desktop.open_folder(p)
-                return self._json({"ok": True})
-            if path == "/api/pick-folder":
-                return self._json(pick_folder(str(body.get("start") or ""),
-                                              str(body.get("title") or "")))
-            return self._err(404, "not found")
-        except TimeoutError as e:           # a lock not had in time (httpbase takes it for a page gone)
-            raise Conflict(f"{e}; try again") from e
+        if path == "/api/state/restore":
+            registry.restore_backup(str(body["file"]))
+            return self._json({"ok": True})
+        if path == "/api/settings":
+            return self._json({"settings": settings.save(body), "github": github.GITHUB.status(),
+                               "claude": claude_status()})
+        if path == "/api/snippets":
+            return self._json(settings.save_snippets(body.get("content")))
+        if path == "/api/tools/install":          # git, gh, tectonic, tex, claude
+            return self._json(tools.install(str(body["name"])))
+        if path == "/api/tools/claude-login":     # a terminal window running claude, to log in once
+            return self._json(tools.claude_login())
+        if path == "/api/github/open":            # a project of yours on GitHub, on this computer
+            return self._json(open_from_github(str(body["full"])))
+        if path == "/api/github/login":           # GitHub's device login, in the browser
+            return self._json(github.GITHUB.login())
+        if path == "/api/github/login/cancel":
+            github.GITHUB.cancel_login()
+            return self._json(github.GITHUB.login_state())
+        if path == "/api/projects/add":
+            return self._json(add_project(str(body["path"]), str(body.get("folder_id") or "")))
+        if path == "/api/projects/create":
+            return self._json(create_project(body))
+        if path == "/api/projects/update":
+            return self._json(change_project(body["id"], body))
+        if path == "/api/projects/rename":
+            return self._json(rename_project(body["id"], str(body.get("name") or ""),
+                                             bool(body.get("folder"))))
+        if path == "/api/projects/publish":
+            r = publish_project(Path(entry_for(body["id"])["path"]), str(body.get("name") or ""),
+                                str(body.get("owner") or ""), list(body.get("leave_out") or []))
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/projects/remove":
+            return self._json(remove_project(body["id"]))
+        if path == "/api/projects/trash":
+            return self._json(trash_project(body["id"]))
+        if path == "/api/projects/copy":
+            return self._json(copy_project(body["id"]))
+        if path == "/api/projects/paste":
+            return self._json(paste_projects(str(body.get("folder_id") or "")))
+        if path == "/api/fetch":
+            return self._json(start_fetch_all())
+        if path == "/api/folders/create":
+            return self._json(create_folder(body))
+        if path == "/api/folders/update":
+            return self._json(change_folder(body))
+        if path == "/api/folders/sync":
+            return self._json(apply_sync(body))
+        if path == "/api/folders/remove":
+            return self._json(remove_folder(str(body["id"])))
+        if path == "/api/tags/update":
+            return self._json(change_tag(body))
+        if path == "/api/tags/remove":
+            return self._json(remove_tag(str(body["name"])))
+        if path == "/api/restart":
+            APP.restart()
+            APP.stop_for_restart()
+            return self._json({"ok": True})
+        if path == "/api/projects/open":
+            r = open_project(body["id"])
+            return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/projects/reveal":
+            p = Path(entry_for(body["id"])["path"])
+            if not p.is_dir():
+                raise ValueError(f"folder not found: {p}")
+            desktop.open_folder(p)
+            return self._json({"ok": True})
+        if path == "/api/pick-folder":
+            return self._json(pick_folder(str(body.get("start") or ""),
+                                          str(body.get("title") or "")))
+        return self._err(404, "not found")
 
 
 def main():
     httpbase.quiet_stdio()
     ap = argparse.ArgumentParser(description="prism-local Home: manage your LaTeX projects")
-    ap.add_argument("--port", type=int, default=instances.HOME_PORT, help="port (0: any free port)")
-    ap.add_argument("--port-tries", type=int, default=1,
-                    help="if the port is taken, try this many ports upwards")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--exit-when-idle", action="store_true",
-                    help="exit shortly after the last Home page is closed")
-    ap.add_argument("--ready-file", type=Path,
-                    help="once listening, write {pid, port, url} as JSON to this file")
-    ap.add_argument("--idle-timings", help=argparse.SUPPRESS)
-    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
-    a = ap.parse_args()
-    global LIFETIME
-    try:
-        with instances.serving(None, a.ready_file, a.instance_token) as life:
-            LIFETIME = life
-            return serve(a, life)
-    except (instances.Busy, TimeoutError) as exc:
-        sys.exit(f"prism-home: {exc}")
+    httpbase.App.arguments(ap, instances.HOME_PORT, "Home page")
+    return APP.run(ap.parse_args(), None, serve)
 
 
-def serve(a, life):
-    if a.idle_timings:
-        f, g, st = (float(x) for x in a.idle_timings.split(","))
-        PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
-    try:
-        srv = httpbase.listen(Handler, a.port, a.port_tries)
-    except OSError as e:
-        sys.exit(f"prism-home: {e}")
-    url = f"http://127.0.0.1:{srv.server_address[1]}/"
-    print(f"prism-local Home: {url}\n  projects: {registry.state_dir() / 'projects.json'}",
+def serve(life):
+    APP.listen(Handler)
+    print(f"prism-local Home: {APP.url}\n  projects: {registry.state_dir() / 'projects.json'}",
           flush=True)
-    life.publish(url, srv.server_address[1])
-    if not a.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    if a.exit_when_idle:
-        threading.Thread(target=httpbase.idle_watchdog, args=(srv, PRESENCE), daemon=True).start()
-    start_fetch_all()                   # what changed on GitHub since last time
-    threading.Thread(target=selfupdate.update, daemon=True).start()   # prism-local itself
-    httpbase.stop_on_signals(srv)
-    RESTART["server"] = srv
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        transition = life.pending or life.transition()
-        try:
-            srv.server_close()
-            life.unpublish()
-            if RESTART["again"]:
-                argv = [sys.executable, str(Path(__file__).resolve()), "--port",
-                        str(srv.server_address[1]), "--port-tries", "1", "--no-browser"]
-                if a.exit_when_idle:
-                    argv.append("--exit-when-idle")
-                if a.idle_timings:
-                    argv += ["--idle-timings", a.idle_timings]
-                if a.ready_file:
-                    argv += ["--ready-file", str(a.ready_file)]
-                result = transition.handover(argv, str(Path.home()))
-                httpbase.log("restart failed: " + result["error"] if "error" in result
-                             else "restart handed to the successor")
-            else:
-                httpbase.log("stopped")
-        finally:
-            transition.close()
+
+    def successor():
+        argv = APP.successor_argv(Path(__file__).resolve())
+        if APP.args.ready_file:
+            argv += ["--ready-file", str(APP.args.ready_file)]
+        return argv, str(Path.home())
+    # What changed on GitHub since last time, once listening.
+    APP.serve(started=start_fetch_all, successor=successor)
 
 
 if __name__ == "__main__":

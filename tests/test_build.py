@@ -186,6 +186,19 @@ class Platform(unittest.TestCase):
         self.assertIn("pdflatex was not found", r["output"])
         self.assertEqual(r["diagnostics"][0]["severity"], "error")
 
+    def test_a_file_held_open_is_a_diagnostic_not_a_crash(self):
+        """On Windows OneDrive or an antivirus may hold a .aux or .bbl: the build says so in
+        its output and problems, instead of the request failing with WinError text."""
+        root = project({"main.tex": "\\documentclass{article}\\begin{document}x\\end{document}"})
+        b = build.Build(root, "main.tex", "build")
+        held = PermissionError(13, "Access is denied", str(root / "build" / "main.aux"))
+        with mock.patch.object(build.Build, "_choose_builder", return_value="builtin"), \
+                mock.patch.object(build.Build, "_builtin", side_effect=held):
+            r = b.run()
+        self.assertEqual(r["exit"], 126)
+        self.assertIn("main.aux", r["output"])
+        self.assertIn("Another program may hold it open", r["diagnostics"][0]["message"])
+
     def test_tex_is_found_where_distributions_install_it(self):
         """A server started from a desktop menu has no TeX on PATH (no ~/.bashrc)."""
         base = tmpdir()

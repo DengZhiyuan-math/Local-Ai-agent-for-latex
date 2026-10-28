@@ -23,9 +23,10 @@ const byId = (id) => H.projects.find((p) => p.id === id);
 /* ------------------------------------------------------------------ data */
 // Never two at a time (see poller), so an older answer cannot land after a newer one; a
 // call during a load asks for one more after it.
-const load = poller(loadOnce, 10000);
+const load = poller(loadOnce, 0); // coalesce invalidations; never start a polling timer
 async function loadOnce() {
   const r = await api("/api/projects");
+  showDamaged(r, "projects.json");
   if (r._status !== 200) return;
   delete r._status;
   showUpdate(r.updated);
@@ -35,6 +36,34 @@ async function loadOnce() {
   H.projects = r.projects; H.folders = r.folders || []; H.tagColors = r.tags || {};
   H.defaultParent = r.default_parent; H.loaded = true;
   render();
+}
+// A state file (projects.json, settings.json) the server cannot read: what it says, and,
+// when the version before its last change can be read, a button that puts it back. Gone
+// once that file can be read again.
+const damaged = new Map();            // file -> the answer that said so
+function showDamaged(r, file) {
+  if (!r) return;
+  if (r._status === 200) damaged.delete(file);
+  else if (r.damaged_state) damaged.set(r.damaged_state, r);
+  const [name, said] = damaged.entries().next().value || [], old = $("#state-damaged");
+  if (old && old.dataset.file === name) return;
+  if (old) old.remove();
+  if (!name) return;
+  const bar = document.createElement("div");
+  bar.id = "state-damaged"; bar.dataset.file = name; bar.setAttribute("role", "alert");
+  bar.textContent = said.error + " ";
+  if (said.backup) {
+    const restore = document.createElement("button");
+    restore.textContent = "Put back the previous version";
+    restore.onclick = async () => {
+      if (!confirm(`Put back ${name} as it was before its last change? The damaged file is kept as ${name}.damaged.`)) return;
+      const x = await api("/api/state/restore", { file: name });
+      if (x._status !== 200) return toast(x.error || "Could not put it back", true);
+      damaged.delete(name); bar.remove(); H.sig = null; load(); loadSettings();
+    };
+    bar.append(restore);
+  }
+  $("#home-main").before(bar);
 }
 // prism-local was updated in the background (selfupdate.py) while this page's server ran.
 function showUpdate(updated) {
@@ -96,8 +125,8 @@ async function loadOpenedGit() {
 }
 
 /* ------------------------------------------------------------------ folders and tags
-   Folders (a research topic, its sub-projects, …) and tags only organize this list;
-   hub.py keeps them in projects.json, and no file moves on disk. */
+   Folders and tags organize this list; disk-linked folders also follow Explorer changes.
+   Home grouping actions do not move files on disk. */
 // Folders, their trees and the tags (homeview.js, on this page's state H).
 const folderById = (id) => HomeView.folderById(H, id);
 const byName = HomeView.byName;
@@ -127,7 +156,7 @@ function folderOptions(selected, { none = "— Not in a folder —", exclude = n
     .join("");
 }
 const currentFolder = () => (H.view.kind === "folder" ? H.view.id : "");
-// Like hub.disk_name: a folder name usable on disk.
+// Like sharedrepo.disk_name: a folder name usable on disk.
 const diskName = (name) => name.replace(/[<>:"\/\\|?*\x00-\x1f]/g, "-").replace(/^[ .]+|[ .]+$/g, "") || "folder";
 // The shared repository folder `fid` is in ({owner, repo, dir}: its own subdirectory), if any.
 function sharedRepo(fid) {
@@ -209,14 +238,18 @@ function gitChip(id) {
   if (g === null) return `<span class="gitchip"><button class="chip gh add" data-act="publish" title="Create a private GitHub repository for this project">+ GitHub</button></span>`;
   if (!g) return `<span class="gitchip"></span>`;
   if (g.nested) return `<span class="gitchip chip muted" title="No repository of its own: this folder is inside ${esc(g.toplevel_path)}">inside ${esc(g.toplevel)} repo</span>`;
-  const extra = [g.shared ? `in ${g.shared}` : "", g.changes ? `${g.changes} changed` : "clean", g.ahead ? `↑${g.ahead}` : ""].filter(Boolean).join(" · ");
-  // New commits on GitHub (fetched when the Home page started): opening the project pulls them.
-  const news = g.behind ? ` <span class="chip news" title="${g.behind} new commit${g.behind === 1 ? "" : "s"} on GitHub (another computer, GitHub's editor). Opening the project brings them in.">↓ ${g.behind} new on GitHub</span>`
-    : g.fetch_error ? ` <span class="chip err" title="${esc(g.fetch_error)}">GitHub not reached</span>` : "";
+  // In plain words: where its work is, not git's (the branch and counts are in the title).
+  const saved = !g.github ? "saved on this computer" : (g.changes || g.ahead) ? "not all on GitHub yet" : "all on GitHub";
+  const extra = [g.shared ? `in ${g.shared}` : "", saved].filter(Boolean).join(" · ");
+  // New changes on GitHub (fetched when the Home page started): opening the project brings them in.
+  const news = g.paused ? ` <span class="chip err" title="${esc(g.paused + "\n\nDetails: " + (g.paused_details || ""))}">Upload paused</span>`
+    : g.behind ? ` <span class="chip news" title="${g.behind} new change${g.behind === 1 ? "" : "s"} on GitHub (from another computer, or GitHub's editor). Opening the project brings them in.">↓ ${g.behind} new on GitHub</span>`
+    : g.fetch_error ? ` <span class="chip err" title="${esc("Could not reach GitHub; Prism tries again later.\n\nDetails: " + g.fetch_error)}">GitHub not reached</span>` : "";
   const gh = g.github ? ` <a class="chip gh" href="${esc(g.github)}" target="_blank" rel="noopener" title="${esc(g.github)}">GitHub ↗</a>`
     : ` <button class="chip gh add" data-act="publish" title="Create a private GitHub repository for ${g.shared ? "the repository it is in" : "this project"}">+ GitHub</button>`;
   const where = g.shared ? `, in the repository shared by its folder (${g.toplevel_path})` : "";
-  return `<span class="gitchip"><span class="chip ${g.changes ? "dirty" : ""}" title="git: branch ${esc(g.branch)}${esc(where)}">⎇ ${esc(g.branch || "—")} · ${esc(extra)}</span>${news}${gh}</span>`;
+  const tech = `git: branch ${g.branch || "—"}, ${g.changes} changed file${g.changes === 1 ? "" : "s"} not committed, ${g.ahead} commit${g.ahead === 1 ? "" : "s"} not pushed${where}`;
+  return `<span class="gitchip"><span class="chip ${g.changes || g.ahead ? "dirty" : ""}" title="${esc(tech)}">${esc(extra)}</span>${news}${gh}</span>`;
 }
 function initials(name) {
   const w = name.replace(/[-_.]+/g, " ").trim().split(/\s+/);
@@ -376,7 +409,7 @@ function renderBars(n) {
   $("#btn-preview").classList.toggle("on", H.preview);
   const running = H.projects.filter((p) => p.running).length;
   const behind = H.projects.filter((p) => H.git[p.id] && H.git[p.id].behind).length;
-  const fetchNote = H.fetch && H.fetch.running ? `Checking GitHub (${H.fetch.done}/${H.fetch.total})…`
+  const fetchNote = H.fetch && H.fetch.running ? `Checking GitHub${H.fetch.total ? ` (${H.fetch.done}/${H.fetch.total})` : ""}…`
     : behind ? `${plural(behind, "project")} with new changes on GitHub` : "";
   $("#status-left").textContent = plural(n, "item") + (sel.length ? `   ·   ${sel.length} selected` : "");
   $("#status-right").textContent = [running && `${running} open in an editor`, fetchNote].filter(Boolean).join("   ·   ");
@@ -404,7 +437,7 @@ function previewHTML() {
         <dt>Status</dt><dd>${statusHTML(p)}</dd>
         <dt>Modified</dt><dd>${p.edited ? `${fmtDate(p.edited)} <span class="muted">(${ago(p.edited)})</span>` : "—"}</dd>
         <dt>Opened</dt><dd>${p.opened ? `${fmtDate(p.opened)} <span class="muted">(${ago(p.opened)})</span>` : "—"}</dd>
-        ${p.exists ? `<dt>Files</dt><dd>${p.files ? plural(p.files, ".tex file") : "No .tex files"}</dd>` : ""}
+        ${p.exists ? `<dt>Files</dt><dd>${p.files ? (p.files_capped ? "≥ " : "") + plural(p.files, ".tex file") : "No .tex files"}</dd>` : ""}
         <dt>In</dt><dd><button class="linkish" ${fid ? `data-act="folder" data-fid="${esc(fid)}"` : `data-act="view" data-view="all"`}>${icon("folder")}${esc(whereText(fid))}</button></dd>
         <dt>Path</dt><dd class="pv-path">${esc(p.path)}</dd>
         <dt>Tags</dt><dd>${(p.tags || []).map(tagChip).join("") || `<button class="linkish" data-act="tags">Add tags…</button>`}</dd>
@@ -421,6 +454,7 @@ function previewHTML() {
         <dt>In total</dt><dd>${plural(all, "project")}</dd>
         <dt>Modified</dt><dd>${folderTime(f, "edited") ? fmtDate(folderTime(f, "edited")) : "—"}</dd>
         <dt>In</dt><dd>${esc(whereText(f.parent))}</dd>
+        ${f.disk_path ? `<dt>Disk folder</dt><dd class="pv-path">${esc(f.disk_path)}<br><span class="muted">Follows changes in Explorer / Finder automatically</span></dd>` : ""}
         <dt>GitHub</dt><dd>${syncChip(f.id) || `<button class="linkish" data-act="sync" data-fid="${esc(f.id)}">Set up sync…</button>`}</dd></dl></div>`;
   }
   return `<div class="pv-none">${icon("doc")}<p>Select a project to see its first page and details.</p></div>`;
@@ -862,7 +896,7 @@ document.addEventListener("dragstart", (e) => {
   e.dataTransfer.setData(DRAG, JSON.stringify(dragKeys));
   e.dataTransfer.effectAllowed = "move"; H.dragging = true; closeMenu();
 });
-document.addEventListener("dragend", () => { H.dragging = false; dragKeys = []; markDrop(null); });
+document.addEventListener("dragend", () => { H.dragging = false; dragKeys = []; markDrop(null); load(); });
 document.addEventListener("dragover", (e) => {
   const el = dropTarget(e);
   markDrop(el);
@@ -950,7 +984,7 @@ function updateGithubRow() {
   $("#gh-owner").textContent = `github.com/${(H.settings && H.settings.github_owner) || gh.account || "…"}/ · private`;
   const note = f.querySelector(".gh-note");
   note.hidden = !!gh.logged_in;
-  note.textContent = gh.logged_in ? "" : (gh.error || "GitHub is not connected.") + " See Settings (top right).";
+  note.textContent = gh.logged_in ? "" : (gh.error || "GitHub is not connected.");
 }
 $("#form-new").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -975,6 +1009,68 @@ $("#form-new").addEventListener("submit", async (e) => {
   if (H.view.kind === "tag") await post("/api/projects/update", { id: r.id, tags: [H.view.id] }, "tag the project");
   if (f.elements.open.checked) openProject(r.id);
 });
+
+// Open from GitHub: choose from your repositories or paste a repository link.
+const CLONE = { repos: [], loading: false, busy: false };
+function githubFullName(value) {
+  const full = value.trim().replace(/^(?:https?:\/\/github\.com\/|git@github\.com:|github\.com\/)/i, "")
+    .split(/[?#]/, 1)[0].replace(/\/+$/, "").replace(/\.git$/, "");
+  return /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/.test(full)
+    && !full.split("/").some((p) => p === "." || p === "..") ? full : null;
+}
+async function openClone() {
+  const f = $("#form-clone"), dlg = $("#dlg-clone");
+  f.reset(); dlgError(dlg, "");
+  CLONE.repos = []; CLONE.loading = true; CLONE.busy = false;
+  f.elements.filter.disabled = false;
+  renderClone();
+  dlg.showModal(); f.elements.filter.focus();
+  const r = await api("/api/github/repos");
+  CLONE.loading = false;
+  if (r._status !== 200) { renderClone(); return dlgError(dlg, (r.error || "Could not ask GitHub") + ". You can still paste a repository link."); }
+  CLONE.repos = r.repos || [];
+  renderClone();
+}
+function renderClone() {
+  if (CLONE.busy) return;
+  const value = $("#form-clone").elements.filter.value.trim();
+  const full = githubFullName(value), want = (full || value).toLowerCase();
+  const rows = CLONE.repos.filter((x) => !want || x.full.toLowerCase().includes(want));
+  const direct = full && !rows.some((x) => x.full.toLowerCase() === full.toLowerCase())
+    ? `<button type="button" class="clone-it" data-full="${esc(full)}"><b>Open ${esc(full)}</b><small>Copy this repository to this computer</small></button>` : "";
+  $("#clone-list").innerHTML = direct + (rows.length ? rows.map((x) => `<button type="button" class="clone-it" data-full="${esc(x.full)}">
+      <b>${esc(x.name)}</b> <small>${esc(x.full)}${x.private ? " · private" : ""}${x.updated ? " · changed " + esc(x.updated.slice(0, 10)) : ""}</small></button>`).join("")
+    : direct ? "" : `<p class="hint">${CLONE.loading ? "Asking GitHub…" : value ? "Nothing matches. Paste a GitHub repository link or enter owner/name." : "No repositories listed. You can paste a GitHub repository link."}</p>`);
+}
+$("#form-clone").elements.filter.addEventListener("input", () => { dlgError($("#dlg-clone"), ""); renderClone(); });
+$("#form-clone").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const full = githubFullName(e.target.elements.filter.value);
+  const buttons = $("#clone-list").querySelectorAll("[data-full]");
+  const b = [...buttons].find((x) => full && x.dataset.full.toLowerCase() === full.toLowerCase())
+    || (buttons.length === 1 ? buttons[0] : null);
+  if (b) cloneRepository(b);
+});
+$("#clone-list").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-full]"); if (b) cloneRepository(b);
+});
+async function cloneRepository(b) {
+  if (CLONE.busy) return;
+  CLONE.busy = true;
+  const dlg = $("#dlg-clone");
+  dlgError(dlg, "");
+  $("#form-clone").elements.filter.disabled = true;
+  for (const x of $("#clone-list").querySelectorAll("button")) x.disabled = true;
+  b.querySelector("small").textContent = "copying to this computer…";
+  const r = await api("/api/github/open", { full: b.dataset.full });
+  CLONE.busy = false;
+  $("#form-clone").elements.filter.disabled = false;
+  if (r._status !== 200) { renderClone(); return dlgError(dlg, r.error || "Could not open it"); }
+  dlg.close();
+  toast(r.cloned ? `Copied ${b.dataset.full} to ${r.path}` : `${b.dataset.full} is already here: ${r.path}`);
+  H.sig = null; await load(); loadAllGit();
+}
+$("#btn-clone").onclick = openClone;
 
 function openAdd() {
   const f = $("#form-add"), dlg = $("#dlg-add");
@@ -1214,7 +1310,7 @@ async function openPublish(id) {
   if (r.github) { $("#pub-note").innerHTML = `Already on GitHub: <a href="${esc(r.github)}" target="_blank" rel="noopener">${esc(r.github)}</a>`; return; }
   $("#pub-note").textContent = {
     nested: `This folder is inside another repository (${r.top}); move the project out of it first.`,
-    login: (gh.error || "The GitHub CLI is not logged in.") + " See Settings (top right).",
+    login: gh.error || "You are not logged in to GitHub. Log in from the Home page (Getting started).",
     shared: `It is part of the repository in ${r.top}: that whole repository goes to GitHub.`,
     ok: (r.kind === "none" ? "A git repository is created first. " : "") + "Build output and LaTeX's auxiliary files stay out (.gitignore). Its editor then saves and pushes changes automatically.",
   }[pub.why];
@@ -1299,17 +1395,45 @@ $("#btn-new").onclick = openNew;
 /* ------------------------------------------------------------------ settings */
 async function loadSettings(refresh = false) {
   const r = await api("/api/settings" + (refresh ? "?refresh=1" : "")).catch(() => null);
-  if (r && r._status === 200) { H.settings = r.settings; H.github = r.github; H.claude = r.claude; }
+  showDamaged(r, "settings.json");
+  if (r && r._status === 200) { H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.update = r.update; }
   return r;
+}
+// The last self-update (selfupdate.py): a "not updated: …" otherwise stays in the server log.
+function renderUpdateStatus() {
+  const el = $("#update-status"), u = H.update;
+  el.hidden = !u;
+  if (!u) return;
+  el.classList.toggle("warn", /^not updated/.test(u.result || ""));
+  el.textContent = `prism-local: ${u.result || "up to date"}${u.at ? ` (checked ${ago(u.at)})` : ""}.`;
 }
 function renderGhStatus() {
   const el = $("#gh-status"), gh = H.github || {};
   el.className = "gh-status " + (gh.logged_in ? "ok" : "err");
   el.textContent = gh.logged_in ? `✓ Connected as ${gh.account} (GitHub CLI)` : (gh.error || "Checking…");
+  el.hidden = !gh.logged_in && !!SETUP.st && !SETUP.st.gh;   // the row above says so, with its Install button
+  const login = (SETUP.st && SETUP.st.login) || {}, warn = $("#gh-warning");
+  warn.hidden = !(gh.logged_in && login.state === "done" && login.warning);
+  warn.textContent = warn.hidden ? "" : login.warning;
+  renderToolsStatus();
   const f = $("#form-settings");
   f.elements.github_repo.disabled = !gh.logged_in;
   f.elements.github_owner.placeholder = gh.account || "";
   renderClaudeStatus();
+}
+// git, the GitHub CLI, LaTeX and the AI assistant, as the Getting started panel has them,
+// with the same buttons. The AI assistant is optional: not having it is not said in red.
+function renderToolsStatus() {
+  const el = $("#tools-status"), r = SETUP.st;
+  if (!r) return;
+  const row = (name, what) => r[name] ? `<div class="gh-status ok">✓ ${what} is installed</div>`
+    : `<div class="gh-status err">${what} is not installed. ${setupInstall(r, name)}</div>`;
+  const latex = setupTexReady(r) ? `<div class="gh-status ok">✓ ${setupTexName(r)}</div>`
+    : `<div class="gh-status err">LaTeX is not installed. ${setupLatex(r)}</div>`;
+  const ai = !r.claude ? `<div class="gh-status">The AI assistant (Claude Code, optional) is not installed. ${setupInstall(r, "claude", false)}</div>`
+    : `<div class="gh-status ok">✓ The AI assistant (Claude Code) is installed${setupClaudeLoggedIn() ? "" : ". " + setupClaude(r)}</div>`;
+  const html = row("git", "git") + row("gh", "The GitHub CLI") + latex + ai;
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
 }
 // Which account Claude Code uses now, and whether it matches the one allowed.
 function renderClaudeStatus() {
@@ -1319,7 +1443,7 @@ function renderClaudeStatus() {
   let ok = !!c.logged_in && !c.error && !(c.overrides || []).length;
   let text;
   if (c.error) text = "Could not check: " + c.error;
-  else if (!c.logged_in) text = "Claude Code is not logged in. Run claude in a terminal and log in.";
+  else if (!c.logged_in) text = "Claude Code is not logged in: see the AI assistant under Programs, above.";
   else if ((c.overrides || []).length) text = `Logged in as ${who}, but overridden by ${c.overrides.join("; ")}.`;
   else if (want && c.email && want !== c.email.toLowerCase()) { ok = false; text = `Logged in as ${who}, not the allowed account: the agent will refuse to run.`; }
   else text = `✓ Claude Code is logged in as ${who}`;
@@ -1343,11 +1467,63 @@ async function openSettings() {
     f.elements.github_owner.value = st.github_owner || "";
     f.elements.claude_account.value = st.claude_account || "";
     f.elements.claude_config_dir.value = st.claude_config_dir || "";
-    renderGhStatus();
+    for (const k of ["snippets", "snippets_fraction", "snippets_matrix"]) f.elements[k].checked = st[k] !== false;
+    renderGhStatus(); renderUpdateStatus();
   };
   fill(); dlg.showModal();
+  loadSnippetsFile();
   await loadSettings(true); fill();          // re-check gh: you may have just logged in
+  loadSetup();                               // and git and gh: installed since?
 }
+
+// Your snippets file (snippets.js reads it; every editor uses it): whether it loads, and
+// a dialog to edit it or to read every snippet.
+const SNIP = { path: "", content: null };
+async function loadSnippetsFile() {
+  const r = await api("/api/snippets").catch(() => null);
+  if (!r || r._status !== 200) return;
+  SNIP.path = r.path; SNIP.content = r.content;
+  $("#snip-path").textContent = r.path;
+  const el = $("#snip-status");
+  try {
+    const u = Snippets.load(r.content);
+    el.className = "gh-status ok";
+    el.textContent = r.bundled ? `✓ ${u.list.length} distributed snippets (updated with the app). Saving creates your local override.`
+      : r.content == null ? "No file of your own yet: the built-in snippets are used."
+      : `✓ ${u.list.length} of your own` + (u.defaults ? ", and the built-in ones" : " (the built-in ones are off)");
+  } catch (e) {
+    el.className = "gh-status err";
+    el.textContent = `Your snippets file has an error, so the editors use only the built-in ones: ${e.message || e}`;
+  }
+}
+function snippetsDialog(title, text, editable) {
+  const dlg = $("#dlg-snippets"), ta = $("#snip-text");
+  dlgError(dlg, "");
+  $("#snip-title").textContent = title;
+  $("#snip-save").hidden = !editable;
+  ta.readOnly = !editable; ta.value = text;
+  dlg.showModal(); ta.focus(); ta.setSelectionRange(0, 0); ta.scrollTop = 0;
+}
+$("#snip-edit").onclick = () => snippetsDialog("My snippets", SNIP.content ?? Snippets.TEMPLATE, true);
+$("#snip-list").onclick = () => {
+  let u = { list: [], defaults: true };
+  try { u = Snippets.load(SNIP.content); } catch { /* the status says what is wrong */ }
+  snippetsDialog("All snippets", Snippets.listing(u.list, u.defaults), false);
+};
+// Tab indents in the file, as in an editor (Shift-Tab still leaves the box).
+$("#snip-text").addEventListener("keydown", (e) => {
+  if (e.key !== "Tab" || e.shiftKey || e.target.readOnly) return;
+  e.preventDefault();
+  document.execCommand("insertText", false, "\t");
+});
+$("#form-snippets").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const dlg = $("#dlg-snippets"), text = $("#snip-text").value;
+  try { Snippets.load(text); } catch (err) { return dlgError(dlg, "Not saved: " + (err.message || err)); }
+  const r = await api("/api/snippets", { content: text });
+  if (r._status !== 200) return dlgError(dlg, "Not saved: " + (r.error || r._status));
+  dlg.close(); toast("Snippets saved"); loadSnippetsFile();
+});
 $("#btn-settings").onclick = openSettings;
 $("#form-settings").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1357,6 +1533,8 @@ $("#form-settings").addEventListener("submit", async (e) => {
     github_repo: f.elements.github_repo.checked, github_owner: f.elements.github_owner.value.trim(),
     claude_account: f.elements.claude_account.value.trim(),
     claude_config_dir: f.elements.claude_config_dir.value.trim(),
+    snippets: f.elements.snippets.checked, snippets_fraction: f.elements.snippets_fraction.checked,
+    snippets_matrix: f.elements.snippets_matrix.checked,
   });
   if (r._status !== 200) return dlgError(dlg, r.error || "Could not save the settings");
   H.settings = r.settings; H.github = r.github; H.claude = r.claude; H.sig = null;
@@ -1430,7 +1608,156 @@ async function watchFetch() {
 
 /* ------------------------------------------------------------------ start */
 load().then(loadAllGit).then(watchFetch);
-loadSettings();
-// Every 10 s while the page is shown and no dialog is open (see poller).
-load.start(() => !document.querySelector("dialog[open]"));
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") load().then(loadOpenedGit); });
+/* ------------------------------------------------------------------ getting started */
+// git, the GitHub CLI, a GitHub login and LaTeX (tools.py, github.py): until all four are
+// there, a panel above the list does each with one button, for someone who has never
+// used a terminal. The AI assistant (Claude Code) is a fifth row, optional: it does not
+// keep the panel open. What went wrong is said in a sentence; the installer's or gh's own
+// words are folded under Details. The Settings dialog shows the same (renderToolsStatus).
+// claudeLogin: a window to log in to Claude was opened; coming back to the page asks again.
+const SETUP = { st: null, timer: null, loggingIn: false, claudeLogin: false };
+// refresh: ask gh again whether you are logged in (slow: only when asked, not while polling).
+async function loadSetup(refresh = false) {
+  const r = await api("/api/tools" + (refresh === true ? "?refresh=1" : ""));
+  if (r._status !== 200) return;
+  SETUP.st = r; H.github = r.github;
+  const login = r.login || {};
+  const busy = Object.values(r.installing || {}).some((x) => x.state === "running")
+    || ["starting", "waiting"].includes(login.state);
+  // A login seen under way that has ended: its warning (logged in, but git could not be set
+  // to use it) is said once; the panel is gone by then. Settings keeps showing it.
+  if (["starting", "waiting"].includes(login.state)) SETUP.loggingIn = true;
+  else if (SETUP.loggingIn) {
+    SETUP.loggingIn = false;
+    if (login.state === "done" && login.warning) toast(login.warning, true);
+  }
+  renderSetup(); renderGhStatus();
+  clearTimeout(SETUP.timer);
+  if (busy) SETUP.timer = setTimeout(loadSetup, 1500);
+}
+const setupTexReady = (r) => !!(r.tex && (r.tex.engine || r.tex.tectonic));
+const setupTexName = (r) => r.tex.engine ? "LaTeX: TeX installed" : "LaTeX: Tectonic (downloads packages as needed)";
+const setupClaudeLoggedIn = () => !!(H.claude && H.claude.logged_in);
+// What the panel waits for (the AI assistant is optional and does not count).
+const setupReady = (r) => !!(r.git && r.gh && r.github && r.github.logged_in && setupTexReady(r));
+// Not all there yet: you may have installed something, or logged in, meanwhile.
+const setupMissing = () => !!SETUP.st && !setupReady(SETUP.st);
+// can_install is per program; an older server said one true or false for all.
+const setupCan = (r, name) => r.can_install && typeof r.can_install === "object" ? !!r.can_install[name] : !!r.can_install;
+const setupHow = (r, name) => esc((r.how || {})[name] || "");
+function setupFailure(x, retry) {
+  return `<span class="setup-err">${esc(x.error || "It did not work.")}</span> <button type="button" data-setup="${retry}">Try again</button>`
+    + (x.details ? `<details><summary>Details</summary><pre>${esc(x.details)}</pre></details>` : "");
+}
+// What is said while a program installs: a full TeX takes long, so it says so.
+function setupBusy(name) {
+  const what = { tectonic: "Downloading Tectonic…", claude: "Installing the AI assistant…",
+                 tex: "Installing the full LaTeX… This can take an hour or more; you can keep working meanwhile." }[name] || "Installing…";
+  const ask = ["git", "gh", "tex"].includes(name) && /Windows/.test(navigator.userAgent) ? " Windows may ask for your permission." : "";
+  return `<span class="setup-busy">${what}${ask}</span>`;
+}
+function setupInstall(r, name, primary = true) {
+  const x = (r.installing || {})[name] || {};
+  if (x.state === "running") return setupBusy(name);
+  if (x.state === "failed") return setupFailure(x, "install-" + name);
+  if (!setupCan(r, name)) return `<span class="setup-how">${setupHow(r, name)}</span> <button type="button" data-setup="recheck">Check again</button>`;
+  return `<button type="button"${primary ? ` class="primary"` : ""} data-setup="install-${name}">Install</button>`;
+}
+// LaTeX: Quick start is Tectonic, one download that fetches packages as a paper needs them;
+// Full LaTeX is MiKTeX or MacTeX, several GB. Either will do. One line, no line breaks:
+// Settings shows it in a pre-wrap line.
+function setupLatex(r) {
+  const inst = r.installing || {}, st = (n) => (inst[n] || {}).state;
+  const busy = ["tectonic", "tex"].find((n) => st(n) === "running");
+  if (busy) return setupBusy(busy);
+  const quick = st("tectonic") === "failed" ? setupFailure(inst.tectonic, "install-tectonic")
+    : setupCan(r, "tectonic") ? `<button type="button" class="primary" data-setup="install-tectonic">Quick start</button> <small class="setup-note">one download; the packages a paper needs come when it is first compiled, which needs the internet</small>`
+    : `<span class="setup-how">${setupHow(r, "tectonic")}</span>`;
+  const full = st("tex") === "failed" ? setupFailure(inst.tex, "install-tex")
+    : setupCan(r, "tex") ? `<button type="button" data-setup="install-tex" title="All of LaTeX, several GB: it can take an hour or more">Full LaTeX</button>`
+    : `<span class="setup-how">${setupHow(r, "tex")}</span>`;
+  const recheck = setupCan(r, "tectonic") || setupCan(r, "tex") ? "" : ` <button type="button" data-setup="recheck">Check again</button>`;
+  return `${quick} ${full}${recheck}`;
+}
+// The AI assistant: installed, Claude Code is logged in to once, in a window it opens.
+function setupClaude(r) {
+  if (!r.claude) return setupInstall(r, "claude", false);
+  return `<button type="button" data-setup="claude-login">Log in</button> <small class="setup-note">a window opens where you log in to Claude once</small>`;
+}
+function setupLogin(r) {
+  const x = r.login || {};
+  if (!r.gh) return `<span class="setup-how">Install the GitHub CLI first.</span>`;
+  if (x.state === "starting") return `<span class="setup-busy">Starting…</span>`;
+  if (x.state === "waiting" && x.code) return `Enter this code on GitHub: <code class="setup-code">${esc(x.code)}</code>
+    <a class="btn primary" href="${esc(x.url || "https://github.com/login/device")}" target="_blank" rel="noopener">Open GitHub</a>
+    <button type="button" data-setup="login-cancel">Cancel</button>`;
+  if (x.state === "failed") return setupFailure(x, "login");
+  return `<button type="button" class="primary" data-setup="login">Log in to GitHub</button>`;
+}
+function renderSetup() {
+  const r = SETUP.st;
+  if (!r) return;
+  const loggedIn = !!(r.github && r.github.logged_in);
+  let el = $("#setup");
+  if (setupReady(r)) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("section");
+    el.id = "setup"; el.setAttribute("aria-label", "Getting started");
+    $("#home-main").before(el);
+  }
+  const row = (done, what, why, action, cls = "") => `<li class="${done ? "done" : ""} ${cls}"><span class="setup-mark">${done ? "✓" : "○"}</span>
+    <span class="setup-what"><b>${what}</b> <small>${why}</small></span><span class="setup-do">${done ? "" : action}</span></li>`;
+  const tex = setupTexReady(r), ai = !!r.claude && setupClaudeLoggedIn();
+  const html = `<h2>Getting started</h2><p>Prism keeps every version of your papers, saves them to your own private
+    GitHub repositories and turns them into PDFs with LaTeX. It needs a few free programs and your GitHub account;
+    each takes one click.</p><ol>`
+    + row(!!r.git, "git", "keeps every version of your papers", setupInstall(r, "git"))
+    + row(!!r.gh, "GitHub CLI", "lets Prism create repositories on GitHub for you", setupInstall(r, "gh"))
+    + row(loggedIn, loggedIn ? `GitHub: ${esc(r.github.account || "")}` : "Your GitHub account",
+          "a free account at github.com; your papers stay private", setupLogin(r))
+    + row(tex, tex ? setupTexName(r) : "LaTeX", "turns your papers into PDFs", setupLatex(r), "setup-latex")
+    + row(ai, ai ? "AI assistant: Claude Code" : "AI assistant", "optional: Claude helps you write and fix your LaTeX",
+          setupClaude(r), "setup-optional")
+    + `</ol>`;
+  if (el._html !== html) { el.innerHTML = html; el._html = html; }
+}
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-setup]");
+  if (!b || b.disabled) return;
+  const what = b.dataset.setup;
+  b.disabled = true;
+  try {
+    const r = what.startsWith("install-") ? await api("/api/tools/install", { name: what.slice(8) })
+      : what === "login" ? await api("/api/github/login", {})
+      : what === "login-cancel" ? await api("/api/github/login/cancel", {})
+      : what === "claude-login" ? await api("/api/tools/claude-login", {})
+      : { _status: 200 };
+    if (r._status !== 200) toast(r.error || "It did not work", true);
+    else if (what === "claude-login") {
+      SETUP.claudeLogin = true;
+      toast("A window opened: log in to Claude there once, then come back here.");
+    }
+    await loadSetup(what === "recheck");
+  } finally {
+    b.disabled = false;     // still there when nothing changed (still missing, a refusal): usable again
+  }
+});
+
+loadSettings().then(renderSetup);           // whether Claude is logged in: the panel's last row
+loadSetup();
+// One push connection per Home page. EventSource reconnects after service restarts;
+// the server sends an initial invalidation so changes during disconnection are seen.
+const projectEvents = new EventSource("/api/projects/events");
+projectEvents.addEventListener("changed", () => load());
+window.addEventListener("pagehide", () => projectEvents.close());
+window.addEventListener("pageshow", (e) => { if (e.persisted) location.reload(); });
+window.addEventListener("focus", () => load());
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") return;
+  load().then(loadOpenedGit);
+  if (setupMissing()) loadSetup(true);
+  if (SETUP.claudeLogin) loadSettings(true).then(() => {     // back from the window to log in to Claude
+    if (setupClaudeLoggedIn()) SETUP.claudeLogin = false;
+    renderSetup(); renderGhStatus();
+  });
+});

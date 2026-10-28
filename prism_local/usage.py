@@ -47,7 +47,7 @@ def control_query(exe: str | None, request: dict | None = None, timeout: float =
     timer.daemon = True
     timer.start()
     try:
-        with cli_process(job, cmd, json.dumps(initialize) + "\n", agent_env(), keep_stdin_open=True) as (proc, lines, errors):
+        with cli_process(job, cmd, json.dumps(initialize) + "\n", agent_env(root=job.root), keep_stdin_open=True) as (proc, lines, errors):
             if proc is None:
                 raise ValueError("Claude Code usage query timed out")
             expected = "prism-init"

@@ -75,6 +75,18 @@ class Targets(unittest.TestCase):
         self.assertEqual(self.g.settings.read()["sync_target"]["branch_ref"], "refs/heads/main")
         self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
 
+    def test_status_binds_nothing_the_worker_does(self):
+        """The page asks status() every two seconds: it shows the target an unbound project
+        would bind, and writes nothing; the worker's first step binds it."""
+        settings = self.root / ".git" / "prism-local.json"
+        st = self.g.status()
+        self.assertIsNone(st["blocked_reason"])
+        self.assertEqual(st["target"]["branch_ref"], "refs/heads/main")
+        self.assertIsNone(st["bound_target"])
+        self.assertFalse(settings.exists(), "a look writes nothing")
+        self.g._start()                                 # what the worker does first
+        self.assertEqual(self.g.status()["bound_target"]["branch_ref"], "refs/heads/main")
+
     def test_status_runs_no_git_for_the_target_until_the_config_changes(self):
         self.g.bind_target()
         self.g.status()
@@ -87,13 +99,22 @@ class Targets(unittest.TestCase):
         self.assertIn("Sync target changed", st["blocked_reason"])
         self.assertTrue(run.called, "a changed config is looked at again at once")
 
+    def test_working_the_target_out_takes_few_git_commands(self):
+        """Renewed every CACHE_TTL seconds while the editor is idle: it took 12 commands,
+        each reading the configuration again; one listing of it serves them now."""
+        from repository import Repository
+        repo = Repository(self.root.resolve(), (self.root / ".git").resolve())
+        with mock.patch.object(gitsync.gitenv, "git", wraps=gitsync.gitenv.git) as run:
+            synctarget._resolve(repo)
+        self.assertLessEqual(run.call_count, 5, [c.args[1:] for c in run.call_args_list])
+
     def test_push_checks_the_target_afresh(self):
         self.g.bind_target()
         self.g.status()
         (self.root / "main.tex").write_text("mine\n")
         self.g.commit(["main.tex"], "edit")
         # A change the cache does not see (a system-wide config, say): the push still does.
-        with mock.patch.object(synctarget, "_config_key", return_value=("same",)):
+        with mock.patch.object(synctarget, "config_key", return_value=("same",)):
             synctarget._CACHE.clear()
             self.g.status()
             git(self.root, "remote", "set-url", "origin", str(self.tool))
@@ -156,7 +177,13 @@ class Targets(unittest.TestCase):
         self.assertEqual(gh.created, ["owner/paper"])
         push.assert_not_called()
         self.assertEqual(gh.protected, [], "no protection asked for")
-        self.assertNotIn("sync_target", self.g.settings.read())
+        # Bound to the repository created: the redirected one is never bound by a look
+        # (the Home page, the editor's sync), which pauses until it points there again.
+        self.assertEqual(self.g.settings.read()["sync_target"]["repository_identity"], "github.com/owner/paper")
+        self.assertFalse(self.g.validate_target(fresh=True))
+        self.assertEqual(self.g.settings.read()["sync_target"]["repository_identity"], "github.com/owner/paper")
+        git(self.root, "remote", "set-url", "origin", "https://github.com/owner/paper.git")
+        self.assertTrue(self.g.validate_target(fresh=True), "pointed back: it goes on by itself")
         self.assertEqual((self.root / "main.tex").read_text(), "base\n")
 
     def test_publishing_commits_holding_the_files(self):
@@ -201,6 +228,80 @@ class Targets(unittest.TestCase):
                 self.assertEqual(git(self.root, "show", "HEAD:main.tex"), key)
                 git(self.root, "config", "--unset-all", key)
 
+    def test_a_target_changed_while_waiting_for_the_network_is_not_pushed_to(self):
+        """A push checks its target, then waits for the network lock (another window's
+        transfer: minutes on a slow network); git reads the configuration only when it
+        starts. A change in between is seen, not pushed to."""
+        import threading
+        import repository
+        self.g.bind_target()
+        (self.root / "main.tex").write_text("mine\n")
+        self.g.commit_all("Autosave")
+        with repository.network_lock(self.root / ".git"):         # another window's transfer
+            pushed = []
+            t = threading.Thread(target=lambda: pushed.append(self.g.push()))
+            t.start()
+            for _ in range(200):                                   # it has checked, and waits
+                if self.g.state == "pushing":
+                    break
+                threading.Event().wait(0.02)
+            git(self.root, "config", "remote.origin.pushurl", str(self.tool))
+        t.join(30)
+        self.assertEqual(pushed[0].state, "local")
+        self.assertIn("paused", pushed[0].message)
+        self.assertEqual(git(self.tool, "for-each-ref"), "", "nothing reached the other repository")
+        self.assertEqual(git(self.remote, "for-each-ref"), "")
+        git(self.root, "config", "--unset", "remote.origin.pushurl")
+        self.assertEqual(self.g.push().state, "synced", "set back: it goes on")
+        self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+
+    def test_a_repository_prism_set_up_is_put_back_and_syncs(self):
+        """What test_redirects_block_and_keep_local_edits pauses for, in a repository you
+        set up, Prism puts back in one it set up, and syncs: nobody has to know git. A
+        look (status(), every two seconds) changes nothing; nor does another repository
+        named as its address, which still waits."""
+        self.g.bind_target()
+        self.g.settings.update(managed=True)
+        git(self.root, "remote", "add", "tool", str(self.tool))
+        for n, (key, value) in enumerate((("branch.main.pushRemote", "tool"),
+                                          ("remote.pushDefault", "tool"),
+                                          ("remote.origin.mirror", "true"),
+                                          ("branch.main.merge", "refs/heads/elsewhere"))):
+            with self.subTest(key=key):
+                git(self.root, "config", key, value)
+                self.assertTrue(self.g.status()["blocked_reason"], "a look changes nothing")
+                self.assertEqual(git(self.root, "config", "--get", key), value)
+                (self.root / "main.tex").write_text(f"edit {n}\n")
+                self.g.now("commit")
+                self.assertIsNone(self.g.status()["blocked_reason"])
+                self.assertEqual(git(self.remote, "rev-parse", "main"), git(self.root, "rev-parse", "HEAD"))
+                self.assertIn("put back", self.g.notice)
+        self.assertEqual(git(self.tool, "for-each-ref"), "", "nothing went elsewhere")
+        git(self.root, "checkout", "-q", "--detach")                 # left at its branch's commit
+        (self.root / "main.tex").write_text("detached\n")
+        self.g.now("commit")
+        self.assertEqual(git(self.root, "symbolic-ref", "HEAD"), "refs/heads/main")
+        self.assertEqual(git(self.remote, "show", "main:main.tex"), "detached")
+        git(self.root, "config", "remote.origin.pushurl", str(self.tool))  # another repository: waits
+        (self.root / "main.tex").write_text("waits\n")
+        self.g.now("commit")
+        self.assertTrue(self.g.status()["blocked_reason"])
+        self.assertEqual(git(self.tool, "for-each-ref"), "")
+        self.assertEqual(git(self.root, "config", "remote.origin.pushurl"), str(self.tool), "its address is left")
+
+    def test_a_github_remote_gone_is_added_back_by_its_address(self):
+        from repository import Repository
+        repo = Repository.find(self.root)
+        git(self.root, "remote", "remove", "origin")
+        done = synctarget.repair(repo, {"remote": "origin", "repository_identity": "github.com/me/paper",
+                                        "branch_ref": "refs/heads/main", "local_branch": "refs/heads/main"})
+        self.assertIn("its GitHub address github.com/me/paper", done)
+        self.assertEqual(git(self.root, "remote", "get-url", "origin"), "https://github.com/me/paper.git")
+        self.assertEqual(git(self.root, "config", "branch.main.merge"), "refs/heads/main")
+        self.assertEqual(synctarget.repair(repo, {"remote": "origin", "repository_identity": "github.com/me/paper",
+                                                  "branch_ref": "refs/heads/main",
+                                                  "local_branch": "refs/heads/main"}), [], "nothing more to do")
+
     def test_branch_switch_and_multiple_push_urls(self):
         self.g.bind_target()
         git(self.root, "checkout", "-qb", "other")
@@ -242,6 +343,28 @@ class Targets(unittest.TestCase):
                 self.assertFalse(reopened.validate_target())
                 self.assertEqual(git(self.tool, "for-each-ref"), "")
                 git(self.root, "remote", "set-url", "origin", str(self.remote))
+
+    def test_an_agent_in_a_project_inside_another_repository_does_not_find_it(self):
+        """A project in some other repository (prism-local's examples): nothing syncs it,
+        and the agent's git does not reach that repository's remotes or history either. A
+        project with a repository of its own finds that one, as before."""
+        outer = self.base / "tool"
+        nested = outer / "examples" / "paper"
+        nested.mkdir(parents=True)
+        (nested / "main.tex").write_text("x\n")
+        git(outer, "init", "-q", "-b", "main")
+        git(outer, "remote", "add", "origin", str(self.tool))
+
+        def top(project, cwd):
+            return subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True,
+                                  text=True, env=backends.agent_env(root=project))
+        self.assertNotEqual(top(nested, nested).returncode, 0, "the outer repository is not found")
+        (nested / "sub").mkdir()
+        self.assertNotEqual(top(nested, nested / "sub").returncode, 0, "nor from a folder of the project")
+        self.assertEqual(Path(top(self.root, self.root).stdout.strip()).resolve(), self.root.resolve(),
+                         "a project's own repository is found")
+        git(nested, "init", "-q", "-b", "main")                    # it gets one of its own
+        self.assertEqual(Path(top(nested, nested).stdout.strip()).resolve(), nested.resolve())
 
     def test_inherited_git_selectors_do_not_select_tool(self):
         other = self.base / "other"

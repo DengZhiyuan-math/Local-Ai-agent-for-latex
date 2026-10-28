@@ -4,13 +4,18 @@
 
 /* ------------------------------------------------------------------ state */
 const S = {
-  files: [], folders: [], order: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
+  files: [], folders: [], order: [], document: [], tabs: [], active: null, symbols: { labels: [], bibkeys: [], outline: [], macros: [] },
+  ready: false, restoring: true, watch: null,
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 // The open files and how each is saved (tabs.js); S.tabs is its list.
 const TABS = Tabs.createTabStore({
-  saveFile: Q.saveFile, isHeld: () => C.editTurn, notify: (m) => toast(m),
-  onChange: (t, what) => { renderTabs(); showBanner(t); if (what === "saved") scheduleSymbols(); },
+  saveFile: Q.saveFile, isStopped: () => foreignProject, isHeld: () => C.editTurn, notify: (m) => toast(m),
+  onChange: (t, what) => {
+    updateTabState(t); showBanner(t);
+    if (what === "saved") scheduleSymbols();
+    if (what === "back") scheduleSave(t);              // its file is there again: your edits go in
+  },
 });
 S.tabs = TABS.tabs;
 
@@ -22,7 +27,7 @@ $("#btn-home").onclick = async () => {
   let fresh = true;
   try { fresh = !!w && w.location.href === "about:blank"; } catch { fresh = false; }
   if (w && fresh) w.document.body.innerHTML = '<p style="font:15px system-ui;color:#6f6a60;margin:40vh auto;text-align:center">Opening your projects…</p>';
-  const r = await Q.home().catch(() => ({ error: "server not reachable" }));
+  const r = await Q.home();
   if (r.url) {
     // An existing Home tab only needs to load again if its server had to be restarted.
     if (!w) location.href = r.url;
@@ -49,12 +54,19 @@ const cm = CodeMirror($("#editor"), {
     "Cmd-J": () => forwardSync(), "Ctrl-J": () => forwardSync(),
     "Ctrl-Space": (ed) => showCompletions(ed, true),
     "Cmd-/": "toggleTexComment", "Ctrl-/": "toggleTexComment",
+    // Find and replace (below).
+    "Cmd-F": () => findOpen(false), "Ctrl-F": () => findOpen(false),
+    "Cmd-Alt-F": () => findOpen(true), "Ctrl-H": () => findOpen(true),
+    "Shift-Cmd-F": () => psOpen(), "Shift-Ctrl-F": () => psOpen(),
+    F3: () => findStep(1), "Shift-F3": () => findStep(-1),
+    "Ctrl-G": () => gotoOpen(),
     // Snippets first (see below): expand, next field, out of a bracket, & in a matrix row.
     Tab: () => SNIP.tab(indentOrSpaces),
     "Shift-Tab": () => SNIP.shiftTab(),
     Enter: () => SNIP.enter(),
     "Shift-Enter": "newlineAndIndent",
-    Esc: () => SNIP.escape(),
+    // A snippet's fields first, then the find bar.
+    Esc: () => { const r = SNIP.escape(); if (r === CodeMirror.Pass && !findBar.hidden) return findClose(); return r; },
   },
 });
 function indentOrSpaces(ed) { return ed.somethingSelected() ? ed.indentSelection("add") : ed.replaceSelection("  "); }
@@ -70,96 +82,730 @@ CodeMirror.commands.toggleTexComment = (ed) => {
     }
   });
 };
-/* ------------------------------------------------------------------ snippets */
-// Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours are in
-// ~/.prism-local/snippets.js, edited from the Snippets menu.
-const SNIP = Snippets.attach(cm, {
-  enabled: () => store.get("snip.on", true),
-  fraction: () => store.get("snip.frac", true),
-  matrix: () => store.get("snip.matrix", true),
+/* ------------------------------------------------------------------ find and replace */
+// The bar over the open file (findlogic.js decides what matches): every match is marked
+// and counted, the current one selected. Replace changes the selected match and goes to the
+// next; Replace all changes every one in one step, which one ⌘Z takes back.
+const FIND_MARKS = 2000;               // matches marked in the text (all of them are counted)
+const findBar = $("#find"), findQ = $("#find-q"), findR = $("#find-r");
+const FIND = {
+  opts: { caseSensitive: false, wholeWord: false, regex: false, ...store.get("find.opts", {}) },
+  list: [], more: false, error: null, cur: -1, marks: [], curMark: null, timer: null,
+};
+const findOpts = () => ({ ...FIND.opts, query: findQ.value });
+const regexEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function findOpen(replace) {
+  if (!activeTab()) return;
+  const sel = cm.hasFocus() ? cm.getSelection() : "";     // a match selected by the bar is not new
+  if (sel && !sel.includes("\n") && sel.length < 200) findQ.value = FIND.opts.regex ? regexEscape(sel) : sel;
+  findBar.hidden = false;
+  if (replace) findShowReplace(true);
+  const input = replace && findQ.value ? findR : findQ;
+  input.focus(); input.select();
+  findRun(true);
+}
+function findClose() {
+  findBar.hidden = true;
+  findUnmark();
+  FIND.list = []; FIND.cur = -1;
+  cm.focus();
+}
+function findShowReplace(on) {
+  $("#find-replace").hidden = !on;
+  $("#find-more").setAttribute("aria-expanded", String(on));
+}
+function findUnmark() {
+  for (const m of FIND.marks) m.clear();
+  if (FIND.curMark) FIND.curMark.clear();
+  FIND.marks = []; FIND.curMark = null;
+}
+// Finds again in the open file. select: go to the first match from the selection on (you
+// typed in the bar); otherwise the current match is the one the cursor is in, if any.
+function findRun(select) {
+  clearTimeout(FIND.timer);
+  if (findBar.hidden || !activeTab()) return;
+  const r = FindLogic.matches(cm.getValue(), findOpts());
+  Object.assign(FIND, { list: r.list, more: r.more, error: r.error || null });
+  findUnmark();
+  cm.operation(() => {
+    for (const x of r.list.slice(0, FIND_MARKS))
+      FIND.marks.push(cm.markText(cm.posFromIndex(x.from), cm.posFromIndex(x.to), { className: "cm-find-hit" }));
+  });
+  const from = cm.indexFromPos(cm.getCursor("from")), to = cm.indexFromPos(cm.getCursor("to"));
+  FIND.cur = select ? r.list.findIndex((x) => x.from >= from) : r.list.findIndex((x) => x.from <= from && to <= x.to);
+  if (select && FIND.cur < 0 && r.list.length) FIND.cur = 0;                 // from the top again
+  if (select && FIND.cur >= 0) findSelect(); else findShow();
+}
+// Selects the current match and shows it.
+function findSelect() {
+  const x = FIND.list[FIND.cur];
+  if (!x) return findShow();
+  const from = cm.posFromIndex(x.from), to = cm.posFromIndex(x.to);
+  cm.setSelection(from, to);
+  cm.scrollIntoView({ from, to }, 80);
+  findShow();
+}
+function findShow() {
+  if (FIND.curMark) { FIND.curMark.clear(); FIND.curMark = null; }
+  const x = FIND.list[FIND.cur];
+  if (x) FIND.curMark = cm.markText(cm.posFromIndex(x.from), cm.posFromIndex(x.to), { className: "cm-find-cur" });
+  const n = FIND.list.length, count = $("#find-count");
+  count.textContent = FIND.error || (!findQ.value ? "" : !n ? "No results"
+    : (FIND.cur >= 0 ? `${FIND.cur + 1} of ` : "") + n.toLocaleString() + (FIND.more ? "+" : ""));
+  count.classList.toggle("bad", !!FIND.error);
+  findQ.classList.toggle("bad", !!FIND.error);
+}
+// The next (d = 1) or previous (-1) match; from the cursor when none is current.
+function findStep(d) {
+  if (findBar.hidden) return findOpen(false);
+  findRun(false);
+  const n = FIND.list.length;
+  if (!n) return;
+  if (FIND.cur >= 0) FIND.cur = (FIND.cur + d + n) % n;
+  else {
+    const at = cm.indexFromPos(cm.getCursor(d > 0 ? "to" : "from"));
+    FIND.cur = d > 0 ? FIND.list.findIndex((x) => x.from >= at) : FIND.list.findLastIndex((x) => x.to <= at);
+    if (FIND.cur < 0) FIND.cur = d > 0 ? 0 : n - 1;
+  }
+  findSelect();
+}
+function findReplaceOne() {
+  findRun(false);
+  const x = FIND.list[FIND.cur];
+  const at = cm.indexFromPos(cm.getCursor("from"));
+  if (!x || at !== x.from || cm.indexFromPos(cm.getCursor("to")) !== x.to) {
+    // No match selected yet: select the one the cursor is in, or the next, and replace it on the next click.
+    FIND.cur = FIND.list.findIndex((y) => y.to > at);
+    if (FIND.cur < 0 && FIND.list.length) FIND.cur = 0;
+    return findSelect();
+  }
+  const text = FindLogic.expand(findR.value, x.m, findOpts());
+  cm.replaceRange(text, cm.posFromIndex(x.from), cm.posFromIndex(x.to), "+find");
+  findRun(false);
+  const after = x.from + text.length;
+  FIND.cur = FIND.list.findIndex((y) => y.from >= after);
+  if (FIND.cur < 0 && FIND.list.length) FIND.cur = 0;
+  findSelect();
+}
+function findReplaceAll() {
+  const opts = findOpts(), { list } = FindLogic.matches(cm.getValue(), opts, Infinity);
+  if (!list.length) return;
+  // From the last to the first, so each match's place is still where it was found.
+  cm.operation(() => {
+    for (let i = list.length - 1; i >= 0; i--) {
+      const x = list[i];
+      cm.replaceRange(FindLogic.expand(findR.value, x.m, opts), cm.posFromIndex(x.from), cm.posFromIndex(x.to), "+find");
+    }
+  });
+  toast(`Replaced ${Util.plural(list.length, "match", "matches")}.`);
+  findRun(false);
+}
+function findToggle(opt) {
+  FIND.opts[opt] = !FIND.opts[opt];
+  store.set("find.opts", FIND.opts);
+  findOptsShown();
+  findRun(true);
+}
+function findOptsShown() {
+  for (const b of findBar.querySelectorAll("[data-opt]")) b.setAttribute("aria-pressed", String(!!FIND.opts[b.dataset.opt]));
+}
+findOptsShown();
+// The bar's own keys. Alt+C/W/R by the key's place: on a Mac, Option+C types "ç".
+const FIND_OPT_KEYS = { KeyC: "caseSensitive", KeyW: "wholeWord", KeyR: "regex" };
+function findKeys(e) {
+  if (e.key === "Escape") { e.preventDefault(); findClose(); }
+  else if (e.altKey && !e.ctrlKey && !e.metaKey && FIND_OPT_KEYS[e.code]) { e.preventDefault(); findToggle(FIND_OPT_KEYS[e.code]); }
+  else if (e.key === "F3") { e.preventDefault(); findStep(e.shiftKey ? -1 : 1); }
+  else return false;
+  return true;
+}
+findQ.addEventListener("input", () => { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(true), 120); });
+findQ.addEventListener("keydown", (e) => {
+  if (findKeys(e)) return;
+  if (e.key === "Enter") { e.preventDefault(); clearTimeout(FIND.timer); findStep(e.shiftKey ? -1 : 1); }
+  else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); clearTimeout(FIND.timer); findStep(e.key === "ArrowDown" ? 1 : -1); }
 });
-const SNIP_FILE = { path: "", content: null, error: null, count: 0 };
+findR.addEventListener("keydown", (e) => {
+  if (findKeys(e)) return;
+  if (e.key === "Enter" && e.altKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); findReplaceAll(); }
+  else if (e.key === "Enter") { e.preventDefault(); findReplaceOne(); }
+});
+findBar.addEventListener("click", (e) => {
+  const b = e.target.closest("button"); if (!b) return;
+  if (b.dataset.opt) findToggle(b.dataset.opt);
+  else if (b.dataset.step) findStep(+b.dataset.step);
+  else if (b.dataset.close) findClose();
+});
+$("#find-more").onclick = () => { const on = $("#find-replace").hidden; findShowReplace(on); (on ? findR : findQ).focus(); };
+$("#find-one").onclick = () => findReplaceOne();
+$("#find-all").onclick = () => findReplaceAll();
+$("#btn-find").onclick = () => findOpen(false);
+// Your edits, an agent's, a reload from disk: the matches are found again a moment later.
+cm.on("changes", () => {
+  if (!findBar.hidden) { clearTimeout(FIND.timer); FIND.timer = setTimeout(() => findRun(false), 150); }
+  if (PS.open) psSchedule(400);
+});
+cm.on("cursorActivity", () => statusPos());
+$("#sb-pos").onclick = () => gotoOpen();
 
+/* ------------------------------------------------------------------ status line */
+// Below the editor: where the cursor is; a click asks for a line to go to.
+function statusPos() {
+  const c = cm.getCursor(), n = cm.getSelection().length;
+  $("#sb-pos").textContent = `Ln ${c.line + 1}, Col ${c.ch + 1}` + (n ? ` (${n.toLocaleString()} selected)` : "");
+}
+
+/* ------------------------------------------------------------------ go to line */
+// Ctrl+G (on a Mac too) or a click on the line and column below the editor: a line, or
+// line:column, to go to; past the end is the last line.
+const gotoQ = $("#goto-q");
+function gotoOpen() {
+  if (!activeTab()) return;
+  const c = cm.getCursor();
+  gotoQ.value = ""; gotoQ.classList.remove("bad");
+  gotoQ.placeholder = `Go to line 1–${cm.lineCount().toLocaleString()} (now ${c.line + 1}:${c.ch + 1})`;
+  $("#goto").hidden = false;
+  gotoQ.focus();
+}
+function gotoClose(back = true) { $("#goto").hidden = true; if (back && activeTab()) cm.focus(); }
+gotoQ.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); gotoClose(); }
+  else if (e.key === "Enter") {
+    e.preventDefault();
+    const at = FindLogic.lineSpec(gotoQ.value);
+    if (!at) { gotoQ.classList.add("bad"); return; }
+    gotoClose();
+    jumpToLine(at.line + 1);
+    const line = Math.min(at.line, cm.lineCount() - 1);
+    cm.setCursor({ line, ch: Math.min(at.ch, cm.getLine(line).length) });
+  }
+});
+gotoQ.addEventListener("input", () => gotoQ.classList.remove("bad"));
+gotoQ.addEventListener("blur", () => gotoClose(false));
+
+/* ------------------------------------------------------------------ the project's text */
+// The text of the project's files, for search: an open tab's as you see it
+// (unsaved edits too), the others' from disk (/api/texts), kept here while the tree shows
+// the same mtime for them. {path -> {content} or {skipped: why}}; files that cannot be read are left out.
+const TEXTS = new Map();               // path -> {mtime, content | skipped}, as the server gave it
+async function projectTexts(paths) {
+  const mtimes = new Map(S.files.map((f) => [f.path, f.mtime]));
+  const want = paths.filter((p) => !TABS.get(p) && TEXTS.get(p)?.mtime !== mtimes.get(p));
+  for (let i = 0; i < want.length; i += 300) {
+    const r = await Q.texts(want.slice(i, i + 300));
+    if (r._status !== 200) break;
+    for (const f of r.files) TEXTS.set(f.path, f);
+  }
+  const out = new Map();
+  for (const p of paths) {
+    const t = TABS.get(p);
+    if (t) out.set(p, { content: t.doc.getValue() });
+    else if (TEXTS.has(p)) out.set(p, TEXTS.get(p));
+  }
+  return out;
+}
+// The files you can edit, in the order the tree shows them.
+function editablePaths() {
+  const rank = (p) => { const i = S.order.indexOf(p); return i < 0 ? 1e9 : i; };
+  return S.files.filter((f) => f.editable !== false).map((f) => f.path)
+    .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+}
+
+/* ------------------------------------------------------------------ search the project */
+// The sidebar's Search: every match in the project's files, grouped by file; a click opens
+// the file at it. Replace all changes them all: an open file in its tab (⌘Z there takes it
+// back; it is saved as you type), the others on disk, each only if unchanged since it was read.
+const PS_MAX = 2000;                   // matches listed
+const psQ = $("#ps-q"), psR = $("#ps-r");
+const PS = {
+  open: false, opts: { caseSensitive: false, wholeWord: false, regex: false, ...store.get("psearch.opts", {}) },
+  results: [], info: null, seq: 0, stamp: "", timer: null, closed: new Set(),
+};
+const psOpts = () => ({ ...PS.opts, query: psQ.value });
+// What a search depends on besides the query: the files and their mtimes.
+const psStamp = () => S.files.map((f) => f.path + ":" + f.mtime).join("\n");
+function psOpen() {
+  if ($("#sidebar").classList.contains("hidden")) sidebarHidden(false);
+  PS.open = true;
+  $("#search-pane").hidden = false;
+  $("#sidebar").classList.add("searching");
+  const mode = store.get("psearch.mode", "find");
+  const sel = cm.hasFocus() ? cm.getSelection() : "";
+  psMode(mode);                      // the one used last
+  if (mode === "agent") return;
+  if (sel && !sel.includes("\n") && sel.length < 200) psQ.value = PS.opts.regex ? regexEscape(sel) : sel;
+  psQ.focus(); psQ.select();
+  psRun();
+}
+function psClose() {
+  PS.open = false; PS.seq++;
+  $("#search-pane").hidden = true;
+  $("#sidebar").classList.remove("searching");
+  asWide(false);
+  if (activeTab()) cm.focus();
+}
+function psSchedule(ms = 250) { clearTimeout(PS.timer); PS.timer = setTimeout(psRun, ms); }
+async function psRun() {
+  clearTimeout(PS.timer);
+  const seq = ++PS.seq, opts = psOpts();
+  if (!opts.query) { PS.results = []; PS.info = null; return psRender(); }
+  const paths = editablePaths();
+  PS.stamp = psStamp();                            // a poll meanwhile does not start it again
+  const texts = await projectTexts(paths);
+  if (seq !== PS.seq) return;                      // a newer search started meanwhile
+  const results = [], skipped = [];
+  let left = PS_MAX, error = null, more = false;
+  for (const path of paths) {
+    const f = texts.get(path);
+    if (!f) continue;
+    if (f.skipped) { skipped.push(`${path} (${f.skipped})`); continue; }
+    const r = FindLogic.matches(f.content, opts, left);
+    if (r.error) { error = r.error; break; }
+    if (r.list.length) results.push({ path, text: f.content, list: r.list, where: FindLogic.lines(f.content, r.list) });
+    left -= r.list.length;
+    if (r.more || left <= 0) { more = true; break; }
+  }
+  Object.assign(PS, { results, info: { error, more, skipped } });
+  psRender();
+}
+function psRender() {
+  const { results, info } = PS, sum = $("#ps-summary");
+  const n = results.reduce((k, r) => k + r.list.length, 0);
+  sum.textContent = !info ? "" : info.error || (!n ? "No results"
+    : `${Util.plural(n, "result")} in ${Util.plural(results.length, "file")}${info.more ? ` (the first ${PS_MAX.toLocaleString()})` : ""}`)
+    + (info && info.skipped.length ? ` · ${Util.plural(info.skipped.length, "file")} not searched` : "");
+  sum.title = info && info.skipped.length ? "Not searched: " + info.skipped.join(", ") : "";
+  sum.classList.toggle("bad", !!info?.error);
+  psQ.classList.toggle("bad", !!info?.error);
+  let html = "";
+  results.forEach((r, i) => {
+    const name = r.path.split("/").pop(), dir = parentDir(r.path);
+    const closed = PS.closed.has(r.path);
+    html += `<li class="ps-file${closed ? " closed" : ""}" data-r="${i}" title="${esc(r.path)}"><span class="caret">${icon("down")}</span>`
+      + `<span>${esc(name)}</span><span class="dir">${esc(dir)}</span><span class="n">${r.list.length}</span></li>`;
+    if (closed) return;
+    r.where.forEach((w, k) => {
+      const e = FindLogic.excerpt(w.text, w.ch, w.len);
+      const key = `${r.path}:${r.list[k].from}`;
+      html += `<li class="ps-hit${key === PS.curKey ? " cur" : ""}" data-r="${i}" data-k="${k}" data-key="${esc(key)}" title="${esc(r.path)}:${w.line + 1}"><span class="ln">${w.line + 1}</span>`
+        + `${esc(e.before)}<mark>${esc(e.hit)}</mark>${esc(e.after)}</li>`;
+    });
+  });
+  $("#ps-results").innerHTML = html;
+}
+// Opens a result's file and selects the match; if the file changed since the search, the
+// match nearest to where it was.
+// again: the matches in the file as it is now (the search's by default); stay: the list to
+// keep the keyboard in (going through the results with ↑ ↓), else the editor has it.
+let goSeq = 0;
+async function psGo(r, x, again = (now) => FindLogic.matches(now, psOpts()).list, stay = null) {
+  const seq = ++goSeq;
+  await openFile(r.path);
+  if (stay) stay.focus();
+  if (S.active !== r.path || seq !== goSeq) return;     // another result was asked for meanwhile
+  let { from, to } = x;
+  const now = cm.getValue();
+  if (now !== r.text) {
+    again = again(now);
+    if (!again.length) return;
+    ({ from, to } = again.reduce((a, b) => Math.abs(b.from - x.from) < Math.abs(a.from - x.from) ? b : a));
+  }
+  const a = cm.posFromIndex(from), b = cm.posFromIndex(to);
+  cm.setSelection(a, b);
+  cm.scrollIntoView({ from: a, to: b }, 100);
+}
+async function psReplaceAll() {
+  const opts = psOpts(), repl = psR.value;
+  if (!opts.query) return;
+  const paths = editablePaths(), texts = await projectTexts(paths);
+  const todo = [];
+  for (const path of paths) {
+    const f = texts.get(path);
+    if (!f || f.skipped) continue;
+    const { list, error } = FindLogic.matches(f.content, opts, Infinity);
+    if (error) return toast(error, true);
+    if (list.length) todo.push({ path, f, list });
+  }
+  const n = todo.reduce((k, x) => k + x.list.length, 0);
+  if (!n) return toast("Nothing to replace.");
+  const closedFiles = todo.filter((x) => !TABS.get(x.path));
+  if (C.editTurn && closedFiles.length)
+    return toast("The agent is editing the files: replace in the project once its turn has ended.", true);
+  if (!confirm(`Replace ${Util.plural(n, "match", "matches")} in ${Util.plural(todo.length, "file")} with “${repl}”?`)) return;
+  const failed = await applyChanges(todo.map(({ path, f, list }) =>
+    ({ path, f, list: list.map((x) => ({ from: x.from, to: x.to, text: FindLogic.expand(repl, x.m, opts) })) })));
+  const done = todo.length - failed.length;
+  toast(`Replaced in ${Util.plural(done, "file")}.` + (failed.length ? ` Not replaced in: ${failed.join(", ")}.` : ""), failed.length > 0);
+  await poll();
+  psRun();
+}
+// Makes changes ({from, to, text}, in order) in files as they were read (f: from
+// projectTexts): an open file in its tab (one ⌘Z there takes them back; saved as typed),
+// the others on disk, each only if unchanged since it was read. The files not changed, and why.
+async function applyChanges(todo) {
+  const failed = [];
+  for (const { path, f, list } of todo) {
+    const t = TABS.get(path);
+    if (t && t.doc.getValue() !== f.content) { failed.push(path + " (edited since)"); continue; }
+    if (t && t === activeTab()) {
+      // as Replace all in the file: one step to take back
+      cm.operation(() => {
+        for (let i = list.length - 1; i >= 0; i--)
+          cm.replaceRange(list[i].text, cm.posFromIndex(list[i].from), cm.posFromIndex(list[i].to), "+find");
+      });
+    } else if (t) {
+      // a tab in the background: one change from the first to the last, so one ⌘Z there
+      const a = list[0].from, b = list[list.length - 1].to, text = AgentSearch.apply(f.content, list);
+      t.doc.replaceRange(text.slice(a, text.length - (f.content.length - b)), t.doc.posFromIndex(a), t.doc.posFromIndex(b), "+find");
+      updateTabState(t); scheduleSave(t);
+    } else {
+      const content = AgentSearch.apply(f.content, list);
+      const r = await Q.saveFile({ path, content, base_mtime: f.mtime });
+      if (r._status === 200) TEXTS.set(path, { path, mtime: r.mtime, content });
+      else failed.push(path + (r.conflict ? " (changed on disk meanwhile)" : r.error ? ` (${r.error})` : ""));
+    }
+  }
+  return failed;
+}
+function psToggle(opt) {
+  PS.opts[opt] = !PS.opts[opt];
+  store.set("psearch.opts", PS.opts);
+  psOptsShown();
+  psRun();
+}
+function psOptsShown() {
+  for (const b of $("#search-pane").querySelectorAll("[data-opt]")) b.setAttribute("aria-pressed", String(!!PS.opts[b.dataset.opt]));
+}
+psOptsShown();
+function psKeys(e) {
+  if (e.key === "Escape") { e.preventDefault(); psClose(); }
+  else if (e.altKey && !e.ctrlKey && !e.metaKey && FIND_OPT_KEYS[e.code]) { e.preventDefault(); psToggle(FIND_OPT_KEYS[e.code]); }
+  else return false;
+  return true;
+}
+psQ.addEventListener("input", () => psSchedule());
+psQ.addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "Enter") { e.preventDefault(); psRun(); }
+  else if (e.key === "ArrowDown") {          // into the results: at the current one, else the first
+    e.preventDefault();
+    const list = $("#ps-results"), li = list.querySelector(".ps-hit.cur");
+    list.focus();
+    if (li) psShow(li, list); else psMove(1);
+  }
+});
+// Going through a list of results with ↑ ↓: the next item `sel` becomes the current one and
+// show(item) shows it in the editor. "top": ↑ on the first item.
+function listMove(list, sel, d, show) {
+  const items = [...list.querySelectorAll(sel)];
+  if (!items.length) return false;
+  const i = items.findIndex((li) => li.classList.contains("cur"));
+  const j = i < 0 ? (d > 0 ? 0 : items.length - 1) : i + d;
+  if (j < 0) return "top";
+  if (j >= items.length) return false;
+  listCur(list, items[j]);
+  show(items[j]);
+  return true;
+}
+function listCur(list, li) {
+  for (const el of list.querySelectorAll(".cur")) el.classList.remove("cur");
+  li.classList.add("cur");
+  li.scrollIntoView({ block: "nearest" });
+}
+const psShow = (li, stay) => {
+  const r = PS.results[+li.dataset.r];
+  PS.curKey = li.dataset.key;
+  psGo(r, r.list[+li.dataset.k], undefined, stay);
+};
+function psMove(d) {
+  const list = $("#ps-results");
+  if (listMove(list, ".ps-hit", d, (li) => psShow(li, list)) === "top") psQ.focus();
+}
+$("#ps-results").addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); psMove(e.key === "ArrowDown" ? 1 : -1); }
+  else if (e.key === "Enter") { const li = $("#ps-results .ps-hit.cur"); if (li) { e.preventDefault(); psShow(li); } }
+});
+psR.addEventListener("keydown", (e) => {
+  if (psKeys(e)) return;
+  if (e.key === "Enter" && e.altKey && (e.ctrlKey || e.metaKey)) { e.preventDefault(); psReplaceAll(); }
+});
+$("#search-pane .ps-opts").addEventListener("click", (e) => { const b = e.target.closest("[data-opt]"); if (b) psToggle(b.dataset.opt); });
+$("#ps-more").onclick = () => {
+  const on = $("#ps-replace").hidden;
+  $("#ps-replace").hidden = !on; $("#ps-more").setAttribute("aria-expanded", String(on));
+  (on ? psR : psQ).focus();
+};
+$("#ps-all").onclick = () => psReplaceAll();
+$("#ps-close").onclick = () => psClose();
+$("#btn-search").onclick = () => psOpen();
+$("#ps-results").addEventListener("click", (e) => {
+  const li = e.target.closest("li[data-r]"); if (!li) return;
+  const r = PS.results[+li.dataset.r]; if (!r) return;
+  if (li.classList.contains("ps-file")) {
+    if (!PS.closed.delete(r.path)) PS.closed.add(r.path);
+    return psRender();
+  }
+  listCur($("#ps-results"), li);
+  psShow(li);
+});
+
+/* ------------------------------------------------------------------ search with the agent */
+// You describe a change ("rename the index i to j in every formula"); the agent (the one
+// chosen in its panel) reads the project in an Ask turn of its own, not in the panel's
+// conversation, and proposes rules and changes (agentsearch.js). Every change is listed to
+// review, the rules can be edited here, and Apply makes the ones ticked.
+const AS_WIDTH = 400;                  // the sidebar is widened to this while the agent's changes show
+const asQ = $("#as-q");
+const AS = { job: null, stopping: false, proposal: null, result: null, texts: null, off: new Set(), seq: 0, width: null };
+const asKey = (path, c) => `${path}:${c.from}:${c.to}`;
+function psMode(mode) {
+  const agent = mode === "agent";
+  for (const b of $("#search-pane").querySelectorAll("[data-psmode]")) b.setAttribute("aria-selected", String(b.dataset.psmode === mode));
+  $("#ps-find").hidden = agent; $("#ps-agent").hidden = !agent;
+  store.set("psearch.mode", mode);
+  asWide(agent && !!AS.result);
+  if (agent) { $("#as-who").textContent = `with ${provLabel()}`; asQ.focus(); } else psQ.focus();
+}
+// The changes need room: the sidebar is widened while they show, and given back after.
+function asWide(on) {
+  const bar = $("#sidebar");
+  if (on && AS.width === null && bar.offsetWidth < AS_WIDTH) { AS.width = bar.style.width; bar.style.width = AS_WIDTH + "px"; }
+  else if (!on && AS.width !== null) { bar.style.width = AS.width; AS.width = null; }
+}
+function asStatus(text, bad = false) { const s = $("#as-status"); s.textContent = text; s.classList.toggle("bad", bad); }
+function asBusy(on) {
+  const b = $("#as-go");
+  b.textContent = on ? "Stop" : "Ask the agent";
+  b.classList.toggle("primary", !on);
+}
+async function asAsk() {
+  if (AS.job) {                        // the button is Stop meanwhile
+    AS.stopping = true; asStatus("Stopping…");
+    return Q.stop(AS.job);
+  }
+  const request = asQ.value.trim();
+  if (!request) return asQ.focus();
+  if (C.job) return asStatus("The agent is busy with a message in its panel: ask again when it has finished.", true);
+  if (!P.projectKey) return asStatus("Wait a moment: the project is still loading.", true);
+  const saved = await TABS.saveAll();                       // the agent reads the files on disk
+  if (!saved.ok) return asStatus(Tabs.unsavedWhy(saved), true);
+  const provider = C.provider;
+  const prompt = AgentSearch.prompt(request, { main: S.document[0] || BUILD.main, documentFiles: S.document });
+  const r = await Q.agent({ prompt, session_id: null, mode: "ask", model: C.model, effort: C.effort, provider, project_key: P.projectKey });
+  if (r.error || r._status !== 200) return asStatus(r.error || "The agent could not start.", true);
+  AS.job = r.job; AS.stopping = false; asBusy(true);
+  asClear();                           // the last proposal goes: this one replaces it
+  const t = Turn.create(), t0 = Date.now();
+  let reply = "", failed = null, outcome = null, after = 0, attempts = 0;
+  const timer = setInterval(() => asStatus(`${provLabel()}: ${t.status} ${Math.round((Date.now() - t0) / 1000)}s`), 1000);
+  try {
+    for (let done = false; !done;) {
+      const d = await Q.events(AS.job, after, document.visibilityState === "hidden" ? 0 : undefined);
+      if (d._status !== 200) {
+        if (Turn.pollFailed(d._status, attempts) === "retry") { await new Promise((res) => setTimeout(res, Turn.pollDelay(attempts++))); continue; }
+        failed = "The connection to the agent was lost."; break;
+      }
+      attempts = 0;
+      for (const s of t.feed(d.events)) {
+        if (s.draw === "message") reply = s.text;
+        else if (s.draw === "error") failed = s.event.message;
+        else if (s.draw === "done") outcome = s.event.outcome;
+      }
+      after += d.events.length; done = d.done;
+      if (document.visibilityState === "hidden") await new Promise((res) => setTimeout(res, 2000));
+    }
+  } finally {
+    clearInterval(timer);
+    for (const s of t.end()) if (s.draw === "message") reply = s.text;
+    AS.job = null; asBusy(false);
+  }
+  if (AS.stopping) return asStatus("Stopped.");
+  const p = AgentSearch.parse(reply);
+  if (p.error) {
+    asStatus((failed ? failed + " " : "") + p.error, true);
+    $("#as-summary").innerHTML = reply ? `<details><summary>The agent's answer</summary>${renderMd(reply)}</details>` : "";
+    return;
+  }
+  asStatus(outcome === "failed" && failed ? failed : "");
+  AS.proposal = p; AS.off.clear();
+  $("#as-summary").innerHTML = renderMd(p.summary || "");
+  asRules();
+  await asPreview();
+}
+function asClear() {
+  AS.proposal = AS.result = null; AS.seq++;
+  for (const id of ["#as-summary", "#as-rules", "#as-results"]) $(id).innerHTML = "";
+  $("#as-applybar").hidden = $("#as-problems").hidden = true;
+  asWide(false);
+}
+// The rules, each editable: what to find, what to put, where; switched off by its box.
+function asRules() {
+  const where = (w) => ["math", "text", "anywhere"].map((x) =>
+    `<option value="${x}"${x === w ? " selected" : ""}>${{ math: "in formulas", text: "in the text", anywhere: "anywhere" }[x]}</option>`).join("");
+  $("#as-rules").innerHTML = AS.proposal.rules.map((r, k) => `<li data-k="${k}" class="${r.off ? "off" : ""}">
+    <div class="rule-head"><input type="checkbox" data-f="on"${r.off ? "" : " checked"} title="Use this rule"> Rule ${k + 1}
+      <select data-f="where" title="Where it changes">${where(r.where)}</select>
+      <label title="Match case"><input type="checkbox" data-f="caseSensitive"${r.caseSensitive ? " checked" : ""}> Aa</label>
+      <span class="n"></span></div>
+    <div class="rule-row"><span>Find</span><input type="text" data-f="find" value="${esc(r.find)}" spellcheck="false"></div>
+    <div class="rule-row"><span>Replace</span><input type="text" data-f="replace" value="${esc(r.replace)}" spellcheck="false"></div>
+    ${r.note ? `<div class="note">${esc(r.note)}</div>` : ""}</li>`).join("");
+}
+let asEditTimer = null;
+function asRuleEdited(e) {
+  const li = e.target.closest("li[data-k]"), f = e.target.dataset.f;
+  if (!li || !f) return;
+  const r = AS.proposal.rules[+li.dataset.k];
+  if (f === "on") { r.off = !e.target.checked; li.classList.toggle("off", r.off); }
+  else if (f === "caseSensitive") r.caseSensitive = e.target.checked;
+  else if (f === "where") r.where = e.target.value;
+  else if (f === "replace") r.replace = e.target.value;
+  else if (f === "find") {
+    const bad = !e.target.value || !!FindLogic.pattern({ query: e.target.value, regex: true }).error;
+    e.target.classList.toggle("bad", bad);
+    if (bad) return;                   // the last valid expression stays until this one is
+    r.find = e.target.value;
+  }
+  clearTimeout(asEditTimer); asEditTimer = setTimeout(asPreview, f === "find" || f === "replace" ? 300 : 0);
+}
+$("#as-rules").addEventListener("input", asRuleEdited);
+$("#as-rules").addEventListener("change", asRuleEdited);
+// Each change the proposal makes in the project, as the files are now.
+async function asPreview() {
+  if (!AS.proposal) return;
+  const seq = ++AS.seq, paths = editablePaths(), texts = await projectTexts(paths);
+  if (seq !== AS.seq) return;
+  AS.texts = texts;
+  AS.result = AgentSearch.changes(paths.filter((p) => texts.get(p)?.content !== undefined).map((p) => [p, texts.get(p).content]), AS.proposal);
+  asWide(true);
+  asRender();
+}
+function asRender() {
+  const { files, problems, counts } = AS.result;
+  for (const li of $("#as-rules").children) li.querySelector(".n").textContent = Util.plural(counts.rules[+li.dataset.k], "change");
+  const prob = $("#as-problems");
+  prob.hidden = !problems.length;
+  prob.querySelector("summary").textContent = `${Util.plural(problems.length, "proposal")} could not be used`;
+  prob.querySelector("ul").innerHTML = problems.map((p) => `<li>${esc(p)}</li>`).join("");
+  let html = "", n = 0, on = 0;
+  files.forEach((f, i) => {
+    const name = f.path.split("/").pop(), mine = f.changes.filter((c) => !AS.off.has(asKey(f.path, c))).length;
+    n += f.changes.length; on += mine;
+    html += `<li class="as-file" data-i="${i}" title="${esc(f.path)}"><input type="checkbox" data-file="${i}"${mine === f.changes.length ? " checked" : ""}>`
+      + `<span>${esc(name)}</span><span class="dir">${esc(parentDir(f.path))}</span><span class="n">${mine}/${f.changes.length}</span></li>`;
+    f.changes.forEach((c, k) => {
+      const off = AS.off.has(asKey(f.path, c));
+      const e = FindLogic.excerpt(c.before, c.ch, Math.min(c.to - c.from, c.before.length - c.ch), 70);
+      const by = c.by === "rule" ? `rule ${c.index + 1}` : (AS.proposal.edits[c.index].note || "listed by the agent");
+      const key = asKey(f.path, c);
+      html += `<li class="as-change${off ? " off" : ""}${key === AS.curKey ? " cur" : ""}" data-c="${i}:${k}" data-key="${esc(key)}"><input type="checkbox" data-c="${i}:${k}"${off ? "" : " checked"}>`
+        + `<span class="ln">${c.line + 1}</span><span class="diff" data-go="${i}:${k}" title="Show it in the file">`
+        + `${esc(e.before)}<del>${esc(e.hit)}</del><ins>${esc(c.text)}</ins>${esc(e.after)}<span class="by">${esc(by)}</span></span></li>`;
+    });
+  });
+  $("#as-results").innerHTML = html || `<li class="muted">The proposal changes nothing in the project's files.</li>`;
+  $("#as-applybar").hidden = !n;
+  $("#as-count").textContent = `${on} of ${Util.plural(n, "change")} in ${Util.plural(files.length, "file")}`;
+  $("#as-all").checked = on === n; $("#as-all").indeterminate = on > 0 && on < n;
+  $("#as-apply").disabled = !on;
+}
+$("#as-results").addEventListener("change", (e) => {
+  const { files } = AS.result, box = e.target;
+  const set = (path, c, keep) => { if (keep) AS.off.delete(asKey(path, c)); else AS.off.add(asKey(path, c)); };
+  if (box.dataset.file) { const f = files[+box.dataset.file]; for (const c of f.changes) set(f.path, c, box.checked); }
+  else if (box.dataset.c) { const [i, k] = box.dataset.c.split(":").map(Number); set(files[i].path, files[i].changes[k], box.checked); }
+  asRender();
+  $("#as-results").focus();            // drawn again: ↑ ↓ go on from here
+});
+const asShow = (li, stay) => {
+  const [i, k] = li.dataset.c.split(":").map(Number), f = AS.result.files[i];
+  AS.curKey = li.dataset.key;
+  psGo({ path: f.path, text: AS.texts.get(f.path).content }, f.changes[k], (now) =>
+    AgentSearch.changes([[f.path, now]], AS.proposal).files[0]?.changes || [], stay);
+};
+// ↑ ↓ through the changes (each shown in the file), Space ticks or unticks, Enter goes to the editor.
+$("#as-results").addEventListener("keydown", (e) => {
+  const list = $("#as-results"), cur = list.querySelector(".as-change.cur");
+  if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    listMove(list, ".as-change", e.key === "ArrowDown" ? 1 : -1, (li) => asShow(li, list));
+  } else if (e.key === " " && cur) { e.preventDefault(); cur.querySelector("input").click(); }
+  else if (e.key === "Enter" && cur) { e.preventDefault(); asShow(cur); }
+});
+$("#as-all").addEventListener("change", (e) => {
+  for (const f of AS.result.files) for (const c of f.changes) { if (e.target.checked) AS.off.delete(asKey(f.path, c)); else AS.off.add(asKey(f.path, c)); }
+  asRender();
+});
+$("#as-results").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-go]")) return;
+  const li = e.target.closest("li.as-change");
+  listCur($("#as-results"), li);
+  asShow(li);
+});
+async function asApply() {
+  const todo = AS.result.files.map((f) => ({ path: f.path, f: AS.texts.get(f.path), list: f.changes.filter((c) => !AS.off.has(asKey(f.path, c))) }))
+    .filter((x) => x.list.length);
+  const n = todo.reduce((k, x) => k + x.list.length, 0);
+  if (!n) return;
+  if (C.editTurn && todo.some((x) => !TABS.get(x.path)))
+    return toast("The agent is editing the files: apply once its turn has ended.", true);
+  if (!confirm(`Apply ${Util.plural(n, "change")} in ${Util.plural(todo.length, "file")}?`)) return;
+  const failed = await applyChanges(todo);
+  toast(`Changed ${Util.plural(todo.length - failed.length, "file")}.` + (failed.length ? ` Not changed: ${failed.join(", ")}; preview again and apply.` : ""), failed.length > 0);
+  await poll();
+  await asPreview();
+}
+$("#as-apply").onclick = () => asApply();
+$("#as-go").onclick = () => asAsk();
+asQ.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) { e.preventDefault(); asAsk(); }
+  else if (e.key === "Escape") { e.preventDefault(); psClose(); }
+});
+$("#search-pane .ps-modes").addEventListener("click", (e) => { const b = e.target.closest("[data-psmode]"); if (b) psMode(b.dataset.psmode); });
+/* ------------------------------------------------------------------ snippets */
+// Shortcuts that expand as you type, after obsidian-latex-suite (snippets.js). Yours, and how
+// they expand, are set in Home → Settings (a local override or the distributed bundle, and settings.json), so
+// they are read again whenever you come back to this page.
+const SNIP_SET = { on: true, fraction: true, matrix: true };
+const SNIP = Snippets.attach(cm, {
+  enabled: () => SNIP_SET.on, fraction: () => SNIP_SET.fraction, matrix: () => SNIP_SET.matrix,
+});
+let snipContent;                 // the file as last read: unchanged, it is not compiled again
 async function loadSnippets() {
-  const r = await Q.snippets().catch(() => ({}));
-  SNIP_FILE.path = r.path || ""; SNIP_FILE.content = r.content ?? null;
+  const r = await Q.snippets();
+  if (r._status !== 200) return;
+  for (const k of Object.keys(SNIP_SET)) SNIP_SET[k] = r[k] !== false;
+  if (r.content === snipContent) return;
+  snipContent = r.content;
   try {
     const u = Snippets.load(r.content);
     SNIP.setUser(u.list, u.defaults);
-    SNIP_FILE.error = null; SNIP_FILE.count = u.list.length;
-  } catch (e) {
+  } catch (e) {                  // Home → Settings says what is wrong; the built-in ones work
     SNIP.setUser([], true);
-    SNIP_FILE.error = String(e.message || e); SNIP_FILE.count = 0;
+    console.warn("snippets file:", e.message || e);
   }
-  renderSnipMenu();
 }
-function renderSnipMenu() {
-  $("#snip-on").checked = store.get("snip.on", true);
-  $("#snip-frac").checked = store.get("snip.frac", true);
-  $("#snip-matrix").checked = store.get("snip.matrix", true);
-  $("#btn-snip").classList.toggle("off", !$("#snip-on").checked);
-  $("#snip-note").textContent = SNIP_FILE.error ? `Your snippets file has an error, so only the built-in snippets work: ${SNIP_FILE.error}`
-    : SNIP_FILE.count ? `${SNIP_FILE.count} of your own, from ${SNIP_FILE.path}` : "";
-}
-function snipMenu(open) {
-  $("#snip-menu").hidden = !open;
-  $("#btn-snip").setAttribute("aria-expanded", String(open));
-}
-$("#btn-snip").onclick = (e) => { e.stopPropagation(); snipMenu($("#snip-menu").hidden); };
-$("#snip-menu").addEventListener("click", (e) => e.stopPropagation());
-document.addEventListener("click", () => snipMenu(false));
-document.addEventListener("keydown", (e) => { if (e.key === "Escape") snipMenu(false); });
-for (const [id, key] of [["#snip-on", "snip.on"], ["#snip-frac", "snip.frac"], ["#snip-matrix", "snip.matrix"]]) {
-  $(id).onchange = (e) => { store.set(key, e.target.checked); renderSnipMenu(); };
-}
-
-// The dialog shows your snippets file to edit, or every snippet (read-only).
-let snipCm = null;
-function snipDialog(title, text, editable) {
-  snipMenu(false);
-  $("#snip-dialog").hidden = false;
-  $("#snip-title").textContent = title;
-  $("#snip-path").textContent = editable ? SNIP_FILE.path : "";
-  $("#snip-save").hidden = !editable;
-  $("#snip-error").textContent = editable ? SNIP_FILE.error || "" : "";
-  if (!snipCm) snipCm = CodeMirror($("#snip-cm"), { lineNumbers: true, indentUnit: 2, tabSize: 2, mode: "text/plain" });
-  snipCm.setOption("readOnly", !editable);
-  snipCm.setValue(text);
-  snipCm.clearHistory();
-  snipCm.refresh(); snipCm.focus();
-}
-function snipClose() { $("#snip-dialog").hidden = true; cm.focus(); }
-$("#snip-edit").onclick = () => snipDialog("My snippets", SNIP_FILE.content ?? Snippets.TEMPLATE, true);
-$("#snip-list").onclick = () => {
-  let mine = [];
-  try { mine = Snippets.load(SNIP_FILE.content).list; } catch { /* the note says what is wrong */ }
-  const row = (s) => {
-    const trig = s.trigger instanceof RegExp ? "/" + s.trigger.source + "/" : String(s.trigger);
-    const repl = typeof s.replacement === "function" ? "(function)" : String(s.replacement).replace(/\n/g, "⏎").replace(/\t/g, "");
-    return `${trig.padEnd(14)} ${(s.options || "").padEnd(5)} ${repl}${s.description ? "    — " + s.description : ""}`;
-  };
-  const head = "trigger        opts  replacement\n"
-    + "(options: t text, m math, M display, n inline, A as you type, else Tab, r regex, v on a selection, w after a word boundary)\n\n";
-  snipDialog("All snippets", head + (mine.length ? "Yours\n" + mine.map(row).join("\n") + "\n\nBuilt in\n" : "")
-    + Snippets.DEFAULTS.map(row).join("\n"), false);
-};
-$("#snip-cancel").onclick = snipClose;
-$("#snip-dialog").addEventListener("keydown", (e) => { if (e.key === "Escape") { e.stopPropagation(); snipClose(); } });
-$("#snip-save").onclick = async () => {
-  const text = snipCm.getValue();
-  try { Snippets.load(text); } catch (e) { $("#snip-error").textContent = "Not saved: " + (e.message || e); return; }
-  const r = await Q.saveSnippets(text);
-  if (r._status !== 200) { $("#snip-error").textContent = "Not saved: " + (r.error || r._status); return; }
-  await loadSnippets();
-  snipClose();
-  toast("Snippets saved");
-};
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") loadSnippets(); });
+window.addEventListener("focus", () => loadSnippets());
 
 cm.getWrapperElement().style.display = "none";
-cm.on("change",() => { const t = activeTab(); if (t) { renderTabs(); scheduleSave(t); } });
+cm.on("change", (ed, ch) => {
+  const t = activeTab(); if (t) { updateTabState(t); scheduleSave(t); }
+  if (ch.origin !== "setValue") stopFollowing();      // you typed (a reload from disk does not count)
+});
 cm.on("inputRead", (ed, ch) => { if (/[{,]/.test(ch.text.join("")) || /\\[A-Za-z]*$/.test(lineBefore(ed))) showCompletions(ed, false); });
+// autoCloseBrackets inserts {} without inputRead. Wait until the previous command
+// widget closes on { before offering environments at the cursor between the braces.
+cm.on("cursorActivity", (ed) => {
+  const before = lineBefore(ed);
+  if (!/\\begin\{[A-Za-z*]*$/.test(before)) return;
+  setTimeout(() => {
+    if (lineBefore(ed) === before && !ed.somethingSelected()) showCompletions(ed, false);
+  }, 0);
+});
 
-function modeFor(path) { return path.endsWith(".md") ? "markdown" : "stex"; }
+function modeFor(path) { return path.endsWith(".md") ? "markdown" : "prism-stex"; }
 function activeTab() { return S.tabs.find((t) => t.path === S.active) || null; }
 const isDirty = (t) => TABS.dirty(t);
 
@@ -184,9 +830,11 @@ async function loadTab(path) {
 // Each file asked for to be shown counts: the last one asked for is the one in front, even
 // if an earlier one's file arrives after it (see init: the tabs of the last session).
 let openAsked = 0;
-async function openFile(path, line) {
+async function openFile(path, line, following = false) {
+  if (foreignProject) return;
+  if (C.job && !following) { C.follow = false; $("#agent-view").hidden = true; }
   if (S.files.some((f) => f.path === path && f.editable === false)) {
-    window.open("/api/asset?path=" + encodeURIComponent(path), "_blank", "noopener");
+    window.open(Client.assetUrl(path, projectKey), "_blank", "noopener");
     return;
   }
   const asked = ++openAsked;
@@ -196,6 +844,8 @@ async function openFile(path, line) {
   S.active = path;
   cm.swapDoc(t.doc);
   AH.apply(path);
+  findRun(false);                    // the find bar, open, counts in this file
+  $("#statusbar").hidden = false; statusPos();
   cm.getWrapperElement().style.display = "";
   $("#empty-editor").hidden = true;
   applyDiagnostics();
@@ -205,6 +855,13 @@ async function openFile(path, line) {
   if (!$("#history").hidden && !$("#panel").classList.contains("collapsed")) showHistory(path);   // follows the file
   cm.focus();
   cm.refresh();
+}
+
+// The last tab closed: no file in the editor, nor a find bar over it.
+function showNoFile() {
+  S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false;
+  $("#statusbar").hidden = true;
+  if (!findBar.hidden) { findBar.hidden = true; findUnmark(); }
 }
 
 function jumpToLine(line) {
@@ -218,23 +875,36 @@ function jumpToLine(line) {
 
 async function closeTab(path) {
   const t = S.tabs.find((x) => x.path === path);
-  if (t && isDirty(t) && !t.conflict) await saveTab(t);      // autosave may still be pending
+  // Held for the turn, saved at its end (not a deleted or conflicting file: that is never saved by itself).
+  if (t && isDirty(t) && C.editTurn && !t.conflict) return toast(Tabs.unsavedWhy({ reason: "held" }) + " Keep this tab open until then.");
+  if (t && isDirty(t) && !t.conflict) await TABS.save(t);      // autosave may still be pending
   if (t && isDirty(t) && !confirm(`${path} has unsaved changes. Close anyway?`)) return;
   TABS.remove((x) => x.path === path);
   if (S.active === path) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) return openFile(next.path);
-    S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false;
+    showNoFile();
   }
   renderTabs(); renderTree(); persistSession();
 }
 
+function updateTabState(t) {
+  const state = JSON.stringify([isDirty(t), t.saveError]);
+  if (state === t._tabState) return;
+  t._tabState = state;
+  const el = [...$("#tabs").children].find((el) => el.dataset.path === t.path);
+  if (!el) return;
+  el.classList.toggle("dirty", isDirty(t)); el.classList.toggle("save-failed", !!t.saveError);
+  el.title = t.saveError || t.path;
+}
 function renderTabs() {
+  for (const t of S.tabs) t._tabState = JSON.stringify([isDirty(t), t.saveError]);
   $("#tabs").innerHTML = S.tabs.map((t) => `
-    <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""}" data-path="${esc(t.path)}" title="${esc(t.path)}">
+    <div class="tab ${t.path === S.active ? "active" : ""} ${isDirty(t) ? "dirty" : ""} ${t.saveError ? "save-failed" : ""}" data-path="${esc(t.path)}" title="${esc(t.saveError || t.path)}">
       <span class="name">${esc(t.path.split("/").pop())}</span><span class="close" data-close="${esc(t.path)}">×</span>
     </div>`).join("");
   AH.refresh();
+  updateScope();
 }
 $("#tabs").addEventListener("click", (e) => {
   const c = e.target.closest("[data-close]"); if (c) { e.stopPropagation(); return closeTab(c.dataset.close); }
@@ -242,17 +912,17 @@ $("#tabs").addEventListener("click", (e) => {
 });
 $("#tabs").addEventListener("auxclick", (e) => { const t = e.target.closest(".tab"); if (t && e.button === 1) closeTab(t.dataset.path); });
 
-function persistSession() { store.set("session", { tabs: S.tabs.map((t) => t.path), active: S.active }); }
+function persistSession() { if (!S.ready || S.restoring || foreignProject) return; store.set("session", { tabs: S.tabs.map((t) => t.path), active: S.active }); }
 
 /* ------------------------------------------------------------------ save & external changes */
 // Saving: one at a time per tab, held during an agent's Edit turn, busy git waited out,
 // a file changed on disk never overwritten (tabs.js).
-const saveTab = async (t, force = false) => (await TABS.save(t, force)).ok;
 async function saveActive() {
   const t = activeTab(); if (!t) return;
   clearTimeout(t.saveTimer);
-  const ok = await saveTab(t);
-  if (ok && $("#auto-compile").checked) compile();
+  const saved = await TABS.save(t);
+  if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
+  if (saved.ok && $("#auto-compile").checked) compile();
 }
 
 /* Autosave, as in Overleaf: an edit is saved a moment after you stop typing, and every
@@ -266,7 +936,7 @@ function scheduleSave(t) {
 }
 async function autosave(t) {
   if (!S.tabs.includes(t) || t.conflict || !isDirty(t)) return;
-  if ((await saveTab(t)) && $("#auto-compile").checked) scheduleCompile();
+  if ((await TABS.save(t)).ok && $("#auto-compile").checked) scheduleCompile();
 }
 function flushSaves() {
   for (const t of S.tabs) { clearTimeout(t.saveTimer); autosave(t); }
@@ -285,7 +955,6 @@ function scheduleCompile(active = undefined) {
   }, AUTOCOMPILE_MS);
 }
 // Every edited tab: {ok}, or {ok: false, reason} (Tabs.unsavedWhy says it).
-const saveAll = () => TABS.saveAll();
 
 // `discard`: the author chose the disk version over unsaved edits (the conflict banner).
 async function reloadFromDisk(t, discard = false) {
@@ -296,23 +965,38 @@ async function reloadFromDisk(t, discard = false) {
   if (what === "replace") {                          // else the same text: keep cursor and undo
     const cur = t.doc.getCursor(), scroll = t === activeTab() ? cm.getScrollInfo() : null;
     t.doc.setValue(r.content);
-    AH.apply(t.path);                                // setValue drops line classes
     t.doc.setCursor(cur);
     if (scroll) cm.scrollTo(scroll.left, scroll.top);
   }
   TABS.synced(t, r.mtime);
+  AH.apply(t.path);                                  // setValue drops classes; a resolved conflict may show them now
+  if (t === activeTab()) applyDiagnostics();
 }
 
 function showBanner(t) {
   const b = $("#banner");
   if (!t || t !== activeTab() || !t.conflict) { b.hidden = true; return; }
   b.hidden = false;
+  if (t.conflict === "gone") {
+    b.innerHTML = `<b>${esc(t.path)}</b> was deleted on disk. <button id="bn-save-as">Save under a new name</button> <button id="bn-close">Close tab</button>`;
+    $("#bn-close").onclick = () => closeTab(t.path);
+    $("#bn-save-as").onclick = async () => {
+      if (C.editTurn) return toast(Tabs.unsavedWhy({ reason: "held" }));
+      const path = prompt("Save as a new project file", t.path);
+      if (!path || path === t.path) return;
+      const r = await Q.saveFile({ path, content: t.doc.getValue(), base_mtime: 0 });
+      if (r._status !== 200) return toast(r.error || "Could not save the new file", true);
+      TABS.remove((x) => x === t); S.active = null;
+      await poll(); await openFile(path);
+    };
+    return;
+  }
   b.innerHTML = `<b>${esc(t.path)}</b> was changed on disk (e.g. by Claude Code) while you have unsaved edits.
     <button id="bn-reload">Load disk version (discard mine)</button>
     <button id="bn-keep">Keep mine (overwrite disk)</button>
     <button id="bn-diff">Show git diff</button>`;
   $("#bn-reload").onclick = () => reloadFromDisk(t, true);
-  $("#bn-keep").onclick = () => saveTab(t, true);
+  $("#bn-keep").onclick = () => TABS.save(t, true);
   $("#bn-diff").onclick = () => showDiff(t.path);
 }
 
@@ -380,7 +1064,7 @@ $("#tree").closest("section").addEventListener("contextmenu", (e) => {
 
 async function fileAction(action, body) {
   const r = await Q.fileAction(action, body);
-  if (r._status !== 200) { toast(r.error || `Could not ${action}`); return null; }
+  if (r._status !== 200) { toast(r.error || `Could not ${action}`, true); return null; }
   return r;
 }
 async function copyItems(paths) {
@@ -427,7 +1111,7 @@ function askRename(target) {
   const li = treeItem(target); if (!li) return;
   askName(li, target.path.split("/").pop(), "", async (name) => {
     const tabs = S.tabs.filter((t) => within(t.path, target.path));
-    for (const t of tabs) if (isDirty(t) && !t.conflict) await saveTab(t);   // its text goes with it
+    for (const t of tabs) if (isDirty(t) && !t.conflict) { const saved = await TABS.save(t); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }   // its text goes with it
     const r = await fileAction("rename", { path: target.path, name }); if (!r) return;
     const moved = (p) => r.path + p.slice(target.path.length);
     for (const t of tabs) t.path = moved(t.path);
@@ -454,22 +1138,27 @@ async function trashItems(target) {
   if (S.active && within(S.active, target.path)) {
     const next = S.tabs[S.tabs.length - 1];
     if (next) openFile(next.path);
-    else { S.active = null; cm.getWrapperElement().style.display = "none"; $("#empty-editor").hidden = false; }
+    else showNoFile();
   }
   renderTabs(); persistSession(); await poll();
   toast(`Moved ${target.path} to the ${TRASH}`);
 }
 
 const MAX_UPLOAD_SIZE = 25 * 1024 * 1024;
-async function uploadFile(file, destination = "attachment") {
+async function uploadFile(file, destination = "attachment", signal, uploadId) {
   if (file.size > MAX_UPLOAD_SIZE) throw new Error("File is larger than 25 MB.");
   const data = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
     reader.onerror = () => reject(reader.error);
+    const abort = () => { reader.abort(); reject(new DOMException("Upload cancelled", "AbortError")); };
+    reader.onabort = () => reject(new DOMException("Upload cancelled", "AbortError"));
+    reader.onloadend = () => signal?.removeEventListener("abort", abort);
+    if (signal?.aborted) return abort();
+    signal?.addEventListener("abort", abort, { once: true });
     reader.readAsDataURL(file);
   });
-  const r = await Q.upload({ name: file.name || "pasted.png", data, destination });
+  const r = await Q.upload({ name: file.name || "pasted.png", data, destination, upload_id: uploadId, signal });
   if (r.error || !r.path) throw new Error(r.error || "Upload failed.");
   return r;
 }
@@ -501,7 +1190,7 @@ async function importProjectFiles(files) {
   for (const [i, file] of files.entries()) {
     status.textContent = `Adding ${i + 1}/${files.length}: ${file.name}…`;
     try { await uploadFile(file, "project"); added++; await poll(); }
-    catch (e) { failed++; toast(`${file.name}: ${e.message || e}`); }
+    catch (e) { failed++; toast(`${file.name}: ${e.message || e}`, true); }
   }
   status.textContent = `${added} file${added === 1 ? "" : "s"} added${failed ? ` · ${failed} failed` : ""}`;
 }
@@ -543,9 +1232,20 @@ async function loadSymbols() {
   if (seq === symbolsSeq && r._status === 200) {
     S.symbols = r; renderOutline();
     if (labels._status === 200) S.labelVersion = labels.version;
+    redrawReplies();
     // Re-link older replies when a new label appears in project sources.
     for (const el of $("#chat-log").querySelectorAll(".msg.assistant")) linkLabels(el);
   }
+}
+// The replies are drawn again when the project's macros change: the first time they are
+// known (a restored log was drawn before them, and before the files its links point to)
+// and after you edit a \newcommand.
+let repliesMacros = null;
+function redrawReplies() {
+  const now = JSON.stringify(S.symbols.katex_macros || {});
+  if (now === repliesMacros) return;
+  repliesMacros = now;
+  for (const el of $("#chat-log").querySelectorAll(".msg.assistant[data-md]")) el.innerHTML = renderMd(el.dataset.md);
 }
 // Labels, outline and macros follow your own edits too, a moment after they are saved
 // (a new \label is offered by \cref{ right away).
@@ -579,18 +1279,18 @@ function renameProject() {
     if (!save || name === old) return showProjectName(old, S.projectFolder);
     showProjectName(name || S.projectFolder, S.projectFolder);
     if (C.job || S.building) { showProjectName(old, S.projectFolder); return toast("Wait until the agent's turn or the build has finished."); }
-    const saved = await saveAll();
+    const saved = await TABS.saveAll();
     if (!saved.ok) { showProjectName(old, S.projectFolder); return toast(Tabs.unsavedWhy(saved)); }
-    let r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
+    let r = await Q.renameProject(name);
     if (r._status === 404) {
       // This project's server started before renaming existed: restart it with the new
       // code, rename, and load the page again.
       toast("Updating this project's server to rename it…");
       const ok = await restartServer();
       if (ok !== true) { showProjectName(old, S.projectFolder); return toast("Could not rename: " + ok); }
-      r = await Q.renameProject(name).catch(() => ({ error: "server not reachable" }));
+      r = await Q.renameProject(name);
       if (r._status === 200) {
-        if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(); }
+        if (r.moving) { toast(`Renaming the folder to “${r.folder}”…`); await waitForNewServer(r.folder); }
         return reloadPage();
       }
     }
@@ -598,7 +1298,7 @@ function renameProject() {
     if (r.moving) {
       // The folder is renamed too: the server stops, and starts again in it on this port.
       toast(`Renaming the folder to “${r.folder}”…`);
-      const ok = await waitForNewServer();
+      const ok = await waitForNewServer(r.folder);
       if (ok === true) return reloadPage();
       return toast("Could not rename the folder: " + ok);
     }
@@ -621,39 +1321,48 @@ const poll = poller(pollOnce, 2000, 30000);
 const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
-  const config = BUILD.loaded ? null : loadConfig();
+  if (foreignProject) return;
+  const asked = TABS.stamp(), syncAsked = SYNC_TOGGLE.stamp();
   const r = await Q.tree();
-  await config;
   const st = $("#build-status");
   if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
   if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
-  if (toastPrev?.[0] === UNREACHABLE) toastPrev = ["", "status"];                       // nor shown after a toast
   showProjectName(r.name || r.root, r.root);
-  if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error); }
-  const changed = JSON.stringify(r.files.map((f) => [f.path, f.git])) !== JSON.stringify(S.files.map((f) => [f.path, f.git]))
-    || JSON.stringify(r.folders || []) !== JSON.stringify(S.folders);
-  S.files = r.files; S.order = r.order || []; S.folders = r.folders || [];
-  if (changed) renderTree();
-  let anyChange = false;
-  for (const t of [...S.tabs]) {
-    const f = r.files.find((x) => x.path === t.path);
-    const seen = f ? TABS.diskSeen(t, f.mtime) : "same";     // tabs.js: a save in flight is ours
-    if (seen === "same") continue;
-    anyChange = true;
-    if (seen === "reload") await reloadFromDisk(t);
-  }
-  if (anyChange || changed) loadSymbols();
+  if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error, true); }
+  if (!bindProject(r.project_key)) return;
+  if (!BUILD.loaded) await loadConfig();
+  const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })), asked);
+  if (action.foreign) return stopForProject();
+  S.ready = true; S.watch = r;
+  S.files = r.files; S.order = r.order || []; S.folders = r.folders || []; S.document = r.document || [];
+  if (action.treeChanged) renderTree();
+  for (const path of action.gone) { const t = TABS.get(path); if (t) TABS.diskSeen(t, null); }
+  for (const path of action.conflicts) { const t = TABS.get(path); if (t) TABS.diskSeen(t, r.files.find((f) => f.path === path).mtime); }
+  for (const path of action.reload) { const t = TABS.get(path); if (t) await reloadFromDisk(t); }
+  if (action.symbols) loadSymbols();
   if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
   if (r.updated && $("#btn-restart").hidden) toast("prism-local was updated: click “Update: restart” to use the new version");
   $("#btn-restart").hidden = !r.updated;
   S.server = r.server;
-  if (r.sync) renderSync(r.sync);
+  if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
+  if (PS.open && psQ.value && psStamp() !== PS.stamp) psSchedule(0);   // a file changed: search it again
 }
 
 /* ------------------------------------------------------------------ GitHub sync */
 // The project's changes are committed to its repository and pushed (gitsync.py): after you
 // stop editing, after each agent turn, and from this menu. The button says how far that is.
+const SYNC_TOGGLE = SyncState.createToggle({
+  send: (on) => Q.sync(on ? "on" : "off"),
+  onState: (r) => { if (r || S.sync) renderSync(r || S.sync); },
+  onError: (r) => toast("Could not change sync: " + (r.error || r._status)),
+});
 const SYNC_NOTICE = { seen: null };      // the number of the last sync notice shown
+function htmlIfChanged(selector, html) {
+  const el = $(selector), previous = el._prismMarkup;
+  if (!previous || previous.source !== html || previous.rendered !== el.innerHTML) {
+    el.innerHTML = html; el._prismMarkup = { source: html, rendered: el.innerHTML };
+  }
+}
 function renderSync(st) {
   S.sync = st;
   $("#sync-box").hidden = false;
@@ -666,26 +1375,27 @@ function renderSync(st) {
   $("#sync-github").hidden = !S.githubUrl;
   if (S.githubUrl) $("#sync-github").href = S.githubUrl;
   else $("#sync-github").removeAttribute("href");
-  const { text, cls, detail } = SyncState.describeSync(st, ago);     // syncstate.js
+  const { text, cls, detail, tech } = SyncState.describeSync(st, ago);     // syncstate.js
   label.textContent = text;
   b.className = "ghost sync-" + cls;
   b.title = detail.replace(/<[^>]+>/g, "");
-  const last = st.last_commit ? `<br>Last commit ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
-  $("#sync-detail").innerHTML = esc(detail) + last;
-  $("#sync-auto").checked = !!st.enabled;
+  const last = st.last_commit ? `<br>Last saved ${ago(st.last_commit.at)}: <i>${esc(st.last_commit.message)}</i>` : "";
+  // What git says, for those who want to know: folded away.
+  htmlIfChanged("#sync-detail", esc(detail) + last + (tech ? `<details class="sync-tech"><summary>Details</summary>${esc(tech)}</details>` : ""));
+  $("#sync-auto").checked = SYNC_TOGGLE.value(st.enabled);
   // Where you and a co-author changed the same lines, both versions were kept: list them.
   const kept = (st.own && st.kept) || [];
   $("#sync-kept").hidden = !kept.length;
-  $("#sync-kept").innerHTML = kept.length ? `<div class="dd-note">Both versions kept where you and a co-author changed the same lines.
+  htmlIfChanged("#sync-kept", kept.length ? `<div class="dd-note">Both versions kept where you and a co-author changed the same lines.
       Keep what you want and delete the <code>% [prism-local]</code> lines:</div>` + kept.map((k) =>
     `<button type="button" class="dd-item" data-kept="${esc(k.path)}" data-line="${k.line || 1}">${esc(k.path)}${k.line ? ":" + k.line : ""}
-       <small>${k.side ? "GitHub's version saved as " + esc(k.side) : "with " + esc(k.who)}</small></button>`).join("") + "<hr>" : "";
+       <small>${k.side ? "GitHub's version saved as " + esc(k.side) : "with " + esc(k.who)}</small></button>`).join("") + "<hr>" : "");
   // The automatic merge could not be done: compare, combine, then keep the combination.
   const clash = (st.own && st.clash) || [];
   $("#sync-clash").hidden = !clash.length;
-  $("#sync-clash").innerHTML = clash.map((f) =>
+  htmlIfChanged("#sync-clash", clash.map((f) =>
     `<button type="button" class="dd-item" data-theirs="${esc(f)}">Compare with GitHub's version: ${esc(f)}</button>`).join("")
-    + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : "");
+    + (clash.length ? `<button type="button" class="dd-item" data-sync="resolve">I've combined them: keep my version of the clashing lines</button><hr>` : ""));
   // Each notice once, by its number (several requests return it), and only a recent one:
   // a page opened later does not repeat what happened before it.
   if (st.notice && st.notice_id !== SYNC_NOTICE.seen && st.notice_age < 60)
@@ -697,12 +1407,12 @@ $("#btn-sync").onclick = async (e) => {
   e.stopPropagation(); syncMenu($("#sync-menu").hidden);
   if (!$("#sync-menu").hidden && !$("#sync-publish").hidden) {
     // Created in a terminal since the editor started? Look once, now that you ask.
-    const st = await Q.recheck().catch(() => null);
+    const st = await Q.recheck();
     if (st && st._status === 200) { delete st._status; renderSync(st); }
     if (!$("#sync-publish").hidden) loadPublish();
   }
   if (!$("#sync-menu").hidden && !S.githubUrl) {
-    const r = await Q.github().catch(() => ({}));
+    const r = await Q.github();
     S.githubUrl = r.github || "";
     if (S.githubUrl) { $("#sync-github").href = S.githubUrl; $("#sync-github").hidden = false; }
   }
@@ -712,18 +1422,18 @@ $("#sync-menu").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-sync]"); if (!b) return;
   syncMenu(false);
   if (b.dataset.sync === "history") return showHistory();
-  if (b.dataset.sync === "bind" && !confirm(`Sync this project to ${S.sync.target.repository_identity}\nBranch: ${S.sync.target.branch_ref}\nFetch: ${S.sync.target.fetch_url}\nPush: ${S.sync.target.push_url}?`)) return;
+  if (b.dataset.sync === "bind" && !confirm(`Sync this project with ${S.sync.target.repository_identity} on GitHub from now on?\n\nDetails: branch ${S.sync.target.branch_ref}, fetch ${S.sync.target.fetch_url}, push ${S.sync.target.push_url}`)) return;
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
       + "yours is kept; everything else of theirs comes in. Their version stays in their commits (History).")) return;
-  if (b.dataset.sync === "resolve" && !(await saveAll()).ok) return;
+  if (["resolve", "commit", "pull"].includes(b.dataset.sync)) { const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
   // Your open files go to disk first: committed by Save now, and out of the way of what Get
   // changes brings in (no "changed on disk" clash with text not saved yet).
-  if ((b.dataset.sync === "commit" || b.dataset.sync === "pull") && !(await saveAll()).ok) return;
+
   renderSync({ ...S.sync, state: b.dataset.sync === "pull" ? "pulling" : "committing", error: null });
-  const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined).catch(() => null);
+  const r = await Q.sync(b.dataset.sync, b.dataset.sync === "bind" ? S.sync.target : undefined);
   if (r && r._status === 200) renderSync(r);
-  else if (r && r.error) toast(r.error);
+  else if (r && r.error) toast(r.error, true);
   await poll();
 });
 // Create a private GitHub repository for the project (publish.publish_project, through this server).
@@ -731,7 +1441,7 @@ async function loadPublish() {
   const f = $("#sync-publish"), go = $("#pub-go"), note = $("#pub-note");
   if (f.dataset.loaded) return;
   note.textContent = "Checking…"; go.disabled = true;
-  const r = await Q.publishInfo().catch(() => null);
+  const r = await Q.publishInfo();
   if (!r || r._status !== 200) { note.textContent = "Could not check: " + ((r && r.error) || "server not reachable"); return; }
   f.dataset.loaded = "1";
   if (!f.elements.name.value) f.elements.name.value = r.name;
@@ -752,7 +1462,7 @@ $("#sync-publish").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target, go = $("#pub-go");
   if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   go.disabled = true; go.textContent = "Creating…";
   const r = await Q.publish({
@@ -780,16 +1490,12 @@ $("#sync-clash").addEventListener("click", async (e) => {
   const seq = ++diffSeq;
   const r = await Q.theirs(b.dataset.theirs);
   if (seq !== diffSeq) return;                        // the diff view was asked for again
-  if (r._status !== 200) return toast(r.error || "Could not get GitHub's version");
+  if (r._status !== 200) return toast(r.error || "Could not get GitHub's version", true);
   const head = r.content === null ? `GitHub has deleted ${r.path}.` : `What GitHub's version of ${r.path} has that yours does not (+), and what yours has instead (-):`;
   $("#diff").innerHTML = diffHtml([head, "", r.diff || "(the same)"].join("\n"));
   openPanel("diff");
 });
-$("#sync-auto").onchange = async (e) => {
-  const r = await Q.sync(e.target.checked ? "on" : "off");
-  if (r._status === 200) renderSync(r);
-  else { e.target.checked = !e.target.checked; toast("Could not change sync: " + (r.error || "HTTP " + r._status)); }
-};
+$("#sync-auto").onchange = (e) => SYNC_TOGGLE.change(e.target.checked);
 document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) syncMenu(false); });
 
 // History: the commits that changed the open file; one of them shows what it changed and
@@ -837,16 +1543,21 @@ $("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('
 // to true once the new server answers (or to an error message). The page then reloads.
 async function restartServer() {
   if (C.job || S.building) return "Wait until the agent's turn or the build has finished.";
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return Tabs.unsavedWhy(saved);
-  const r = await Q.restart().catch(() => ({ error: "server not reachable" }));
+  const r = await Q.restart();
   if (r.error) return r.error;
   return waitForNewServer();
 }
-// The server stopped to start again (restart, folder rename): wait until the new one answers.
-async function waitForNewServer() {
+// The server stopped to start again (restart, folder rename): wait until the new one answers,
+// and is this project's, not another that took the port meanwhile. After a folder rename
+// (`folder`, its new name) it is the project in the renamed folder, or in the old one if
+// renaming did not work.
+async function waitForNewServer(folder) {
   const tree = () => fetch("/api/tree", { cache: "no-store" }).then((x) => x.ok && x.json());
-  return await Util.waitForRestart(tree, (t) => t.server !== S.server)
+  const moved = folder && S.watch?.path ? S.watch.path.replace(/[^\\/]+$/, () => folder) : null;
+  const ours = (t) => t.project_key === projectKey || (moved !== null && t.path === moved);
+  return await Util.waitForRestart(tree, (t) => t.server !== S.server && ours(t))
     || "The server did not come back. Reopen the project from the Home page.";
 }
 function reloadPage() {
@@ -865,16 +1576,26 @@ $("#btn-restart").onclick = async () => {
 function lineBefore(ed) { const c = ed.getCursor(); return ed.getLine(c.line).slice(0, c.ch); }
 // What to complete (\ref, \cite, \commands): chatlogic.js decides, this draws.
 function computeHints(ed, explicit) {
-  const cur = ed.getCursor(), found = ChatLogic.completions(lineBefore(ed), S.symbols, explicit);
+  const cur = ed.getCursor(), found = TexComplete.completions(lineBefore(ed), S.symbols, explicit);
   if (!found) return null;
-  const list = found.items.map((i) => ({ text: i.text, render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
+  const list = found.items.map((i) => ({ text: i.text,
+    ...(i.kind === "environment" ? { hint: (editor) => {
+      const indent = editor.getOption("indentWithTabs") ? "\t" : " ".repeat(editor.getOption("indentUnit"));
+      const edit = TexComplete.environmentEdit(editor.getValue(), editor.indexFromPos(editor.getCursor()), i.text, indent);
+      if (!edit) return;
+      editor.operation(() => {
+        editor.replaceRange(edit.text, editor.posFromIndex(edit.from), editor.posFromIndex(edit.to), "complete");
+        editor.setCursor(editor.posFromIndex(edit.cursor));
+      });
+    } } : {}),
+    render: (el) => { el.innerHTML = `${esc(i.text)}<span class="hint-kind">${esc(i.kind)}</span>`; } }));
   return { list, from: { line: cur.line, ch: cur.ch - found.word.length }, to: cur };
 }
 
 function showCompletions(ed, explicit) {
   if (ed.state.completionActive) return;          // the open widget re-queries by itself
   if (!computeHints(ed, explicit)) {
-    if (explicit && ChatLogic.CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
+    if (explicit && TexComplete.CITE_RE.test(lineBefore(ed)) && !S.symbols.bibkeys.length) toast("No BibTeX entries found in the project's .bib files.");
     return;
   }
   ed.showHint({ hint: (e) => computeHints(e, explicit), completeSingle: false });
@@ -890,7 +1611,7 @@ async function loadConfig() {
   const want = store.get("buildmode", "draft");
   BUILD.mode = BUILD.modes.includes(want) ? want : BUILD.modes[0] || "";
   renderCompileMenu();
-  if (r.error) { $("#build-info").textContent = r.error; toast(r.error); }
+  if (r.error) { $("#build-info").textContent = r.error; toast(r.error, true); }
 }
 
 
@@ -909,22 +1630,9 @@ async function showBuild(r) {
   const st = $("#build-status");
   if (!r.cancelled) S.diagnostics = r.diagnostics || [];      // a stopped build keeps the last list
   $("#output").textContent = r.output || "";
-  const errs = S.diagnostics.filter((d) => d.severity === "error").length;
-  const warns = S.diagnostics.length - errs;
-  let text, cls = "err";
-  if (r.cancelled) [text, cls] = ["build stopped", "warn"];
-  else if (r.timed_out) text = "stopped: the build took too long";
-  else if (r.exit === 0 || r.pdf_updated) {
-    text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
-    cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
-  } else text = `FAILED (exit ${r.exit})`;
-  st.className = "status " + cls;
-  st.textContent = text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`;
-  // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
-  const how = [r.main, r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
-    r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
-    ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
-  st.title = how; $("#build-info").textContent = how ? "Last build: " + how : "";
+  const description = Util.describeBuild(r, S.diagnostics), errs = description.errors;
+  st.className = "status " + description.cls; st.textContent = description.text;
+  st.title = description.title; $("#build-info").textContent = description.title ? "Last build: " + description.title : "";
   renderProblems();
   applyDiagnostics();
   if ((r.exit !== 0 && !r.cancelled) || errs) openPanel(errs || !r.output ? "problems" : "output");
@@ -936,9 +1644,10 @@ async function compile(clean = false, active = S.active) {
   // Taken at once: an auto-compile coming while this one saves (git may hold the saves for
   // a while) is not a second build, which would answer "busy" and reset the button.
   S.building = true;
+  let released = false;
   try {
     if (C.editTurn) toast("Compiling the files on disk; your edits are saved when the agent's turn ends.");
-    else if (!(await saveAll()).ok) return;
+    else { const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }
     const mode = BUILD.mode;
     const st = $("#build-status");
     st.className = "status busy"; st.textContent = clean ? `recompiling from scratch (${mode})…` : `compiling (${mode})…`;
@@ -946,12 +1655,13 @@ async function compile(clean = false, active = S.active) {
     const r = await Q.build({ mode, clean, active });
     if (r.busy) { st.className = "status warn"; st.textContent = "a build is already running"; return; }
     if (r._status !== 200) { st.className = "status err"; st.textContent = "build failed: " + (r.error || "HTTP " + r._status); return; }
+    S.building = false; setCompileButton(false); released = true;
     await showBuild(r);
   } catch (e) {
     const st = $("#build-status");
     st.className = "status err"; st.textContent = "build request failed: " + e;
   } finally {
-    S.building = false; setCompileButton(false);
+    if (!released) { S.building = false; setCompileButton(false); }
   }
 }
 $("#btn-compile").onclick = () => S.building ? Q.buildStop() : compile();
@@ -1005,7 +1715,8 @@ $("#problems").addEventListener("click", (e) => {
 });
 
 let diagMarks = [];
-function applyDiagnostics() {
+function applyDiagnostics() { cm.operation(applyDiagnosticMarks); }
+function applyDiagnosticMarks() {
   for (const [doc, h, cls] of diagMarks) doc.removeLineClass(h, "background", cls);
   diagMarks = [];
   for (const d of S.diagnostics) {
@@ -1090,7 +1801,7 @@ $("#btn-pdf-here").onclick = () => {
 };
 function popOut() {
   POP.here = false;
-  popWin = window.open("/viewer", "prism-pdf");
+  popWin = window.open("/viewer" + Client.query({ project_key: projectKey }), "prism-pdf");
   if (popWin) popWin.focus();
 }
 $("#pdf-popout").onclick = (e) => { e.preventDefault(); popOut(); };
@@ -1175,15 +1886,10 @@ function sidebarHidden(h) {
 sidebarHidden(store.get("sidebar.hidden", false));
 $("#btn-sidebar").onclick = () => sidebarHidden(!$("#sidebar").classList.contains("hidden"));
 
-// A toast shows in the status line for 4 s, then the status comes back: the one under the
-// first of several toasts in a row, not an earlier toast's text.
-let toastTimer = null, toastShown = null, toastPrev = null;
-function toast(msg) {
-  const st = $("#build-status");
-  if (!(toastTimer && st.textContent === toastShown)) toastPrev = [st.textContent, st.className];
-  st.textContent = msg; st.className = "status warn"; toastShown = msg;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { toastTimer = null; if (st.textContent === msg) [st.textContent, st.className] = toastPrev; }, 4000);
+// Build status stays in its own line; actionable errors remain until dismissed.
+// `error`: it stays until dismissed. Messages from the server pass true; the guess is for the rest.
+function toast(msg, error = /failed|error|could not|cannot |not saved|not undone|unreachable|not reachable|resolve .*conflict/i.test(String(msg))) {
+  notice(String(msg), error);
 }
 
 document.querySelectorAll(".gutter").forEach((g) => {
@@ -1191,12 +1897,14 @@ document.querySelectorAll(".gutter").forEach((g) => {
     e.preventDefault(); g.classList.add("drag");
     const target = { sidebar: $("#sidebar"), pdf: $("#pdf-pane"), chat: $("#chat") }[g.dataset.resize];
     const startX = e.clientX, startW = target.getBoundingClientRect().width;
-    const move = (ev) => {
-      const dx = ev.clientX - startX;
+    const resize = Util.frameBatch((_, x) => {
+      const dx = x - startX;
       const w = Math.max(160, startW + (g.dataset.resize === "sidebar" ? dx : -dx));
       target.style.width = w + "px"; cm.refresh();
-    };
+    });
+    const move = (ev) => resize.set("width", ev.clientX);
     const up = () => {
+      resize.flush();
       g.classList.remove("drag"); document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
       store.set("w." + g.dataset.resize, target.style.width);
     };
@@ -1211,6 +1919,12 @@ document.addEventListener("keydown", (e) => {
   if (mod && e.key === "s") { e.preventDefault(); saveActive(); }
   else if (mod && e.key === "Enter") { e.preventDefault(); compile(); }
   else if (mod && e.key === "b" && !e.shiftKey) { e.preventDefault(); sidebarHidden(!$("#sidebar").classList.contains("hidden")); }
+  // Find and go to line in the open file, from wherever the focus is but the agent's panel (the
+  // editor has its own keys); with no file open, the browser keeps its own.
+  else if (mod && e.code === "KeyF" && !e.shiftKey && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); findOpen(e.altKey); }
+  else if (mod && e.code === "KeyF" && e.shiftKey && !e.altKey) { e.preventDefault(); psOpen(); }
+  else if (e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey && e.code === "KeyG" && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); gotoOpen(); }
+  else if (e.ctrlKey && e.code === "KeyH" && !e.shiftKey && !e.altKey && activeTab() && !e.target.closest("#chat")) { e.preventDefault(); findOpen(true); }
 });
 window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.preventDefault(); e.returnValue = ""; } });
 
@@ -1229,9 +1943,12 @@ const provGet = (k) => { const key = conversationKey(k); return key ? store.get(
 const provSet = (k, v) => { const key = conversationKey(k); if (key) store.set(key, v); };
 // The account the provider runs under (Claude Code: `claude auth status`), and whether
 // it is the one allowed in Home → Settings. A mismatch stops every turn on the server.
+const providerSeq = { account: 0, usage: 0, catalog: 0 };
 async function loadAccount() {
+  const provider = C.provider, seq = ++providerSeq.account;
   const el = $("#agent-account");
-  const r = await Q.account(C.provider).catch(() => null);
+  const r = await Q.account(provider);
+  if (provider !== C.provider || seq !== providerSeq.account) return;
   const a = r && r._status === 200 && r.account;
   if (!a) { el.hidden = true; return; }
   el.hidden = false;
@@ -1355,20 +2072,17 @@ $("#btn-chat").onclick = () => chatHidden(!$("#chat").classList.contains("hidden
 $("#chat-mode").value = store.get("chat.mode", "edit");
 $("#chat-mode").onchange = (e) => store.set("chat.mode", e.target.value);
 
-// The agent's replies: Markdown (marked: tables, lists, headings, links) with TeX math
-// (KaTeX: $…$, \(…\), $$…$$, \[…\]). Raw HTML in a reply is shown as text, links open only
-// http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
+// The agent's replies: Markdown (marked: tables, lists, headings, links) with TeX math as
+// KaTeX, the project's macros included. The math is found before Markdown reads the reply
+// (mathtext.js), so _ * \\ | in it stay TeX. Raw HTML in a reply is shown as text, links
+// open only http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
 const FILE_REF = /((?:[\w.-]+\/)*[\w.-]+\.(?:tex|bib|md))(?::(\d+))?/g;
-function texHtml(tex, display) {
-  try {
-    const rendered = katex.renderToString(tex, { displayMode: display, throwOnError: false });
-    const labels = [...new Set(ChatLogic.labelReferences(tex).map((r) => r.label))];
-    return rendered + (labels.length ? `<span class="label-links"> ${labels.map(labelLink).join(" · ")}</span>` : "");
-  }
-  catch { return esc(tex); }
-}
 function labelLink(label) {
   return `<a data-label="${esc(label)}" tabindex="0" role="link" title="Open LaTeX label in source">${esc(label)}</a>`;
+}
+function mathLabelLinks(html, formula) {
+  const labels = [...new Set(ChatLogic.labelReferences(formula.tex).map((ref) => ref.label))];
+  return html + (labels.length ? `<span class="label-links"> ${labels.map(labelLink).join(" · ")}</span>` : "");
 }
 function linkLabels(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -1401,26 +2115,6 @@ const MD = typeof marked === "undefined" || typeof katex === "undefined" ? null
         ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer"${title ? ` title="${esc(title)}"` : ""}>${text}</a>` : text,
       image: (href, title, text) => esc(text || ""),
     },
-    extensions: [{
-      name: "mathBlock", level: "block",
-      start(src) { const m = src.match(/^ {0,3}(?:\$\$|\\\[)/m); return m ? m.index : undefined; },
-      tokenizer(src) {
-        const m = /^ {0,3}(?:\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\])[ \t]*(?:\n+|$)/.exec(src);
-        if (m) return { type: "mathBlock", raw: m[0], text: (m[1] ?? m[2]).trim() };
-      },
-      renderer: (t) => texHtml(t.text, true),
-    }, {
-      name: "mathInline", level: "inline",
-      start(src) { const i = src.search(/\$|\\\(|\\\[/); return i < 0 ? undefined : i; },
-      tokenizer(src) {
-        let m = /^\$\$([\s\S]+?)\$\$/.exec(src) || /^\\\[([\s\S]+?)\\\]/.exec(src);
-        if (m) return { type: "mathInline", raw: m[0], text: m[1].trim(), display: true };
-        // $x$, but not "$5 and $6": no space just inside, no digit right after.
-        m = /^\\\(([\s\S]+?)\\\)/.exec(src) || /^\$(?![\s$])((?:\\.|[^\\$\n])+?)(?<!\s)\$(?!\d)/.exec(src);
-        if (m) return { type: "mathInline", raw: m[0], text: m[1], display: false };
-      },
-      renderer: (t) => texHtml(t.text, t.display),
-    }],
   });
 function linkFiles(root) {
   const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
@@ -1439,7 +2133,8 @@ function linkFiles(root) {
 function renderMd(text) {
   if (!MD) return renderPlain(text);
   const box = document.createElement("div");
-  box.innerHTML = MD.parse(String(text));
+  box.innerHTML = MathText.render(String(text), { markdown: (s) => MD.parse(s), katex,
+    macros: S.symbols.katex_macros, afterMath: mathLabelLinks });
   linkFiles(box);
   linkLabels(box);
   return box.innerHTML;
@@ -1473,14 +2168,7 @@ function chatAppend(html, cls) {
 }
 // The conversation is kept as HTML: its latest messages, whole, up to 400 000 characters.
 function saveChatLog() {
-  const kids = $("#chat-log").children;
-  let html = "";
-  for (let i = kids.length - 1; i >= 0; i--) {
-    const h = kids[i].outerHTML;
-    if (html.length + h.length > 400000) break;
-    html = h + html;
-  }
-  provSet("log", html);
+  provSet("log", Util.boundedLog([...$("#chat-log").children].map((el) => el.outerHTML)));
 }
 // Earlier versions cut the saved log anywhere, even inside a tag, where the rest of an
 // attribute (a tool's command, say) could read as new HTML. So a restored log keeps only
@@ -1498,6 +2186,8 @@ function restoreChatLog(html) {
       if (/^on/i.test(a.name) || (url && !/^(https?:|mailto:)/i.test(a.value.trim()))) el.removeAttribute(a.name);
     }
   }
+  // A reply whose text was kept is drawn from it again, as replies are drawn now.
+  for (const el of t.content.querySelectorAll(".msg.assistant[data-md]")) el.innerHTML = renderMd(el.dataset.md);
   $("#chat-log").replaceChildren(t.content);
 }
 function chatIntro() {
@@ -1541,10 +2231,11 @@ async function referenceBlock(mentions) {
   }
   return b + "[/Referenced]";
 }
-function describeScope(mentions, mode) {
+function describeScope(mentions, mode, activeFile = S.active) {
   if (mode === "ask") return prov().read_only_ask === false
     ? "Ask: writes denied by category; changes restored after the turn (no OS sandbox)" : "Ask mode: read-only, no agent compilation";
-  if (!mentions.length) return "Scope: whole workspace (any file, new files allowed)";
+  if (!mentions.length) return activeFile ? `Default edit target: ${activeFile} (explicit file requests take priority)`
+    : "No default edit target: specify a file in your request";
   return "Scope: only " + mentions.map(rangeLabel).join(", ")
     + (prov().enforces_scope === false ? " (restored after the turn; not a write boundary)" : "");
 }
@@ -1554,7 +2245,7 @@ function updateScope() {
   el.textContent = describeScope(ms, mode);
   el.className = mode === "ask" ? "ask" : ms.length ? "narrow" : "wide";
   el.title = "Type @ to point the agent at a file or at the editor selection. "
-    + "With @-mentions it may change only those files; without, any file in the project.";
+    + "With @-mentions it may change only those files. Otherwise edits default to the open file, unless you request other files.";
 }
 function mentionHtml(text) {
   return esc(text).replace(/(^|\s)(@[^\s@]+)/g, '$1<span class="mention">$2</span>');
@@ -1598,25 +2289,56 @@ const AH = {
 
   clear(kind = null) {
     for (const [path, list] of this.marks) {
-      this.marks.set(path, kind ? list.filter((m) => m.kind !== kind) : []);
+      const next = kind ? list.filter((m) => m.kind !== kind) : [];
+      if (next.length === list.length) continue;
+      if (next.length) this.marks.set(path, next); else this.marks.delete(path);
       this.apply(path);
     }
   },
 
+  // The same final snapshot as the turn card, after its files have reloaded. No
+  // streamed tool arguments or intermediate line numbers are used for green marks.
+  complete(changes) {
+    cm.operation(() => {
+      this.clear("changed");
+      for (const c of changes) {
+        if (c.deleted) continue;
+        const list = Turn.changedLines(c).map(([from, end]) => ({ kind: "changed", from, to: end - 1 }));
+        if (!list.length) continue;
+        this.marks.set(c.path, [...(this.marks.get(c.path) || []), ...list]);
+        this.apply(c.path);
+      }
+    });
+  },
+
   // Put the marks of `path` on its tab's document (after a swap, a reload, a change).
-  apply(path) {
+  apply(path) { cm.operation(() => this.applyNow(path)); },
+  applyNow(path) {
     for (const [doc, line, cls] of this.handles.get(path) || []) {
       doc.removeLineClass(line, "background", cls); doc.removeLineClass(line, "gutter", cls + "-g");
+      doc.removeLineClass(line, "wrap", cls + "-w");
     }
     const t = S.tabs.find((x) => x.path === path), out = [];
     if (t) {
-      const last = t.doc.lineCount() - 1;
+      const last = t.doc.lineCount() - 1, changed = new Set();
       for (const m of this.marks.get(path) || []) {
         const cls = "cm-agent-" + m.kind;
-        for (let l = m.from; l <= Math.min(m.to, last, m.from + 3000); l++) {
+        if (m.kind === "changed" && t.conflict) continue;   // your unsaved version is not the agent's result
+        for (let l = m.from; l <= Math.min(m.to, last, m.kind === "changed" ? last : m.from + 3000); l++) {
           const h = t.doc.addLineClass(l, "background", cls);
           t.doc.addLineClass(h, "gutter", cls + "-g");
+          t.doc.addLineClass(h, "wrap", cls + "-w");      // the line's text: its colours (app.css)
           out.push([t.doc, h, cls]);
+          if (m.kind === "changed") changed.add(l);
+        }
+      }
+      // Adjacent and overlapping edits form one raised surface, including a
+      // one-line edit. Keep its edges on line handles so wrapping/folding works.
+      for (const l of changed) {
+        for (const [edge, neighbour] of [["start", l - 1], ["end", l + 1]]) {
+          if (changed.has(neighbour)) continue;
+          const cls = "cm-agent-changed-" + edge;
+          out.push([t.doc, t.doc.addLineClass(l, "background", cls), cls]);
         }
       }
     }
@@ -1637,16 +2359,16 @@ const AH = {
 };
 
 /* The file the agent is writing, live, over the editor. A read-only view: your tabs, their
-   saving and their undo history are not touched. For an Edit, the text it replaces is struck
-   through and the new text appears after it; for a Write, the file appears from the top.
-   When the step ends the view closes and the editor shows the changed lines. */
+   saving and their undo history are not touched. For an Edit, the text it replaces has a red
+   background and the new text appears after it in green; for a Write, the file appears from the top.
+   When the step ends the view closes; the final snapshot marks the changed lines. */
 const AV = {
   cm: null, id: null, path: null, name: null, hidden: false,
   base: null, old: "", oldDone: false, text: "", shown: 0, at: null, marks: [],
 
   view() {
     if (!this.cm) {
-      this.cm = CodeMirror($("#agent-view-cm"), { readOnly: true, lineNumbers: true, lineWrapping: true, mode: "stex" });
+      this.cm = CodeMirror($("#agent-view-cm"), { readOnly: true, lineNumbers: true, lineWrapping: true });   // begin() sets the mode
       $("#agent-view-hide").onclick = () => { this.hidden = true; $("#agent-view").hidden = true; };
     }
     return this.cm;
@@ -1657,11 +2379,11 @@ const AV = {
     const v = this.view();
     v.setOption("mode", modeFor(path));
     $("#agent-view-title").textContent = `${name === "Write" ? "Writing" : "Editing"} ${path}`;
-    $("#agent-view").hidden = this.hidden;           // hidden: it still marks the editor (AH)
+    $("#agent-view").hidden = !Turn.mayFollow({ started: C.followOpened, current: openAsked, touched: !C.follow, hidden: this.hidden });
     v.setValue(""); v.refresh();
     if (name === "Write") { this.base = ""; return; }
     // An edit changes the file as it is on disk.
-    const r = await Q.file(path).catch(() => ({}));
+    const r = await Q.file(path);
     if (this.id !== id) return;
     v.setValue(r.content || ""); this.base = v.getValue();
     this.render();
@@ -1703,28 +2425,30 @@ const AV = {
   // The step `id` ended (null: the turn ended). Show the result in the editor.
   async end(id, ok) {
     if (this.id === null || (id !== null && id !== this.id)) return;
-    const { path, name, text, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
-    const start = Math.max(0, (at || 0) - this.old.length);   // where the edit was, in the old file
+    const turnJob = C.job;
+    const { path, at } = this, line = this.cm.posFromIndex(at || 0).line + 1;
     this.id = null;
     await new Promise((res) => setTimeout(res, 400));
     AH.clear("edit");
     if (!ok) { if (this.id === null) $("#agent-view").hidden = true; return; }
     await poll();                                       // take in the new file (a new one is listed now)
-    const t = S.tabs.find((x) => x.path === path);
-    if (t && name === "Edit") {                         // mark the lines it changed
-      const doc = t.doc.getValue(), nt = text.replace(/\r\n/g, "\n");
-      let i = nt ? doc.indexOf(nt, Math.max(0, start - 2000)) : -1;
-      if (nt && i < 0) i = doc.indexOf(nt);
-      const from = i >= 0 ? t.doc.posFromIndex(i).line : Math.min(line - 1, t.doc.lineCount() - 1);
-      const to = i >= 0 ? t.doc.posFromIndex(i + nt.length).line : from;
-      AH.set(path, "changed", from, to);
-    }
     if (this.id !== null) return;                       // the next step already took the view
     $("#agent-view").hidden = true;
     // Show the result where it is, unless you hid the agent's view.
-    if (!this.hidden && S.files.some((f) => f.path === path)) openFile(path, line);
+    if (!S.files.some((f) => f.path === path)) return;
+    if (C.job === turnJob && Turn.mayFollow({ started: C.followOpened, current: openAsked, touched: !C.follow, hidden: this.hidden })) {
+      await openFile(path, line, true); C.followOpened = openAsked;
+    } else chatAppend(`<a data-file="${esc(path)}" data-line="${line}">Jump to ${esc(path)}:${line}</a>`, "card");
   },
 };
+
+// Turning to something else while the agent works ends following it: focus moved out of the
+// editor (its own view excepted), or typing in the message box or the editor.
+function stopFollowing() { if (C.job) { C.follow = false; $("#agent-view").hidden = true; } }
+document.addEventListener("focusin", (e) => {
+  if (!cm.getWrapperElement().contains(e.target) && !$("#agent-view").contains(e.target)) stopFollowing();
+});
+$("#chat-input").addEventListener("input", stopFollowing);
 
 /* Files added to a message: the + button, files dragged onto the panel, an image pasted
    into the box. Each is saved in the project's prism-uploads/ folder (/api/upload),
@@ -1732,8 +2456,17 @@ const AV = {
    badge says how that went. The message tells the agent where the files are, and it
    reads them with its file tools (Claude Code reads PDFs and images too). */
 const ATT = {
-  files: [],             // {id, name, size, path|null (uploading), error}
+  files: [],             // {id, uploadId, name, size, path|null (uploading), error}
+  // Removing a chip stops its upload, and takes back what the server may have saved of it
+  // already (uploaded, or the stop came too late): the file goes unless a message sent it.
+  remove(id) {
+    const f = this.files.find((x) => x.id === id);
+    f?.controller?.abort();
+    if (f) Q.uploadCancel(f.uploadId);
+    this.files = this.files.filter((x) => x.id !== id); this.render();
+  },
   seq: 0,
+  page: Math.random().toString(36).slice(2),     // with seq, an upload's id on the server
 
   render() {
     $("#chat-files").innerHTML = this.files.map((f) => `<span class="att ${f.error ? "err" : f.path ? "" : "busy"}" ${f.path ? `data-path="${esc(f.path)}"` : ""} title="${esc(f.error || f.path || "uploading…")}">`
@@ -1746,7 +2479,7 @@ const ATT = {
   sync: new Map(),       // path -> {state, message}
   polling: false,
   showSync() {
-    const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed" };
+    const label = { syncing: "syncing…", synced: "✓ GitHub", local: "local", failed: "! not pushed", unknown: "? sync unknown" };
     document.querySelectorAll(".att[data-path]").forEach((el) => {
       const s = this.sync.get(el.dataset.path); if (!s) return;
       el.dataset.sync = s.state;
@@ -1755,7 +2488,7 @@ const ATT = {
     });
   },
   watch(path, s) {
-    this.sync.set(path, s); this.showSync();
+    this.sync.set(path, { ...s, at: Date.now() }); this.showSync();
     if (!this.polling) this.pollSync();
   },
   // Every 1.5 s (15 s while the tab is hidden), one request at a time, while an upload syncs.
@@ -1763,6 +2496,10 @@ const ATT = {
     this.polling = true;
     try {
       for (;;) {
+        if (foreignProject) return;
+        for (const [path, state] of this.sync) if (state.state === "syncing" && Date.now() - state.at >= 120000)
+          this.sync.set(path, { state: "unknown", message: "Sync status is unknown. Check the GitHub menu." });
+        this.showSync();
         await nap(1500, 15000);
         const open = [...this.sync].filter(([, s]) => s.state === "syncing").map(([p]) => p);
         if (!open.length) return;
@@ -1770,8 +2507,8 @@ const ATT = {
         if (r._status !== 200) continue;
         for (const p of open) {
           if (!r[p]) continue;
-          this.sync.set(p, r[p]);
-          if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`);
+          this.sync.set(p, { ...r[p], at: this.sync.get(p).at });
+          if (r[p].state === "failed") toast(`${p.split("/").pop()}: ${r[p].message}`, true);
         }
         this.showSync();
       }
@@ -1783,10 +2520,13 @@ const ATT = {
   async add(fileList) {
     for (const file of fileList) {
       const f = { id: ++this.seq, name: file.name || "pasted.png", size: file.size, path: null, error: null };
+      f.uploadId = `${this.page}-${f.id}`;
       if (file.size > MAX_UPLOAD_SIZE) { toast(`${f.name} is larger than 25 MB.`); continue; }
+      f.controller = new AbortController();
       this.files.push(f); this.render();
       try {
-        const r = await uploadFile(file);
+        const r = await uploadFile(file, "attachment", f.controller.signal, f.uploadId);
+        if (!this.files.includes(f)) continue;
         f.path = r.path; f.size = r.size;
         if (r.sync) this.watch(r.path, r.sync);
       } catch (e) { f.error = String(e.message || e); }
@@ -1807,7 +2547,7 @@ $("#chat-add").onclick = () => $("#chat-file").click();
 $("#chat-file").onchange = (e) => { ATT.add([...e.target.files]); e.target.value = ""; };
 $("#chat-files").addEventListener("click", (e) => {
   const b = e.target.closest("[data-att]"); if (!b) return;
-  ATT.files = ATT.files.filter((f) => f.id !== +b.dataset.att); ATT.render();
+  ATT.remove(+b.dataset.att);
 });
 // A pasted image (a screenshot) becomes a file too; pasted text stays text.
 $("#chat-input").addEventListener("paste", (e) => {
@@ -1832,6 +2572,7 @@ async function sendMessage() {
   if (prov().modelsPending) await prov().modelsPending;
   const text = $("#chat-input").value.trim();
   if (!text) return;
+  const activeFile = S.active;                 // capture before saving or fetching references
   $("#slash-menu").hidden = true;
   const slash = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(text);
   if (slash && LOCAL[slash[1]]) {          // handled here, without running the agent
@@ -1839,32 +2580,29 @@ async function sendMessage() {
     chatAppend(esc(text), "msg user");
     return runLocal(slash[1], (slash[2] || "").trim());
   }
-  const saved = await saveAll();
+  const saved = await TABS.saveAll();
   if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
   if (ATT.files.some((f) => !f.path && !f.error)) return toast("Wait until the files are uploaded.");
   const mode = $("#chat-mode").value;
   const mentions = parseMentions(text);
   const refs = await referenceBlock(mentions);
-  let prompt;
-  if (slash) { await loadCatalog(); prompt = slashPrompt(text, refs); }
-  else prompt = refs ? refs + "\n\n" + text : text;
+  if (slash) await loadCatalog();
   const attached = ATT.block(), sentFiles = ATT.files.filter((f) => f.path);
   const unsupported = sentFiles.find((f) => !(prov().input_types || ["text"]).includes(
     /\.(png|jpe?g|gif|webp)$/i.test(f.path) ? "image" : /\.pdf$/i.test(f.path) ? "pdf" : "text"));
   if (unsupported) return toast(`${provLabel()} does not support this attachment: ${unsupported.name}.`);
-  if (attached) prompt = slash ? `${prompt}\n\n${attached}` : `${attached}\n\n${prompt}`;   // a /command stays first
-  // Only the mentioned files may change; without mentions, the whole project.
-  const scope = mode === "edit" && mentions.length ? [...new Set(mentions.map((m) => m.file))] : null;
+  const { prompt, scope } = ChatLogic.compose({ text, refs, attached, mentions, mode });
   const provider = C.provider;
   if (!P.projectKey) return toast("Wait for the project identity to load.");
   const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
-    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path) });
+    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path), active_file: activeFile });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
-  $("#chat-input").value = ""; updateScope();
-  ATT.files = []; ATT.render();
+  if ($("#chat-input").value.trim() === text) $("#chat-input").value = ""; updateScope();
+  const sentIds = new Set(sentFiles.map((f) => f.id));
+  ATT.files = ATT.files.filter((f) => !sentIds.has(f.id)); ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
   const extra = [provLabel(), r.model, C.effort && "effort " + C.effort].filter(Boolean).join(" · ");
-  chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
+  chatAppend(`${mentionHtml(text)}${sentFiles.length ? `<span class="att-sent">${sentFiles.map((f) => `<span class="att" data-path="${esc(f.path)}"><span class="att-name">${esc(f.path.split("/").pop())}</span><span class="att-sync"></span></span>`).join("")}</span>` : ""}<span class="ctx">${esc(describeScope(mentions, mode, activeFile))}${extra ? " · " + esc(extra) : ""}</span>`, "msg user");
   return followTurn(r.job, provider, mode);
 }
 
@@ -1872,15 +2610,17 @@ async function sendMessage() {
 // running when this page loaded (a reload), which is then shown and can be stopped.
 // What each event shows is turn.js's; here it is drawn.
 async function followTurn(job, provider, mode) {
-  C.job = job; AV.hidden = false; AH.clear();   // last turn's marks go
+  C.job = job; C.follow = true; C.followOpened = openAsked; C.stopping = false; setUndoBusy(true); AV.hidden = false; AH.clear();   // last turn's marks go
   renderModelControls();
   C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
   const t = Turn.create();
+  let changes = null;
   const log = $("#chat-log");
-  const status = (s) => { $("#chat-status").textContent = s; };
+  const status = (s) => { $("#chat-status").textContent = C.stopping ? "Stopping…" : s; };
   const messages = new Map();    // message id -> element
+  const replies = Util.frameBatch((el, text) => { const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60; el.innerHTML = renderMd(text); if (stick) log.scrollTop = log.scrollHeight; });
   const tools = new Map();       // tool id -> its row
   // Thinking and the text of a file being written stream into their own boxes, which close
   // when that step ends (click to open them again). Their text is drawn once per batch of
@@ -1890,7 +2630,9 @@ async function followTurn(job, provider, mode) {
   const dirty = new Set();
   const draw = (stick) => {
     for (const x of dirty) {
-      x.pre.textContent = x.text.length > 200000 ? "…" + x.text.slice(-200000) : x.text;
+      if (x.text.length > 240000) { x.text = x.text.slice(-200000); x.pre.textContent = "…" + x.text; }
+      else if (x.text.length > x.drawn) x.pre.append(document.createTextNode(x.text.slice(x.drawn)));
+      x.drawn = x.text.length;
       x.pre.scrollTop = x.pre.scrollHeight;
     }
     dirty.clear();
@@ -1902,13 +2644,12 @@ async function followTurn(job, provider, mode) {
     box.className = cls; box.open = true;
     box.innerHTML = `<summary>${esc(summary)}</summary><pre></pre>`;
     log.appendChild(box);
-    return { box, pre: box.querySelector("pre"), text: "" };
+    return { box, pre: box.querySelector("pre"), text: "", drawn: 0 };
   };
   const toolLabel = (name, summary) => `<span class="st">▸</span>${esc(name)} ${esc(summary || "")}`;
   // Newer models (Opus) think without sending the text: the box then counts the seconds.
   const tick = () => {
-    if (!think || t.thinking() === null) return;
-    think.box.querySelector("summary").textContent = `Thinking… ${t.thinking()}s`;
+    if (think && t.thinking() !== null) think.box.querySelector("summary").textContent = `Thinking… ${t.thinking()}s`;
     status(t.status);
   };
   const timer = setInterval(tick, 1000);
@@ -1934,7 +2675,8 @@ async function followTurn(job, provider, mode) {
       } else if (s.draw === "message") {
         let el = messages.get(s.id);
         if (!el) messages.set(s.id, el = chatAppend("", "msg assistant"));
-        el.innerHTML = renderMd(s.text);
+        replies.set(el, s.text);
+        el.dataset.md = s.text;          // kept with the log: drawn again when it is restored
         if (stick) log.scrollTop = log.scrollHeight;
       } else if (s.draw === "tool") {
         // Claude Code announced this call already (tool_start): fill in its summary.
@@ -1967,6 +2709,7 @@ async function followTurn(job, provider, mode) {
         if (C.provider === provider) renderContext({ ...s.event, window: s.event.window || (provGet("context") || {}).window });
       } else if (s.draw === "done") {
         const e = s.event;
+        changes = e.changed || [];
         renderTurnCard(e); loadAccount();
         if (e.context && C.provider === provider) {
           const c = { ...e.context, window: e.context.window || (provGet("context") || {}).window, session: e.session_id };
@@ -1977,20 +2720,23 @@ async function followTurn(job, provider, mode) {
   };
   try {
     // The server out of reach (a sleeping laptop, a restart): ask again, less and less often.
-    let retry = 1000, after = 0, done = false;
+    let attempts = 0, after = 0, done = false;
     while (!done) {
       // A hidden page asks every 5 s without the server waiting: a waiting request holds
       // one of the few connections the browser keeps to this server (see common.js).
       if (document.visibilityState === "hidden") await nap(5000, 5000);
       const d = await Q.events(job, after, document.visibilityState === "hidden" ? 0 : undefined);
-      if (d._status === 0) {
-        status(`server not reachable; trying again in ${Math.round(retry / 1000)}s…`);
-        await new Promise((res) => setTimeout(res, retry));
-        retry = Math.min(retry * 2, 30000);
-        continue;
+      if (d._status !== 200) {
+        if (!foreignProject && Turn.pollFailed(d._status, attempts) === "retry") {
+          const retry = Turn.pollDelay(attempts++);
+          status(`Connection interrupted; trying again in ${Math.round(retry / 1000)}s…`);
+          await new Promise((res) => setTimeout(res, retry));
+          continue;
+        }
+        chatAppend('<div class="warn">The server lost this turn, possibly during a restart. Its result is unknown. Check your files; Undo is unavailable for this turn.</div>', "card");
+        break;
       }
-      retry = 1000;
-      if (d._status !== 200) break;
+      attempts = 0;
       const stick = log.scrollHeight - log.scrollTop - log.clientHeight < 60;
       show(t.feed(d.events), stick);
       draw(stick);
@@ -1999,14 +2745,15 @@ async function followTurn(job, provider, mode) {
     }
   } finally {            // whatever happened above, the panel and saving work again
     clearInterval(timer);
-    show(t.end(), false); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
-    C.job = null; C.editTurn = false;
+    show(t.end(), false); replies.flush(); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
+    C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
     renderModelControls();
     for (const b of log.querySelectorAll(".permission-actions button")) b.disabled = true;
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
     saveChatLog();
     await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
+    if (changes && !C.job) AH.complete(changes);
     flushSaves();        // … then save what you typed meanwhile
     // Auto-compile the agent's changes too, unless its own last build already has them.
     if ($("#auto-compile").checked && Turn.needsCompile(t.changed, S.files, S.pdfMtime))
@@ -2098,7 +2845,7 @@ async function checkUsage(auto = false, force = true) {
   const result = r._status === 0 ? { ...p.usage, stale: true, error: r.error } : r;
   p.usage = ChatLogic.mergeUsage(p.usage, result);
   if (C.provider === provider) renderQuota(p.usage);
-  if (r.error && !auto) toast(r.error);
+  if (r.error && !auto) toast(r.error, true);
 }
 $("#quota").addEventListener("click", (e) => {
   if (e.target.closest("#quota-refresh")) return checkUsage();
@@ -2115,8 +2862,15 @@ setInterval(() => {
 }, 60000);
 
 
+function setUndoBusy(busy) {
+  for (const button of document.querySelectorAll("[data-undo]")) {
+    if (busy && !button.disabled) { button.dataset.turnBusy = "1"; button.disabled = true; button.title = "Wait until the current turn ends."; }
+    else if (!busy && button.dataset.turnBusy) { delete button.dataset.turnBusy; button.disabled = false; button.title = ""; }
+  }
+}
 function renderTurnCard(e) {
-  let h = "";
+  const result = Turn.result(e);
+  let h = result.outcome === "stopped" ? '<div class="meta">Stopped</div>' : "";
   if (e.changed && e.changed.length) {
     h += `<div class="row"><b>Changed ${e.changed.length} file${e.changed.length > 1 ? "s" : ""}</b>
       <button class="tiny sp" data-undo="${e.turn}">Undo this turn</button>
@@ -2156,8 +2910,7 @@ function renderTurnCard(e) {
     h += `<div class="warn">Changes exceeded this turn's permissions and could not be restored: ${esc(e.out_of_scope.join(", "))}.</div>`;
   if (e.new_metadata && e.new_metadata.length)
     h += `<div class="warn">New repository or agent metadata appeared during this turn: ${esc(e.new_metadata.join(", "))}. Nothing was removed; delete it if you did not create it.</div>`;
-  if (e.exit !== 0 || e.is_error)
-    h += `<div class="err">${esc((P.byId[e.provider] || {}).label || "The agent")}: ${esc(e.subtype || "exit " + e.exit)}.${e.stderr ? "\n" + esc(e.stderr) : ""}</div>`;
+  if (result.error) h += `<div class="err">${esc(result.error)}</div>`;
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
   const tokens = e.usage && (e.usage.in || e.usage.out) ? `${k(e.usage.in || 0)} in / ${k(e.usage.out || 0)} out tokens` : "";
   // With the claude.ai login a turn costs no money: it counts against the plan's usage
@@ -2170,13 +2923,14 @@ function renderTurnCard(e) {
   const meta = [e.duration ? (e.duration / 1000).toFixed(1) + "s" : "", cost, tokens, billing].filter(Boolean).join(" · ");
   if (meta) h += `<div class="meta">${esc(meta)}</div>`;
   chatAppend(h, "card");
+  setUndoBusy(!!C.job);
 }
 
 $("#chat-log").addEventListener("click", async (ev) => {
   const label = ev.target.closest("a[data-label]");
   if (label) {
     ev.preventDefault();
-    if (S.tabs.some(isDirty) && !(await saveAll()).ok) return toast("Save your source edits before navigating to a label.");
+    if (S.tabs.some(isDirty) && !(await TABS.saveAll()).ok) return toast("Save your source edits before navigating to a label.");
     const r = await Q.resolveLabel(label.dataset.label, S.labelVersion);
     if (r.error || r._status !== 200) return toast(r.error || "Could not resolve LaTeX label");
     S.labelVersion = r.version;
@@ -2206,7 +2960,8 @@ $("#chat-log").addEventListener("click", async (ev) => {
   if (ev.target.closest("[data-compile]")) return compile();
   const u = ev.target.closest("[data-undo]");
   if (u) {
-    if (S.tabs.some(isDirty) && !(await saveAll()).ok) return;
+    if (C.job) return toast("Wait until the current turn ends before Undo.");
+    const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
     const r = await Q.undo(+u.dataset.undo);
     if (r._status === 0 || r.busy) return toast("Not undone: " + r.error);      // the button stays, to try again
     if (r.error) { u.textContent = r.error === "unknown turn" ? "undo unavailable (an old turn, or the server restarted)" : r.error; u.disabled = true; return; }
@@ -2238,7 +2993,9 @@ let catalog = null;          // {skills, commands, terminal_only} from /api/agen
 
 async function loadCatalog(refresh = false) {
   if (catalog && !refresh) return catalog;
-  const r = await Q.commands(C.provider, refresh).catch(() => ({}));
+  const provider = C.provider, seq = ++providerSeq.catalog;
+  const r = await Q.commands(provider, refresh);
+  if (provider !== C.provider || seq !== providerSeq.catalog) return null;
   if (r._status === 200) catalog = r;
   return catalog;
 }
@@ -2313,12 +3070,8 @@ function setProvider(id, quiet) {
     : `<span class="err">${esc(p.label)} is not available: ${esc(p.reason || "")}</span>`);
 }
 function renderProviders(info) {
-  if (projectKey && projectKey !== info.project_key) {
-    toast("This port now serves another project. Reopen the project's editor.");
-    return;
-  }
-  projectKey = info.project_key || null;
-  P.projectKey = info.project_key || null;
+  if (!bindProject(info.project_key)) return;
+  P.projectKey = projectKey;
   P.defaults = info.defaults || {};
   P.list = info.providers || [];
   P.byId = Object.fromEntries(P.list.map((p) => [p.id, p]));
@@ -2332,7 +3085,7 @@ function renderProviders(info) {
   }
   $("#chat-provider").innerHTML = P.list.map((p) =>
     `<option value="${esc(p.id)}"${p.available ? "" : " disabled"} title="${esc(p.reason || "")}">${esc(p.label)}${p.available ? "" : " (not set up)"}</option>`).join("");
-  let id = P.defaults.provider || C.provider;
+  let id = info.active ? info.active.provider : P.defaults.provider || C.provider;
   if (!P.byId[id] || !P.byId[id].available) id = info.default;
   if (!P.byId[id] || !P.byId[id].available) id = (P.list.find((p) => p.available) || P.list[0] || {}).id;
   if (id) setProvider(id, true);
@@ -2340,7 +3093,6 @@ function renderProviders(info) {
 }
 $("#chat-provider").onchange = (e) => setProvider(e.target.value);
 
-const slashPrompt = ChatLogic.slashPrompt;      // a /command comes first
 
 /* Completion menu: "/" at the start of the message lists commands and skills;
    "@" anywhere lists the editor selection, the open file and the project files. */
@@ -2417,11 +3169,21 @@ $("#chat-log").addEventListener("click", (e) => {
   const a = e.target.closest("[data-insert]"); if (!a) return;
   const v = a.dataset.insert;
   // "/model opus" style chips run at once; skill chips are filled in for you to finish.
-  if (/^\/(model|effort|provider) /.test(v)) { $("#chat-input").value = v.trim(); chatSend(); }
+  const local = /^\/(model|effort|provider)\s+([\s\S]+)$/.exec(v);
+  if (local) runLocal(local[1], local[2].trim());
   else { $("#chat-input").value = v; $("#chat-input").focus(); updateScope(); }
 });
 
-$("#chat-send").onclick = () => { if (C.job) Q.stop(C.job); else chatSend(); };
+async function stopTurn() {
+  if (!C.job || C.stopping) return;
+  C.stopping = true; $("#chat-send").textContent = "Stopping…"; $("#chat-status").textContent = "Stopping…";
+  const job = C.job, r = await Q.stop(job);
+  if (C.job === job && r._status !== 200) {
+    C.stopping = false; $("#chat-send").textContent = "Stop";
+    toast("Could not stop the agent: " + (r.error || r._status));
+  }
+}
+$("#chat-send").onclick = () => { if (C.job) stopTurn(); else chatSend(); };
 $("#chat-input").addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
 });
@@ -2473,7 +3235,11 @@ async function loadAgentInfo() {
 (async function init() {
   try {
     loadSnippets();
-    await poll();          // the files and the build settings (and, once the files are known, the symbols)
+    while (!S.ready && !foreignProject) {
+      await poll();
+      if (!S.ready && !foreignProject) await nap(1000, 1000);
+    }
+    if (foreignProject) return;
     const sess = store.get("session", null);
     const exists = (p) => S.files.some((f) => f.path === p);
     const paths = sess && sess.tabs ? sess.tabs.filter((p) => exists(p) && p !== sess.active) : [];
@@ -2487,7 +3253,7 @@ async function loadAgentInfo() {
       await openFile(p);
       if (openAsked === mine) restoring = mine;
     }
-    renderTabs(); persistSession();
+    S.restoring = false; renderTabs(); persistSession();
     // No saved session: open the file the server builds (prism.json's "main", or the guess).
     if (!S.active && exists(BUILD.main)) await openFile(BUILD.main);
     renderProblems();

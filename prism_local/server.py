@@ -17,32 +17,33 @@ from __future__ import annotations
 import gitenv
 
 import argparse
+import hashlib
 import os
 import subprocess
 import sys
 import threading
 import time
-import webbrowser
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
-from project import UPLOAD_DIR, Project, mtime  # noqa: E402
-from repository import FilesLock, RepoBusy, locate  # noqa: E402
-from fsutil import EDITABLE_SUFFIXES, with_line_ends_of, write_bytes  # noqa: E402
+from project import UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
+from repository import FilesLock, RepoBusy  # noqa: E402
+import repoview  # noqa: E402
+from fsutil import EDITABLE_SUFFIXES  # noqa: E402
 import desktop  # noqa: E402
-from errors import NotFound, Refused  # noqa: E402
+from errors import Conflict, NotFound, Refused  # noqa: E402
 import synctex  # noqa: E402
 from presence import Presence  # noqa: E402
 import httpbase  # noqa: E402
 import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
-import selfupdate  # noqa: E402
-import sources  # noqa: E402
 import build_results  # noqa: E402
+import settings  # noqa: E402
+import tools  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -64,26 +65,14 @@ def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     return gitenv.git(PROJECT.root, *args, timeout=timeout)
 
 
-_GIT_PREFIX: dict = {}
-
-
-def git_prefix() -> str:
-    """Where the project sits in its repository: "" at the top, "examples/minimal/" …"""
-    if PROJECT.root not in _GIT_PREFIX:
-        _GIT_PREFIX[PROJECT.root] = locate(PROJECT.root).prefix
-    return _GIT_PREFIX[PROJECT.root]
-
-
-def git_status() -> dict[str, str]:
-    """{project-relative path: status} of the files git reports as changed."""
-    try:
-        # --no-optional-locks: a look, which never holds the index from a commit meanwhile.
-        out = git("--no-optional-locks", "status", "--porcelain", "-z", "-uall", "--", ".").stdout
-    except (OSError, subprocess.SubprocessError):
-        return {}
-    prefix = git_prefix()
-    return {path[len(prefix):]: xy.strip() or "M" for xy, path in sources.parse_status(out)
-            if path.startswith(prefix)}
+def git_status(listed=None) -> dict[str, str]:
+    """{project-relative path: status} of the files git reports as changed (repoview). With
+    `listed` (the files the tree shows, with their mtimes: what a change to them changes),
+    the last answer is given again while neither they nor the repository changed: the tree
+    is asked for every two seconds by every open page, and nothing has changed most of
+    those times."""
+    found = repoview.changes(PROJECT.root, None if listed is None else tuple(listed))
+    return found.files() if found else {}
 
 
 def project_diff(spec: str) -> dict:
@@ -110,8 +99,11 @@ def project_diff(spec: str) -> dict:
 UPLOAD_SYNC: dict[str, dict] = {}     # rel -> {"state": syncing|synced|local|failed, "message"}
 
 
-def sync_upload(rel: str) -> None:
+def sync_upload(rel: str, upload_id: str = "") -> None:
     """Commit the upload `rel` and push it (in a thread; the state is in UPLOAD_SYNC)."""
+    if upload_id and ATTACHMENTS.taken_back(upload_id):
+        UPLOAD_SYNC.pop(rel, None)  # removed from the message before its commit: none is made
+        return
     try:
         o = GITSYNC.record_file(rel, f"Add {rel} (a file used in the agent chat)")
         UPLOAD_SYNC[rel] = {"state": o.state, "message": o.message}
@@ -120,21 +112,90 @@ def sync_upload(rel: str) -> None:
         UPLOAD_SYNC[rel] = {"state": "local", "message": "Saved here; another prism-local window is "
                             "using the repository, so it is committed with the next autosave"}
     except (OSError, subprocess.SubprocessError, RuntimeError, ValueError) as e:
+        if upload_id and ATTACHMENTS.taken_back(upload_id):
+            UPLOAD_SYNC.pop(rel, None)      # deleted while git was adding it: nothing to say
+            return
         UPLOAD_SYNC[rel] = {"state": "failed", "message": f"git: {str(e)[-300:]}"}
 
-# Your snippets (static/snippets.js): one file for every project. JavaScript, run by the
-# editor page, so it lives with your settings and not in a project co-authors share.
-def snippets_file() -> Path:
-    return Path(os.environ.get("PRISM_SNIPPETS") or Path.home() / ".prism-local" / "snippets.js")
 
+class Attachments:
+    """The chat's uploads, each under the id its page gave it, so a chip removed from the
+    message box takes its file back (/api/upload/cancel). A file is deleted only when this
+    upload wrote it, it is unchanged since, and no message has sent it: a file sent with a
+    message, or one that was there before (an identical upload reuses it), always stays."""
+
+    KEEP = 1000                     # ids taken back before their upload came, remembered
+
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.uploads: dict[str, dict] = {}      # id -> {"path", "digest", "wrote"}
+        self.early: dict[str, None] = {}        # ids taken back before their upload arrived
+        self.gone: set[str] = set()             # ids taken back
+        self.sent: set[str] = set()             # paths a message has sent
+
+    def taken_back(self, upload_id: str) -> bool:
+        with self.lock:
+            return upload_id in self.gone
+
+    def saved(self, upload_id: str, rel: str, data: bytes, wrote: bool) -> None:
+        with self.lock:
+            self.uploads[upload_id] = {"path": rel, "digest": hashlib.sha256(data).digest(), "wrote": wrote}
+
+    def send(self, paths: list) -> str | None:
+        """A message sends `paths`: from now on they stay. An error if one was taken back."""
+        paths = [p for p in paths if isinstance(p, str)] if isinstance(paths, list) else []
+        with self.lock:
+            gone = {self.uploads[i]["path"] for i in self.gone if i in self.uploads}
+            bad = next((p for p in paths if p in gone and p not in self.sent), None)
+            if bad is not None:
+                return f"{bad} was removed from the message; add it again"
+            self.sent.update(paths)
+            return None
+
+    def cancel(self, upload_id: str) -> tuple[dict, int]:
+        """Take the upload back: delete its file when that is safe. Under the files lock, as
+        an upload is written: one arriving meanwhile is then either here or refused."""
+        if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+            raise Conflict("git is busy with the files; try again in a moment")
+        try:
+            with self.lock:
+                up = self.uploads.get(upload_id)
+                if up is None:          # not arrived yet (or never will): it is not written
+                    self.gone.add(upload_id)
+                    self.early[upload_id] = None
+                    while len(self.early) > self.KEEP:
+                        self.gone.discard(self.early.pop(next(iter(self.early))))
+                    return {"path": None, "deleted": False}, 200
+                rel = up["path"]
+                if rel in self.sent:
+                    return {"error": "this file was sent with a message, so it stays", "path": rel}, 409
+                self.gone.add(upload_id)
+                claimed = any(u["path"] == rel for i, u in self.uploads.items() if i not in self.gone)
+                if not up["wrote"] or claimed:
+                    return {"path": rel, "deleted": False}, 200
+            p = PROJECT.root / rel
+            try:
+                if hashlib.sha256(p.read_bytes()).digest() != up["digest"]:
+                    return {"path": rel, "deleted": False}, 200      # changed since: yours now
+                p.unlink()
+            except FileNotFoundError:
+                return {"path": rel, "deleted": False}, 200
+        finally:
+            SAVE_LOCK.release()
+        UPLOAD_SYNC.pop(rel, None)
+        GITSYNC.touched()               # if it was committed, the next autosave records the deletion
+        return {"path": rel, "deleted": True}, 200
+
+
+ATTACHMENTS = Attachments()
 
 # A server keeps running the code it started with. When prism-local is updated, the
 # editor offers to restart it (/api/restart): the new server starts with the same
 # command line, on the same port, and the page reloads.
-STARTED_CODE = httpbase.code_stamp()
+PRESENCE = Presence()
+APP = httpbase.App("prism-local", PRESENCE)
 STARTED_AT = time.time()                 # tells the page when a new server answers
-RESTART: dict = {"server": None, "again": False, "move_to": None, "args": None, "port": None}
-LIFETIME: instances.Serving | None = None
+MOVING: dict = {"to": None}              # the folder a rename restarts the server at
 # A folder rename that did not work (in use?): the server came back at the old folder.
 MOVE: dict = {"error": None, "from": None}
 
@@ -151,38 +212,29 @@ def rename_project(name: str) -> tuple[dict, int]:
     new = PROJECT.root.parent / folder
     if new.exists() and registry.norm(new) != registry.norm(PROJECT.root):
         return {"error": f"a folder named {folder} already exists next to this project"}, 409
-    if PROJECT.busy() or RESTART["server"] is None:
+    if PROJECT.busy():
         return {"error": "wait until the build or the agent's turn has finished"}, 409
-    if LIFETIME is None:
-        return {"error": "not ready to restart"}, 409
     try:
-        transition = LIFETIME.transition(new)
-    except (instances.Busy, TimeoutError, OSError) as exc:
+        transition = APP.restart(new)
+    except Conflict as exc:
         return {"error": str(exc)}, 409
     try:
         registry.rename(PROJECT.root, name)      # the list keeps the exact name; move_folder tidies it
     except BaseException:
         transition.close()
         raise
-    RESTART.update(again=True, move_to=new)
-    threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+    MOVING["to"] = new
+    APP.stop_for_restart()
     return {"name": name, "moving": True, "folder": folder}, 200
 
 
 def move_argv(new: Path, moving: bool = True) -> list[str]:
     """This server's command line for the project at `new`, on the port it has now."""
-    a = RESTART["args"]
-    argv = [sys.executable, *(["-u"] if "-u" in (getattr(sys, "orig_argv", None) or []) else []),
-            str(Path(__file__).resolve()), str(new), "--port", str(RESTART["port"]),
-            "--port-tries", "1", "--no-browser"]
+    argv = APP.successor_argv(Path(__file__).resolve(), str(new))
     if moving:
         argv += ["--moved-from", str(PROJECT.root)]
-    if a.exit_when_idle:
-        argv.append("--exit-when-idle")
-    if a.idle_timings:
-        argv += ["--idle-timings", a.idle_timings]
-    if a.ready_file:
-        alias = LIFETIME.alias if LIFETIME else None
+    if APP.args.ready_file:
+        alias = APP.life.alias if APP.life else None
         if alias and moving and registry.inside(alias, PROJECT.root):
             alias = new / alias.relative_to(PROJECT.root)
         argv += ["--ready-file", str(alias or instances.path(new))]
@@ -221,7 +273,6 @@ def project_name() -> str:
 
 def github_url() -> str | None:
     return GITSYNC.status().get("github")
-PRESENCE = Presence()
 
 
 # ---------------------------------------------------------------- http
@@ -236,12 +287,15 @@ class Handler(httpbase.Handler):
         return self._get(path, q)      # errors: httpbase._answer
 
     def _get(self, path, q):
+        if self._foreign_project(q):
+            return
         if path == "/api/ping":
-            return self._json({"app": "prism-local", "root": str(PROJECT.root), "project_key": registry.project_key(PROJECT.root), "pid": os.getpid(),
-                               "pages": PRESENCE.count(), "token": LIFETIME.token if LIFETIME else None})
+            return self._json(APP.ping(root=str(PROJECT.root), project_key=registry.project_key(PROJECT.root)))
         if path == "/api/pdfstat":
             cfg = PROJECT.config
-            return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg)})
+            # project_key: the pop-out PDF polls only this, and so learns whose PDF it shows.
+            return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg),
+                               "project_key": registry.project_key(PROJECT.root)})
         if path == "/api/build/result":
             cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
@@ -257,21 +311,28 @@ class Handler(httpbase.Handler):
                 return self._err(404, "no PDF yet")
             return self._send(200, cfg.pdf.read_bytes(), "application/pdf")
         if path == "/api/tree":
-            st = git_status()
             walked: list[str] = []
             files, (listed, editable) = [], PROJECT.list_both(walked)
             folders = [f for f in walked if not PROJECT.excluded(f + "/")]
             for f in listed:
                 try:
-                    files.append({"path": f, "git": st.get(f, ""), "mtime": mtime(PROJECT.root / f),
+                    files.append({"path": f, "mtime": mtime(PROJECT.root / f),
                                   "editable": Path(f).suffix in EDITABLE_SUFFIXES})
                 except FileNotFoundError:       # deleted since it was listed (a build, git)
                     pass
+            st = git_status([(f["path"], f["mtime"]) for f in files])
+            for f in files:
+                f["git"] = st.get(f["path"], "")
+            stamps = {f["path"]: f["mtime"] for f in files}
+            cfg = PROJECT.config
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
+                               "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
-                               "order": PROJECT.document_order(editable),
-                               "pdf_main": (cfg := PROJECT.config).main, "pdf_mtime": PROJECT.pdf_state(cfg),
-                               "updated": httpbase.code_stamp() > STARTED_CODE + 1, "server": STARTED_AT,
+                               "order": PROJECT.document_order(editable, stamps),
+                               # the document's files (the main file and what it \input's), for the agent's search
+                               "document": PROJECT.input_chain(cfg.main, stamps),
+                               "pdf_main": cfg.main, "pdf_mtime": PROJECT.pdf_state(cfg),
+                               "updated": APP.updated(), "server": STARTED_AT,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
             return self._json(publish.publish_info(PROJECT.root))
@@ -318,8 +379,10 @@ class Handler(httpbase.Handler):
         if path == "/api/labels/resolve":
             return self._json(PROJECT.resolve_label(q.get("label", ""), q.get("version")))
         if path == "/api/snippets":
-            f = snippets_file()
-            return self._json({"path": str(f), "content": f.read_text(encoding="utf-8") if f.is_file() else None})
+            # Your snippets file and how they expand, both set in Home → Settings.
+            st = settings.load()
+            return self._json({**settings.snippets(), "on": st["snippets"],
+                               "fraction": st["snippets_fraction"], "matrix": st["snippets_matrix"]})
         if path == "/api/file":
             p = PROJECT.resolve(q.get("path", ""))
             return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
@@ -391,7 +454,19 @@ class Handler(httpbase.Handler):
     def post(self, path, body):
         return self._post(path, body)      # errors: httpbase._answer
 
+    def _foreign_project(self, q=None):
+        """A page of another project (the port was reused) is refused. It names its project
+        in a header, or in the query where it cannot add one (a tab it opens, the pop-out PDF)."""
+        key = self.headers.get("X-Prism-Project") or (q.get("project_key") if q is not None else None)
+        if key and key != registry.project_key(PROJECT.root):
+            self._json({"error": "This port now belongs to another project. Reopen it from Home.",
+                        "other_project": True}, 409)
+            return True
+        return False
+
     def _post(self, path, body):
+        if self._foreign_project():
+            return
         if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(PROJECT.root):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
         if path.startswith("/api/files/"):
@@ -412,10 +487,12 @@ class Handler(httpbase.Handler):
             return self._json(GITSYNC.status())
         if path == "/api/project/rename":
             return self._json(*rename_project(str(body["name"] or "").strip()))
-        if path == "/api/snippets":
-            f = snippets_file()         # every project's server reads it: never half-written
-            write_bytes(f, with_line_ends_of(str(body.get("content") or ""), f).encode("utf-8"))
-            return self._json({"path": str(f)})
+        if path == "/api/texts":
+            # Many files at once, for search; a POST, as their names may be long.
+            paths = body.get("paths")
+            if not isinstance(paths, list) or not all(isinstance(f, str) for f in paths):
+                return self._err(400, "paths: a list of the project's files")
+            return self._json({"files": PROJECT.texts(paths)})
         if path == "/api/file":
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
@@ -425,6 +502,7 @@ class Handler(httpbase.Handler):
                                                         body["expected_sha256"]))
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
+            done = None
             if action == "bind":
                 if not isinstance(body.get("target"), dict):
                     return self._err(400, "Open the Git menu and confirm the displayed target")
@@ -434,21 +512,33 @@ class Handler(httpbase.Handler):
             elif action in ("commit", "pull", "resolve"):
                 if action == "resolve" and PROJECT.busy():
                     return self._err(409, "wait until the build or the agent's turn has finished")
-                GITSYNC.now(action)
+                done = GITSYNC.now(action)
             else:
                 return self._err(400, "unknown action")
-            return self._json({**GITSYNC.status(), "github": github_url()})
+            st = GITSYNC.status()
+            if done is not None and done.error:
+                # this click's, whatever the worker met meanwhile
+                st["error"], st["error_details"] = gitsync.said(done.error), gitsync.details(done.error)
+            return self._json({**st, "github": github_url()})
         if path == "/api/agent":
+            active_file = body.get("active_file") or None
+            if active_file is not None:
+                if not isinstance(active_file, str):
+                    raise ValueError("active_file must be a project-relative file path")
+                PROJECT.resolve(active_file)
             scope = body.get("scope") or None
             if scope is not None:
                 if not isinstance(scope, list) or not all(isinstance(f, str) for f in scope):
                     raise ValueError("scope must be a list of files")
                 for f in scope:
                     PROJECT.resolve(f)          # an editable project file, or ValueError
+            refused = ATTACHMENTS.send(body.get("attachments") or [])
+            if refused:
+                return self._err(409, refused)
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
                             body.get("effort") or None, scope, body.get("provider") or None,
-                            body.get("attachments") or [])
+                            body.get("attachments") or [], active_file=active_file)
             return self._json(r, 409 if "error" in r else 200)
         if path == "/api/home":
             r = instances.ensure(None)
@@ -484,25 +574,37 @@ class Handler(httpbase.Handler):
                 data = base64.b64decode(str(body.get("data") or ""), validate=True)
             except ValueError:
                 return self._err(400, "the file data is not base64")
-            rel = PROJECT.upload(str(body.get("name") or "file"), data,
-                                 folder="" if destination == "project" else UPLOAD_DIR)
             if destination == "project":
+                rel = PROJECT.upload(str(body.get("name") or "file"), data, folder="")
                 GITSYNC.touched()
                 return self._json({"path": rel, "size": len(data)})
+            upload_id = str(body.get("upload_id") or "")
+            if not SAVE_LOCK.acquire(timeout=UPLOAD_WAIT):
+                raise Conflict("git is busy with the files; try the upload again in a moment")
+            try:                        # one taken back meanwhile waits for this (Attachments.cancel)
+                if upload_id and ATTACHMENTS.taken_back(upload_id):
+                    return self._err(409, "the file was removed from the message")
+                # What was there before (in any case: Windows' names ignore it) is never "written".
+                folder = PROJECT.root / UPLOAD_DIR
+                before = {p.name.casefold() for p in folder.iterdir()} if folder.is_dir() else set()
+                rel = PROJECT.upload(str(body.get("name") or "file"), data, folder=UPLOAD_DIR)
+                if upload_id:
+                    wrote = rel.rsplit("/", 1)[-1].casefold() not in before
+                    ATTACHMENTS.saved(upload_id, rel, data, wrote)
+            finally:
+                SAVE_LOCK.release()
             UPLOAD_SYNC[rel] = {"state": "syncing", "message": "Committing and pushing…"}
-            threading.Thread(target=sync_upload, args=(rel,), daemon=True).start()
+            threading.Thread(target=sync_upload, args=(rel, upload_id), daemon=True).start()
             return self._json({"path": rel, "size": len(data), "sync": UPLOAD_SYNC[rel]})
+        if path == "/api/upload/cancel":
+            if not body.get("upload_id"):
+                return self._err(400, "missing upload_id")
+            return self._json(*ATTACHMENTS.cancel(str(body["upload_id"])))
         if path == "/api/restart":
-            if PROJECT.busy() or RESTART["server"] is None:
+            if PROJECT.busy():
                 return self._err(409, "wait until the build or the agent's turn has finished")
-            if LIFETIME is None:
-                return self._err(409, "not ready to restart")
-            try:
-                LIFETIME.transition()
-            except (instances.Busy, TimeoutError, OSError) as exc:
-                return self._err(409, str(exc))
-            RESTART["again"] = True
-            threading.Thread(target=RESTART["server"].shutdown, daemon=True).start()
+            APP.restart()
+            APP.stop_for_restart()
             return self._json({"ok": True})
         if path == "/api/build/stop":
             return self._json({"ok": PROJECT.stop_build()})
@@ -544,90 +646,50 @@ def main():
                                  "(editor, PDF + SyncTeX, AI agent panel)")
     ap.add_argument("project", nargs="?", type=Path, default=Path.cwd(),
                     help="LaTeX project directory (default: current directory)")
-    ap.add_argument("--port", type=int, default=8765, help="port (0: any free port)")
-    ap.add_argument("--port-tries", type=int, default=1,
-                    help="if the port is taken, try this many ports upwards")
-    ap.add_argument("--no-browser", action="store_true")
-    ap.add_argument("--exit-when-idle", action="store_true",
-                    help="exit shortly after the last editor or PDF page is closed")
-    ap.add_argument("--ready-file", type=Path,
-                    help="once listening, write {pid, port, url, root} as JSON to this file")
-    ap.add_argument("--idle-timings", help=argparse.SUPPRESS)   # "first,grace,stale" for tests
+    httpbase.App.arguments(ap, 8765, "editor or PDF page")
     ap.add_argument("--root", type=Path, help=argparse.SUPPRESS)   # backwards compatible
     ap.add_argument("--moved-from", type=Path, help=argparse.SUPPRESS)   # see rename_project
-    ap.add_argument("--instance-token", help=argparse.SUPPRESS)
     a = ap.parse_args()
     project = Path(a.root or a.project).resolve()
-    global LIFETIME
-    try:
-        with instances.serving(project, a.ready_file, a.instance_token) as life:
-            LIFETIME = life
-            if a.moved_from:
-                actual = finish_move(a.moved_from.resolve(), project)
-                if actual != project:
-                    life.retarget(actual)
-                project = actual
-            return serve(a, project, life)
-    except (instances.Busy, TimeoutError) as exc:
-        sys.exit(f"prism-local: {exc}")
+    # Programs installed since this computer's PATH was read, and those Prism downloaded
+    # itself (Tectonic, in its own bin folder), are found by the builds.
+    tools.refresh_path()
+
+    def start(life):
+        at = project
+        if a.moved_from:
+            at = finish_move(a.moved_from.resolve(), project)
+            if at != project:
+                life.retarget(at)
+        return serve(at)
+    return APP.run(a, project, start)
 
 
-def serve(a, project, life):
+def serve(project):
     set_root(project)
     PROJECT.show_last_built()
-    if a.idle_timings:
-        f, g, st = (float(x) for x in a.idle_timings.split(","))
-        PRESENCE.first_wait, PRESENCE.grace, PRESENCE.stale = f, g, st
     if not (PROJECT.root / PROJECT.config.main).is_file():
         print(f"prism-local: warning: main file {PROJECT.config.main} not found in {PROJECT.root}", file=sys.stderr)
-    try:
-        srv = httpbase.listen(Handler, a.port, a.port_tries)
-    except OSError as e:
-        sys.exit(f"prism-local: {e}")
-    port = srv.server_address[1]
-    url = f"http://127.0.0.1:{port}/"
-    AGENT.server_url = url              # the agent's compile tool builds through this server
-    stop = "closes after the last page" if a.exit_when_idle else "Ctrl-C to stop"
-    print(f"prism-local: {url}\n  project: {PROJECT.root}\n  main:    {PROJECT.config.main}\n"
+    APP.listen(Handler)
+    AGENT.server_url = APP.url          # the agent's compile tool builds through this server
+    stop = "closes after the last page" if APP.args.exit_when_idle else "Ctrl-C to stop"
+    print(f"prism-local: {APP.url}\n  project: {PROJECT.root}\n  main:    {PROJECT.config.main}\n"
           f"  builds:  {', '.join(PROJECT.config.modes)}\n  {stop}", flush=True)
     if PROJECT.config.error:
         print(f"  warning: {PROJECT.config.error}", flush=True)
     if not is_scratch(PROJECT.root):
         registry.safe_touch(PROJECT.root)       # list the project on the Home page
-    life.publish(url, port)
-    if not a.no_browser:
-        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
-    if a.exit_when_idle:
-        busy = lambda: PROJECT.busy()  # noqa: E731
-        threading.Thread(target=httpbase.idle_watchdog, daemon=True,
-                         args=(srv, PRESENCE, busy, "build or agent turn")).start()
-    httpbase.stop_on_signals(srv)
-    RESTART.update(server=srv, args=a, port=port)
-    GITSYNC.start()
-    # Update prism-local in the background; the editor then offers a restart.
-    threading.Thread(target=selfupdate.update, daemon=True).start()
-    try:
-        srv.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        transition = life.pending or life.transition()
-        try:
-            srv.server_close()
-            life.unpublish()
-            PROJECT.stop_build()
-            AGENT.shutdown()
-            GITSYNC.flush()             # what is left is committed and pushed
-            if RESTART["again"]:
-                destination = RESTART["move_to"] or PROJECT.root
-                argv = move_argv(destination, moving=RESTART["move_to"] is not None)
-                result = transition.handover(argv, str(PROJECT.root.parent))
-                httpbase.log("restart failed: " + result["error"] if "error" in result
-                             else "restart handed to the successor")
-            else:
-                httpbase.log("stopped")
-        finally:
-            transition.close()
+
+    def stopping():
+        PROJECT.stop_build()
+        AGENT.shutdown()
+        GITSYNC.flush()                 # what is left is committed and pushed
+
+    def successor():
+        destination = MOVING["to"] or PROJECT.root
+        return move_argv(destination, moving=MOVING["to"] is not None), str(PROJECT.root.parent)
+    APP.serve(busy=PROJECT.busy, what="build or agent turn", started=GITSYNC.start,
+              stopping=stopping, successor=successor)
 
 
 if __name__ == "__main__":

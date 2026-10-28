@@ -5,7 +5,6 @@
 <title>prism-local</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <link rel="stylesheet" href="/static/vendor/codemirror.css">
-<link rel="stylesheet" href="/static/vendor/dialog.css">
 <link rel="stylesheet" href="/static/vendor/show-hint.css">
 <link rel="stylesheet" href="/static/vendor/foldgutter.css">
 <link rel="stylesheet" href="/static/vendor/katex/katex.min.css">
@@ -26,7 +25,7 @@
       <div id="sync-menu" class="dropdown" role="menu" hidden>
         <div class="dd-head">GitHub</div>
         <div class="dd-note" id="sync-detail"></div>
-        <button type="button" class="dd-item" id="sync-bind" data-sync="bind" hidden>Confirm sync target</button>
+        <button type="button" class="dd-item" id="sync-bind" data-sync="bind" hidden>Sync with the new one</button>
         <div id="sync-kept" hidden></div>
         <div id="sync-clash" hidden></div>
         <form id="sync-publish" class="dd-publish" hidden>
@@ -37,12 +36,12 @@
           <p class="dd-note" id="pub-note"></p>
           <button type="submit" class="primary" id="pub-go">Create private GitHub repository</button>
         </form>
-        <button type="button" class="dd-item" data-sync="commit">Save to GitHub now <small>commit &amp; push</small></button>
-        <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub <small>pull</small></button>
+        <button type="button" class="dd-item" data-sync="commit">Save to GitHub now</button>
+        <button type="button" class="dd-item" data-sync="pull">Get changes from GitHub</button>
         <button type="button" class="dd-item" data-sync="history">History of this file…</button>
         <a class="dd-item" id="sync-github" target="_blank" rel="noopener" hidden>Open the repository on GitHub</a>
         <hr>
-        <label class="dd-item" title="Commit a moment after you stop editing and after each agent turn, push every commit, and pull what changed on GitHub"><input type="checkbox" id="sync-auto"> Record and sync automatically</label>
+        <label class="dd-item" title="Save your changes to GitHub a moment after you stop editing and after each agent turn, and get what changed on GitHub"><input type="checkbox" id="sync-auto"> Save to GitHub by itself</label>
       </div>
     </div>
     <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This editor still runs the old version: restart it to use the new one (your files are saved first)">Update: restart</button>
@@ -56,8 +55,54 @@
 
 <main id="layout">
   <aside id="sidebar">
+    <section id="search-pane" hidden role="search">
+      <h3>Search
+        <span class="ps-modes" role="tablist">
+          <button type="button" role="tab" data-psmode="find" aria-selected="true" title="Find and replace text">Find</button>
+          <button type="button" role="tab" data-psmode="agent" aria-selected="false" title="Describe a change; the agent proposes it, you review each place">✦ With the agent</button>
+        </span>
+        <button id="ps-close" class="tiny icon ghost" title="Back to the files (Esc)" aria-label="Close search">×</button></h3>
+      <div id="ps-find" class="ps-body">
+      <div class="ps-form">
+        <div class="ps-row">
+          <button id="ps-more" class="icon tiny ghost" data-icon="right" title="Replace in the project" aria-label="Show replace" aria-expanded="false"></button>
+          <input id="ps-q" type="text" placeholder="Search the project" title="↓ goes through the results" spellcheck="false" autocomplete="off" aria-label="Search the project">
+        </div>
+        <div class="ps-row ps-opts">
+          <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
+          <button type="button" class="opt" data-opt="wholeWord" title="Whole word (Alt+W)" aria-pressed="false"><u>ab</u></button>
+          <button type="button" class="opt" data-opt="regex" title="Regular expression (Alt+R)" aria-pressed="false">.*</button>
+        </div>
+        <div class="ps-row" id="ps-replace" hidden>
+          <input id="ps-r" type="text" placeholder="Replace" spellcheck="false" autocomplete="off" aria-label="Replace in the project">
+          <button type="button" id="ps-all" class="tiny" title="Replace every match in the project (Ctrl+Alt+Enter)">Replace all</button>
+        </div>
+      </div>
+      <p id="ps-summary" role="status"></p>
+      <ul id="ps-results" tabindex="0" aria-label="Results: ↑ ↓ to go through them, Enter to edit there"></ul>
+      </div>
+      <div id="ps-agent" class="ps-body" hidden>
+        <textarea id="as-q" rows="3" spellcheck="true" aria-label="The change to look for"
+          placeholder="Describe the change, e.g. “rename the index i to j in every formula”, or “write \mathscr{O} instead of \mathcal{O}”"></textarea>
+        <div class="ps-row as-go-row">
+          <button type="button" id="as-go" class="primary tiny" title="The agent reads the project and proposes the changes; nothing changes until you apply them (Ctrl+Enter)">Ask the agent</button>
+          <span id="as-who"></span>
+        </div>
+        <p id="as-status" role="status"></p>
+        <div id="as-out">
+          <div id="as-summary"></div>
+          <ul id="as-rules"></ul>
+          <details id="as-problems" hidden><summary></summary><ul></ul></details>
+          <div class="ps-row" id="as-applybar" hidden>
+            <label><input type="checkbox" id="as-all" checked> <span id="as-count"></span></label>
+            <button type="button" id="as-apply" class="primary tiny">Apply</button>
+          </div>
+          <ul id="as-results" tabindex="0" aria-label="Changes: ↑ ↓ to go through them, Space to tick, Enter to edit there"></ul>
+        </div>
+      </div>
+    </section>
     <section>
-      <h3>Files</h3>
+      <h3>Files <button id="btn-search" class="tiny icon ghost" data-icon="search" title="Search the project (⌘⇧F)" aria-label="Search the project"></button></h3>
       <ul id="tree"></ul>
       <p id="files-status" role="status">Drop files here · 25 MB each</p>
     </section>
@@ -72,23 +117,36 @@
   <section id="editor-pane">
     <div id="editor-head">
       <div id="tabs"></div>
-      <div id="snip-box">
-        <button id="btn-snip" class="icon ghost" data-icon="bolt" aria-label="Snippets" aria-haspopup="menu" aria-expanded="false" title="Snippets: shortcuts that expand as you type (mk → $ $, @a → \alpha, x/y Tab → \frac{x}{y}); Tab jumps to the next field"></button>
-        <div id="snip-menu" class="dropdown" role="menu" hidden>
-          <div class="dd-head">Snippets</div>
-          <label class="dd-item"><input type="checkbox" id="snip-on"> Expand snippets</label>
-          <label class="dd-item" title="In math, x/ becomes \frac{x}{}"><input type="checkbox" id="snip-frac"> Auto-fraction</label>
-          <label class="dd-item" title="In align, matrix, cases …: Tab puts &amp;, Enter ends the row with \\ (Shift-Enter: plain new line)"><input type="checkbox" id="snip-matrix"> Tab &amp; and Enter \\ in rows</label>
-          <hr>
-          <button type="button" class="dd-item" id="snip-edit">Edit my snippets…</button>
-          <button type="button" class="dd-item" id="snip-list">List all snippets…</button>
-          <div class="dd-note" id="snip-note"></div>
-        </div>
-      </div>
-      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. ⌘F search · Ctrl-Space complete">PDF</button>
+      <button id="btn-find" class="icon ghost" data-icon="search" title="Find and replace in this file (⌘F, ⌘⌥F / Ctrl+H)" aria-label="Find and replace"></button>
+      <button id="btn-forward" class="ghost" data-icon="arrow" title="Show this line in the PDF (⌘J). Double-click (or Ctrl-click) the PDF to jump back to the source. Ctrl-Space complete">PDF</button>
     </div>
     <div id="banner" hidden></div>
+    <div id="goto" hidden><input id="goto-q" type="text" spellcheck="false" autocomplete="off" aria-label="Go to line"
+      title="A line, or line:column. Enter goes there, Esc goes back."></div>
+    <div id="find" hidden role="search">
+      <button id="find-more" class="icon tiny ghost" data-icon="right" title="Replace (⌘⌥F / Ctrl+H)" aria-label="Show replace" aria-expanded="false"></button>
+      <div class="find-rows">
+        <div class="find-row">
+          <input id="find-q" type="text" placeholder="Find" title="Enter or ↓: next · Shift+Enter or ↑: previous" spellcheck="false" autocomplete="off" aria-label="Find">
+          <button type="button" class="opt" data-opt="caseSensitive" title="Match case (Alt+C)" aria-pressed="false">Aa</button>
+          <button type="button" class="opt" data-opt="wholeWord" title="Whole word (Alt+W)" aria-pressed="false"><u>ab</u></button>
+          <button type="button" class="opt" data-opt="regex" title="Regular expression (Alt+R)" aria-pressed="false">.*</button>
+          <span id="find-count" class="count" role="status"></span>
+          <button type="button" class="icon tiny" data-step="-1" data-icon="up" title="Previous (Shift+Enter)" aria-label="Previous"></button>
+          <button type="button" class="icon tiny" data-step="1" data-icon="down" title="Next (Enter)" aria-label="Next"></button>
+          <button type="button" class="icon tiny" data-close="1" title="Close (Esc)" aria-label="Close">×</button>
+        </div>
+        <div class="find-row" id="find-replace" hidden>
+          <input id="find-r" type="text" placeholder="Replace" spellcheck="false" autocomplete="off" aria-label="Replace">
+          <button type="button" id="find-one" class="tiny" title="Replace this one (Enter)">Replace</button>
+          <button type="button" id="find-all" class="tiny" title="Replace all (Ctrl+Alt+Enter)">Replace all</button>
+        </div>
+      </div>
+    </div>
     <div id="editor"></div>
+    <div id="statusbar" hidden>
+      <button id="sb-pos" class="ghost" title="Go to line (Ctrl+G)">Ln 1, Col 1</button>
+    </div>
     <div id="empty-editor">Select a file on the left.</div>
     <div id="agent-view" hidden>
       <div id="agent-view-head"><span class="live-dot"></span><b>Agent</b><span id="agent-view-title"></span>
@@ -165,18 +223,6 @@
   </aside>
 </main>
 
-<div id="snip-dialog" class="modal" hidden role="dialog" aria-modal="true" aria-labelledby="snip-title">
-  <div class="modal-box">
-    <div class="modal-head"><b id="snip-title">My snippets</b><span id="snip-path" class="muted"></span></div>
-    <div id="snip-cm"></div>
-    <div class="modal-foot">
-      <span id="snip-error" class="err"></span>
-      <button id="snip-cancel" class="ghost">Close</button>
-      <button id="snip-save" class="primary">Save</button>
-    </div>
-  </div>
-</div>
-
 <footer id="panel" class="collapsed">
   <div id="panel-tabs">
     <button data-panel="problems" class="active">Problems <span id="problem-count" class="badge"></span></button>
@@ -195,10 +241,8 @@
 
 <script src="/static/vendor/codemirror.js"></script>
 <script src="/static/vendor/stex.js"></script>
+<script src="/static/texhighlight.js"></script>
 <script src="/static/vendor/markdown.js"></script>
-<script src="/static/vendor/searchcursor.js"></script>
-<script src="/static/vendor/dialog.js"></script>
-<script src="/static/vendor/search.js"></script>
 <script src="/static/vendor/matchbrackets.js"></script>
 <script src="/static/vendor/closebrackets.js"></script>
 <script src="/static/vendor/active-line.js"></script>
@@ -210,10 +254,15 @@
 <script src="/static/vendor/marked.min.js"></script>
 <script src="/static/vendor/katex/katex.min.js"></script>
 <script src="/static/snippets.js"></script>
+<script src="/static/mathtext.js"></script>
 <script src="/static/util.js"></script>
 <script src="/static/syncstate.js"></script>
+<script src="/static/texcomplete.js"></script>
 <script src="/static/chatlogic.js"></script>
+<script src="/static/findlogic.js"></script>
+<script src="/static/agentsearch.js"></script>
 <script src="/static/tabs.js"></script>
+<script src="/static/watch.js"></script>
 <script src="/static/turn.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/client.js"></script>

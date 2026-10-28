@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Drives the editor's Files menu in headless Chrome over the DevTools protocol.
 // usage: node e2e_drive.mjs <editor url>
 const url = process.argv[2];
@@ -49,7 +50,7 @@ check("empty folder shown in tree", await ev(`return !!document.querySelector('#
 const fileMenu = await ev(`return T.menu('#tree li[data-path="main.tex"]')`);
 check("file menu", JSON.stringify(fileMenu) === JSON.stringify(["Open", "Show in File Explorer", "Copy", "Paste", "Rename…", "Delete (to Recycle Bin)"]), JSON.stringify(fileMenu));
 await ev(`T.pick("Copy"); await T.sleep(800); return true`);
-check("copy toast", (await ev(`return $("#build-status").textContent`)).startsWith("Copied"), await ev(`return $("#build-status").textContent`));
+check("copy toast", (await ev(`return ($("#notifications")?.textContent || "")`)).includes("Copied"), await ev(`return ($("#notifications")?.textContent || "")`));
 
 const folderMenu = await ev(`return T.menu('#tree li[data-dir="figs"]')`);
 check("folder menu", folderMenu[0] === "New file…" && folderMenu.includes("Paste"), JSON.stringify(folderMenu));
@@ -77,11 +78,11 @@ await ev(`T.menu('#tree li[data-path="intro.tex"]'); T.pick("Delete (to Recycle 
 check("deleted file leaves tree and tabs", await ev(`return T.until(() => !T.files().includes("intro.tex") && !S.tabs.some((t) => t.path === "intro.tex"))`));
 
 await ev(`T.menu('#tree li[data-path="main.tex"]'); T.pick("Rename…"); await T.sleep(100); await T.type("bad:name.tex"); await T.sleep(600); return true`);
-check("bad name refused with message", (await ev(`return $("#build-status").textContent`)).includes("cannot contain"), await ev(`return $("#build-status").textContent`));
+check("bad name refused with message", (await ev(`return ($("#notifications")?.textContent || "")`)).includes("cannot contain"), await ev(`return ($("#notifications")?.textContent || "")`));
 check("tree intact after refusal", await ev(`return T.until(() => !!document.querySelector('#tree li[data-path="main.tex"]'))`));
 
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close();
+await closeSocket(ws);
 await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
-process.exit(0);
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

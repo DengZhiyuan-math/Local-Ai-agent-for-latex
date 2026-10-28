@@ -17,8 +17,12 @@ HUB = REPO / "prism_local" / "hub.py"
 PROJECT = REPO / "examples" / "minimal"
 sys.path.insert(0, str(REPO / "prism_local"))
 import hub  # noqa: E402
+import proc  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
+import repository  # noqa: E402
+import repoview  # noqa: E402
+import sharedrepo  # noqa: E402
 import instances  # noqa: E402
 import settings  # noqa: E402
 
@@ -94,6 +98,20 @@ class Registry(TempState):
         problem = backend_claude.ClaudeCode("claude").preflight(PROJECT)
         self.assertIn("Nothing was sent", problem or "")
 
+    def test_a_state_file_keeps_its_previous_version_and_a_damaged_one_names_it(self):
+        """After a power cut the disk may hold an empty projects.json or settings.json
+        (written but not yet on the disk): the version before stays as .bak."""
+        state = Path(os.environ["PRISM_STATE_DIR"])
+        settings.save({"git_init": False})
+        settings.save({"github_repo": True})
+        bak = state / "settings.json.bak"
+        self.assertFalse(json.loads(bak.read_text(encoding="utf-8"))["github_repo"], "the one before")
+        (state / "settings.json").write_bytes(b"")              # what a power cut can leave
+        with self.assertRaises(registry.StateUnreadable) as e:
+            settings.load()
+        self.assertIn(str(bak), str(e.exception))
+        self.assertEqual((state / "settings.json").read_bytes(), b"", "left as it was")
+
     def test_project_key_is_stable(self):
         self.assertEqual(registry.project_key(PROJECT), registry.project_key(Path(str(PROJECT))))
 
@@ -108,17 +126,41 @@ class Registry(TempState):
         self.assertTrue(root.exists())
         self.assertFalse(new.exists())
 
+    def test_the_list_can_change_while_a_folder_moves_and_the_change_is_kept(self):
+        """The move runs without the list's lock: another window pinning or opening a
+        project meanwhile neither waits for it nor is written over."""
+        root, new, other = self.tmp / "paper", self.tmp / "renamed", self.tmp / "other"
+        root.mkdir()
+        other.mkdir()
+        registry.touch(root)
+        registry.touch(other)
+        rename, during = os.rename, []
+
+        def slow_rename(source, target):
+            t = time.monotonic()
+            registry.update_projects(lambda d: d["projects"][-1].update(pinned=True))   # another window
+            during.append(time.monotonic() - t)
+            return rename(source, target)
+
+        with mock.patch.object(registry.os, "rename", side_effect=slow_rename):
+            registry.move_folder(root, new)
+        self.assertLess(during[0], 2, "the change waited for the move")
+        paths = {e["path"]: e for e in registry.load_projects()["projects"]}
+        self.assertEqual(set(paths), {str(new), str(other)})
+        self.assertTrue(paths[str(other)].get("pinned"), "the other window's change was written over")
+        self.assertEqual(list((registry.state_dir() / "moves").glob("*.json")), [])
+
     def test_metadata_write_failure_rolls_the_folder_back(self):
         root, new = self.tmp / "paper", self.tmp / "renamed"
         root.mkdir()
         (root / "main.tex").write_text("paper")
         registry.touch(root)
-        write = registry.write_json
+        write = registry.write_state
         def fail_list(file, data):
             if file == registry._registry_path():
                 raise PermissionError("fixture: metadata is locked")
             return write(file, data)
-        with mock.patch.object(registry, "write_json", side_effect=fail_list):
+        with mock.patch.object(registry, "write_state", side_effect=fail_list):
             with self.assertRaisesRegex(OSError, "restored"):
                 registry.move_folder(root, new)
         self.assertEqual((root / "main.tex").read_text(), "paper")
@@ -130,7 +172,7 @@ class Registry(TempState):
         root, new = self.tmp / "paper", self.tmp / "renamed"
         root.mkdir()
         registry.touch(root)
-        write, rename = registry.write_json, os.rename
+        write, rename = registry.write_state, os.rename
         def fail_list(file, data):
             if file == registry._registry_path():
                 raise PermissionError("fixture: metadata is locked")
@@ -139,7 +181,7 @@ class Registry(TempState):
             if source == new:
                 raise PermissionError("fixture: rollback is locked")
             return rename(source, target)
-        with mock.patch.object(registry, "write_json", side_effect=fail_list), \
+        with mock.patch.object(registry, "write_state", side_effect=fail_list), \
                 mock.patch.object(registry.os, "rename", side_effect=fail_rollback):
             with self.assertRaises(registry.MoveIncomplete) as raised:
                 registry.move_folder(root, new)
@@ -177,6 +219,18 @@ class FolderDialog(unittest.TestCase):
             cmds = hub.native_folder_dialogs("/home/me/papers", "Location")
         self.assertEqual([c[0] for c in cmds], ["zenity", "kdialog"])
         self.assertIn("--filename=/home/me/papers/", cmds[0])
+
+
+class TkinterDialog(unittest.TestCase):
+    def test_the_tkinter_dialog_opens_no_console_window(self):
+        """Home runs without a console on Windows: the dialog's python opens none either."""
+        from unittest import mock
+        import proc
+        done = subprocess.CompletedProcess([], 0, b"", b"")
+        with mock.patch.object(hub, "native_folder_dialogs", return_value=[]), \
+                mock.patch.object(hub.subprocess, "run", return_value=done) as run:
+            hub.pick_folder("", "Location")
+        self.assertEqual(run.call_args.kwargs.get("creationflags"), proc.NO_WINDOW.get("creationflags"))
 
 
 class Instances(TempState):
@@ -298,7 +352,7 @@ class Create(TempState):
             with mock.patch.object(instances, "inspect", return_value=instances.State("ready",
                     {"url": "http://127.0.0.1:9/", "pid": pid})), \
                     mock.patch.object(instances.HTTP, "open") as asked:
-                hub.tell_editor(self.tmp)
+                publish.tell_editor(self.tmp)
             self.assertEqual(asked.called, told, pid)
 
     def test_git_info_of_some_or_all_projects(self):
@@ -307,11 +361,100 @@ class Create(TempState):
         g, plain = (hub.registry.project_key((self.tmp / n).resolve()) for n in ("g", "plain"))
         if any((p / ".git").exists() for p in self.tmp.resolve().parents) or not (self.tmp / "g" / ".git").exists():
             self.skipTest("git not available, or the temp folder is inside a repository")
-        with mock.patch.object(hub.subprocess, "run", wraps=hub.subprocess.run) as run:
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
             self.assertIsNone(hub.git_info(self.tmp / "plain"))
             run.assert_not_called()                 # no .git anywhere: no git is run
         self.assertEqual(set(hub.all_git_info()), {g, plain})
         self.assertEqual(list(hub.all_git_info({g})), [g])
+
+    def test_git_info_asks_git_again_only_on_a_change(self):
+        """Coming back to the page asks for the cards' git facts: an unchanged project runs
+        no git, a file added is counted."""
+        hub.create_project({"name": "g", "parent": str(self.tmp), "template": "empty", "git": True})
+        root = self.tmp / "g"
+        if not (root / ".git").exists():
+            self.skipTest("git not available")
+        first = hub.git_info(root)
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.assertEqual(hub.git_info(root), first)
+        self.assertEqual(run.call_count, 0)
+        (root / "added.tex").write_text("x\n", encoding="utf-8")
+        self.assertEqual(hub.git_info(root)["changes"], first["changes"] + 1)
+
+
+class Scan(TempState):
+    """The file count and newest edit Home shows of each project."""
+
+    def project(self, n: int) -> Path:
+        """A project of n files, main.tex the newest and sections/s0.tex the oldest."""
+        root = (self.tmp / "p").resolve()
+        (root / "sections").mkdir(parents=True)
+        base = time.time() - 1000
+        for i in range(n - 1):
+            (root / "sections" / f"s{i}.tex").write_text("x\n", encoding="utf-8")
+            os.utime(root / "sections" / f"s{i}.tex", (base + i, base + i))
+        (root / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        os.utime(root / "main.tex", (base + n, base + n))
+        hub.add_project(str(root))
+        return root
+
+    def listed(self) -> dict:
+        return hub.list_projects()["projects"][0]
+
+    def walks(self, root: Path) -> list:
+        """A patch that records each walk of root's folder."""
+        real = os.walk
+        seen = []
+
+        def walk(top, *a, **k):
+            if Path(top) == root:
+                seen.append(top)
+            return real(top, *a, **k)
+        return seen, mock.patch.object(hub.os, "walk", side_effect=walk)
+
+    def test_a_count_cut_short_says_so(self):
+        self.project(8)
+        with mock.patch.object(hub, "MAX_SCAN", 5):
+            p = self.listed()
+        self.assertEqual((p["files"], p["files_capped"]), (5, True))
+
+    def test_a_full_count_is_not_cut_short(self):
+        self.project(3)
+        p = self.listed()
+        self.assertEqual((p["files"], p["files_capped"]), (3, False))
+
+    def test_an_unchanged_project_is_not_walked_again(self):
+        root = self.project(3)
+        self.listed()
+        seen, patch = self.walks(root)
+        with patch:
+            p = self.listed()
+        self.assertEqual(seen, [])
+        self.assertEqual(p["files"], 3)
+
+    def test_a_new_file_is_seen(self):
+        root = self.project(3)
+        self.listed()
+        time.sleep(0.05)
+        (root / "sections" / "new.tex").write_text("y\n", encoding="utf-8")
+        seen, patch = self.walks(root)
+        with patch:
+            p = self.listed()
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(p["files"], 4)
+
+    def test_the_newest_file_edited_in_place_is_seen(self):
+        root = self.project(3)
+        edited = self.listed()["edited"]
+        os.utime(root / "main.tex", (edited + 100, edited + 100))
+        self.assertEqual(self.listed()["edited"], edited + 100)
+
+    def test_other_edits_are_seen_after_a_while(self):
+        root = self.project(3)
+        edited = self.listed()["edited"]
+        os.utime(root / "sections" / "s0.tex", (edited + 100, edited + 100))
+        with mock.patch.object(hub, "SCAN_TTL", 0):
+            self.assertEqual(self.listed()["edited"], edited + 100)
 
 
 class ProjectFolders(TempState):
@@ -427,6 +570,149 @@ class FoldersAndTags(TempState):
 
 
 @unittest.skipUnless(hub.shutil.which("git"), "needs git")
+class OpenFromGitHub(TempState):
+    def test_repository_links_are_normalized_before_opening(self):
+        for value in ("me/paper", " https://github.com/me/paper ",
+                      "https://github.com/me/paper.git", "https://github.com/me/paper/",
+                      "https://github.com/me/paper?tab=readme-ov-file#readme",
+                      "git@github.com:me/paper.git", "github.com/me/paper"):
+            with self.subTest(value=value), mock.patch.object(hub, "_open_from_github", return_value={}) as opening:
+                hub.open_from_github(value)
+                opening.assert_called_once_with("me/paper", "github.com/me/paper")
+        for value in ("", "https://example.com/me/paper", "https://github.com.evil/me/paper",
+                      "https://github.com/me/paper/tree/main", "me/..", "../paper",
+                      "https://user:secret@github.com/me/paper", "--help"):
+            with self.subTest(value=value), mock.patch.object(hub, "_open_from_github") as opening:
+                with self.assertRaises(ValueError):
+                    hub.open_from_github(value)
+                opening.assert_not_called()
+
+    """A project of yours on GitHub, opened on another computer from the Home page."""
+
+    def setUp(self):
+        super().setUp()
+        import gitenv
+        import github
+        from fake_github import FakeGitHub
+        for k, v in {"GIT_AUTHOR_NAME": "T", "GIT_COMMITTER_NAME": "T",
+                     "GIT_AUTHOR_EMAIL": "t@example.com", "GIT_COMMITTER_EMAIL": "t@example.com"}.items():
+            self.addCleanup(lambda k=k, old=os.environ.get(k): os.environ.pop(k, None) if old is None
+                            else os.environ.__setitem__(k, old))
+            os.environ[k] = v
+        self.gh = FakeGitHub(remotes=self.tmp / "github")
+        for patch in (mock.patch.object(github, "GITHUB", self.gh), mock.patch.object(gitenv, "git", self.gh.git)):
+            patch.start()
+            self.addCleanup(patch.stop)
+        # Clones go where the default folder is: here, never into your Documents.
+        self.papers = self.tmp / "papers"
+        self.papers.mkdir()
+        hub.settings.save({"default_parent": str(self.papers)})
+
+    def git(self, cwd, *args):
+        return subprocess.run(["git", "-c", "core.quotepath=false", *args], cwd=cwd, capture_output=True,
+                              text=True, encoding="utf-8", check=True).stdout.strip()
+
+    def forget(self, ids):
+        def fn(data):
+            data["projects"] = [e for e in data["projects"] if registry.project_key(Path(e["path"])) not in ids]
+        registry.update_projects(fn)
+
+    def test_a_project_comes_as_prism_set_it_up_and_once(self):
+        paper = self.papers / "paper"
+        paper.mkdir()
+        (paper / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        pid = hub.add_project(str(paper))["id"]
+        self.assertNotIn("error", publish.publish_project(paper))
+        self.assertEqual(hub.open_from_github("https://github.com/me/paper.git"), {"ids": [pid], "path": str(paper.resolve()), "cloned": False},
+                         "listed already: opened, not cloned again")
+        self.forget({pid})                                         # as on another computer
+        r = hub.open_from_github("me/paper")
+        dest = Path(r["path"])
+        self.assertTrue(dest.resolve().is_relative_to(self.tmp.resolve()), dest)
+        self.assertTrue(r["cloned"])
+        self.assertEqual(dest, (self.papers / "paper (2)").resolve(), "next to the others, not over one")
+        self.assertEqual((dest / "main.tex").read_text(encoding="utf-8"), "\\documentclass{article}\n")
+        self.assertEqual(r["ids"], [registry.project_key(dest)])
+        sync = hub.project_sync(dest)
+        self.assertTrue(sync.settings.managed, "Prism's to keep")
+        self.assertTrue(sync.validate_target())
+        self.assertEqual(sync.target["repository_identity"], "github.com/me/paper")
+        self.assertIn("prism-local", (dest / ".git" / "hooks" / "pre-push").read_text(encoding="utf-8"),
+                      "force pushes refused")
+        with self.assertRaises(ValueError):
+            hub.open_from_github("not a repository")
+
+    def test_opened_twice_at_once_comes_once(self):
+        import threading
+        import gitenv
+        paper = self.papers / "paper"
+        paper.mkdir()
+        (paper / "main.tex").write_text("\\documentclass{article}\n", encoding="utf-8")
+        pid = hub.add_project(str(paper))["id"]
+        self.assertNotIn("error", publish.publish_project(paper))
+        self.forget({pid})                                         # as on another computer
+        clones = []
+
+        def slow(cwd, *args, **kwargs):                            # the other tab asks meanwhile
+            if args[:1] == ("clone",):
+                clones.append(args)
+                time.sleep(0.5)
+            return self.gh.git(cwd, *args, **kwargs)
+        results, errors = [], []
+
+        def open_it():
+            try:
+                results.append(hub.open_from_github("me/paper"))
+            except Exception as e:                                 # noqa: BLE001 - reported below
+                errors.append(e)
+        with mock.patch.object(gitenv, "git", slow):
+            threads = [threading.Thread(target=open_it) for _ in range(2)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(30)
+        self.assertEqual(errors, [])
+        self.assertEqual(len(clones), 1, "cloned once")
+        self.assertEqual(sorted(r["cloned"] for r in results), [False, True])
+        self.assertEqual(results[0]["path"], results[1]["path"])
+        self.assertTrue(Path(results[0]["path"]).resolve().is_relative_to(self.tmp.resolve()), results[0]["path"])
+        self.assertEqual(results[0]["ids"], results[1]["ids"])
+        self.assertFalse((self.papers / "paper (3)").exists())
+        listed = [e for e in registry.load_projects()["projects"] if Path(e["path"]).name.startswith("paper")]
+        self.assertEqual([Path(e["path"]).resolve() for e in listed], [(self.papers / "paper (2)").resolve()],
+                         "listed once")
+
+    def test_a_folders_shared_repository_comes_as_that_folder(self):
+        work = self.tmp / "work"
+        for rel in ("练习/ex 1", "Answers/sol"):
+            (work / rel).mkdir(parents=True)
+            (work / rel / "main.tex").write_text("\\documentclass{amsart}\n", encoding="utf-8")
+        (work / "Answers" / "sol" / "figs").mkdir()
+        (work / "Answers" / "sol" / "figs" / "plot.tex").write_text("\\begin{tikzpicture}\n", encoding="utf-8")
+        (work / hub.gitsync.SHARED_MARKER).write_text(json.dumps({"shared": True, "folder": "Course"}), encoding="utf-8")
+        bare = self.gh.remotes / "me" / "course.git"
+        bare.parent.mkdir(parents=True)
+        self.git(self.tmp, "init", "-q", "--bare", "-b", "main", str(bare))
+        self.gh.repositories["me/course"] = bare
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"], ["commit", "-qm", "course"],
+                     ["push", "-q", str(bare), "main"]):
+            self.git(work, *args)
+        r = hub.open_from_github("me/course")
+        top = Path(r["path"])
+        self.assertTrue(top.resolve().is_relative_to(self.tmp.resolve()), top)
+        self.assertEqual(len(r["ids"]), 2, "the projects, not the figures folder")
+        data = registry.load_projects()
+        folders = {f["id"]: f for f in data["folders"]}
+        course = next(f for f in data["folders"] if f["name"] == "Course")
+        self.assertEqual(course["sync"], {"mode": "shared", "repo": str(top)})
+        where = {Path(e["path"]).name: folders[e["folder_id"]] for e in data["projects"]}
+        self.assertEqual((where["ex 1"]["name"], where["ex 1"]["parent"]), ("练习", course["id"]))
+        self.assertEqual((where["sol"]["name"], where["sol"]["parent"]), ("Answers", course["id"]))
+        self.assertTrue(hub.project_sync(top / "练习" / "ex 1").settings.managed)
+        self.assertEqual(hub.git_info(top / "练习" / "ex 1")["shared"], top.name)
+
+
+@unittest.skipUnless(hub.shutil.which("git"), "needs git")
 class FolderSync(TempState):
     """A folder of projects: one shared repository, or one each, and back."""
 
@@ -472,7 +758,7 @@ class FolderSync(TempState):
         self.assertEqual(sorted(files), sorted([".gitattributes", ".gitignore", "prism-repo.json", "Answers- all/ex 1 sol/main.tex",
                                                 "练习/ex 1/main.tex", "练习/exam/main.tex"]))
         self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
-        self.assertTrue((repo / "练习" / "exam" / hub.SPLIT_BACKUP).is_dir())
+        self.assertTrue((repo / "练习" / "exam" / sharedrepo.SPLIT_BACKUP).is_dir())
         listed = {p["name"]: p for p in hub.list_projects()["projects"]}
         self.assertEqual(Path(listed["ex 1"]["path"]), repo / "练习" / "ex 1")
         self.assertEqual(listed["ex 1"]["tags"], [])
@@ -490,8 +776,120 @@ class FolderSync(TempState):
             self.assertEqual(hub.repo_kind(root)[0], "own", p["name"])
             self.assertNotIn(".git-prism", self.git(root, "status", "--porcelain"))
         self.assertIn("in one repository", self.git(repo / "练习" / "ex 1", "log", "--format=%s"))
-        self.assertTrue((repo / hub.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
+        self.assertTrue((repo / sharedrepo.SHARED_BACKUP).is_dir(), "the shared .git is set aside, not deleted")
         self.assertFalse((repo / "prism-repo.json").exists())
+
+    def test_one_repository_failing_before_its_commit_is_finished_by_the_next_try(self):
+        """A run that failed after exam's .git was set aside: tried again, exam is already in
+        the shared repository and nothing is fetched, but its history still comes along."""
+        def fails(repo):
+            raise subprocess.CalledProcessError(128, ["git", "commit-tree"], "", "fixture: the disk is full")
+        repo = Path(hub.sync_plan(self.top["id"], "shared")["repo"])
+        with mock.patch.object(sharedrepo, "unstage_big", side_effect=fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertFalse(r["ok"])
+        self.assertTrue((repo / "练习" / "exam" / sharedrepo.SPLIT_BACKUP).is_dir(), "it got that far")
+        self.assertNotIn("exam: first", self.git(repo, "log", "--format=%s"))
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertTrue(r["ok"], r["report"])
+        self.assertIn("exam: first", self.git(repo, "log", "--format=%s"))
+        self.assertIn("The histories of 1 project come along in the shared commit", r["report"])
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared", "repo": str(repo)})
+        self.assertTrue(r["ok"], r["report"])
+        self.assertFalse(any("histories" in line for line in r["report"]), "taken in once")
+
+    def test_a_history_that_cannot_be_fetched_keeps_its_repository(self):
+        real = sharedrepo.run_git
+
+        def fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fetch_fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertFalse(r["ok"])
+        self.assertIn("the disk is full", " ".join(r["report"]))
+        exam = Path(next(p["path"] for p in hub.list_projects()["projects"] if p["name"] == "exam"))
+        self.assertTrue((exam / ".git").is_dir(), "its .git is not set aside without its history")
+        self.assertIn("exam: first", self.git(exam, "log", "--format=%s"))
+
+    def test_back_to_separate_repositories_failing_half_way_leaves_the_shared_one_whole(self):
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(r["ok"], r["report"])
+        repo = Path(hub.sync_plan(self.top["id"])["repo"])
+        real, fetched = sharedrepo.run_git, []
+
+        def second_fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                fetched.append(Path(cwd).name)
+                if len(fetched) == 2:
+                    raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(sharedrepo, "run_git", side_effect=second_fetch_fails):
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        self.assertIn("the disk is full", " ".join(r["report"]))
+        self.assertIn(f"{fetched[1]}: its own repository could not be made", r["report"], "which project")
+        self.assertIn("Nothing was changed", " ".join(r["report"]))
+        self.assertTrue((repo / ".git").is_dir(), "the shared repository is in place")
+        self.assertFalse((repo / sharedrepo.SHARED_BACKUP).exists())
+        for p in hub.list_projects()["projects"]:
+            self.assertEqual(hub.repo_kind(Path(p["path"]))[0], "shared", p["name"])
+            self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
+        self.assertEqual(self.git(repo, "status", "--porcelain"), "", "nothing was left in the shared one")
+        # Tried again, it goes through, with the history.
+        r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertTrue(r["ok"], r["report"])
+        for name in ("练习/exam", "练习/ex 1"):
+            self.assertIn("in one repository", self.git(repo / name, "log", "--format=%s"), name)
+
+    def test_two_shared_repositories_go_back_together_or_not_at_all(self):
+        """A folder whose projects are in two shared repositories: a failure in the second
+        put the first back only if it had not been set aside yet."""
+        for sub in (self.ex, self.sol):
+            r = hub.apply_sync({"id": sub["id"], "mode": "shared"})
+            self.assertTrue(r["ok"], r["report"])
+        repos = {Path(hub.sync_plan(sub["id"])["repo"]) for sub in (self.ex, self.sol)}
+        plan = hub.sync_plan(self.top["id"], "separate")
+        self.assertEqual({Path(r["repo"]) for r in plan["projects"] if r["action"] == "splits"}, repos, plan)
+        real, last = sharedrepo.run_git, {r["path"] for r in plan["projects"] if r["action"] == "splits"
+                                    and Path(r["repo"]) == max(repos, key=str)}
+
+        def fails_in_the_second(cwd, *args, **kw):
+            if args[:1] == ("fetch",) and str(Path(cwd)) in last:
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fails_in_the_second):
+            # The plan orders the repositories; the failing one must come second.
+            order = list(dict.fromkeys(r["repo"] for r in plan["projects"] if r["action"] == "splits"))
+            self.assertEqual(Path(order[-1]), max(repos, key=str))
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        for repo in repos:
+            self.assertTrue((repo / ".git").is_dir(), f"{repo} is shared again")
+            self.assertFalse((repo / sharedrepo.SHARED_BACKUP).exists())
+        for p in hub.list_projects()["projects"]:
+            self.assertFalse((Path(p["path"]) / ".git").exists(), f"{p['name']} kept a half-made repository")
+
+    def test_what_cannot_be_taken_back_is_named(self):
+        r = hub.apply_sync({"id": self.top["id"], "mode": "shared"})
+        self.assertTrue(r["ok"], r["report"])
+
+        real = sharedrepo.run_git
+
+        def fetch_fails(cwd, *args, **kw):
+            if args[:1] == ("fetch",):
+                raise subprocess.CalledProcessError(128, ["git", "fetch"], "", "fixture: the disk is full")
+            return real(cwd, *args, **kw)
+        with mock.patch.object(sharedrepo, "run_git", side_effect=fetch_fails), \
+                mock.patch.object(sharedrepo, "_remove", return_value=False):          # a program holds them
+            r = hub.apply_sync({"id": self.top["id"], "mode": "separate"})
+        self.assertFalse(r["ok"])
+        said = " ".join(r["report"])
+        self.assertIn("Could not take back", said)
+        self.assertIn(".git", said)
 
     def test_rename_project_and_folder(self):
         old = self.projects / "ex 1"
@@ -594,7 +992,7 @@ class FolderSync(TempState):
         root = self.projects / "ex 1"
         hub.git_init(root)
         (root / "huge.bin").write_bytes(b"x" * 4096)
-        repo = hub.Repository.find(root)
+        repo = repository.Repository.find(root)
         with mock.patch.object(publish.sources, "MAX_FILE", 1024), repo.changing():
             repo.ok("add", "-A")
             self.assertEqual(publish.unstage_big(repo), ["huge.bin"])
@@ -640,13 +1038,13 @@ class FolderSync(TempState):
         import threading
         from concurrent.futures import ThreadPoolExecutor
         entered, release = threading.Event(), threading.Event()
-        real_apply = hub._apply_shared
+        real_apply = sharedrepo._apply_shared
         def paused(*args):
             entered.set()
             self.assertTrue(release.wait(5))
             return real_apply(*args)
         body = {"id": self.top["id"], "mode": "shared"}
-        with mock.patch.object(hub, "_apply_shared", side_effect=paused), ThreadPoolExecutor(max_workers=1) as pool:
+        with mock.patch.object(sharedrepo, "_apply_shared", side_effect=paused), ThreadPoolExecutor(max_workers=1) as pool:
             first = pool.submit(hub.apply_sync, body)
             try:
                 self.assertTrue(entered.wait(5))
@@ -689,6 +1087,81 @@ class CheckGitHub(TempState):
         g = hub.git_info(mine)
         self.assertEqual((g["behind"], g["fetch_error"]), (1, None))
         self.assertEqual((mine / "main.tex").read_text(encoding="utf-8"), "a\n", "a fetch changes no file")
+
+    def test_home_works_a_project_out_again_only_when_it_changed(self):
+        """The page asks every ten seconds: the title, the status of the files and the sync
+        facts (some seven git commands) are reused while their files and the repository
+        are the same."""
+        import proc
+        from unittest import mock
+        root = self.tmp / "paper"
+        root.mkdir()
+        (root / "main.tex").write_text("\\title{First}\n", encoding="utf-8")
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        self.assertEqual(hub.title_of(root / "main.tex"), "First")
+        hub.git_info(root)
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            hub.git_info(root)
+        self.assertEqual(run.call_count, 0)
+        subprocess.run(["git", "remote", "add", "origin", "https://github.com/me/paper.git"], cwd=root,
+                       check=True, capture_output=True)
+        self.assertEqual(hub.git_info(root)["github"], "https://github.com/me/paper", "a new remote is seen")
+        (root / "main.tex").write_text("\\title{Second, longer}\n", encoding="utf-8")
+        self.assertEqual(hub.title_of(root / "main.tex"), "Second, longer")
+
+    def test_changed_counts_what_autosave_would_record(self):
+        """A folder added without ignore rules has build output and LaTeX's auxiliary files
+        untracked, which are never committed: "N changed" would never clear."""
+        root = self.tmp / "added"
+        root.mkdir()
+        (root / "main.tex").write_text("a\n", encoding="utf-8")
+        for args in (["init", "-q", "-b", "main"], ["add", "-A"],
+                     ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init"]):
+            subprocess.run(["git", *args], cwd=root, check=True, capture_output=True)
+        (root / "main.tex").write_text("b\n", encoding="utf-8")         # recorded
+        (root / "new.tex").write_text("n\n", encoding="utf-8")           # recorded
+        (root / "main.aux").write_text("x", encoding="utf-8")            # never
+        (root / "main.synctex.gz").write_bytes(b"x")                    # never
+        (root / "build").mkdir()
+        (root / "build" / "main.pdf").write_bytes(b"%PDF")               # the output folder: never
+        self.assertEqual(hub.git_info(root)["changes"], 2)
+
+    def test_home_sees_a_repository_made_inside_another_and_a_url_rewrite_of_xdg(self):
+        """locate was asked again only once its git dir went: a project in an enclosing
+        repository that got one of its own stayed "nested". And the sync facts missed a
+        URL rewrite in $XDG_CONFIG_HOME/git/config, which git reads too."""
+        from unittest import mock
+        git = lambda *a, cwd: subprocess.run(["git", *a], cwd=cwd, check=True, capture_output=True)
+        outer = self.tmp / "outer"
+        root = outer / "paper"
+        root.mkdir(parents=True)
+        (root / "main.tex").write_text("x\n", encoding="utf-8")
+        git("init", "-q", "-b", "main", cwd=outer)
+        self.assertEqual(repoview.place(root).kind, "nested")
+        git("init", "-q", "-b", "main", cwd=root)
+        self.assertEqual(repoview.place(root).kind, "own", "its own repository is seen")
+        xdg = self.tmp / "xdg"
+        (xdg / "git").mkdir(parents=True)
+        with mock.patch.dict(os.environ, {"XDG_CONFIG_HOME": str(xdg)}):
+            git("remote", "add", "origin", "mygh:me/paper.git", cwd=root)
+            self.assertIsNone(hub.git_info(root)["github"])
+            (xdg / "git" / "config").write_text('[url "https://github.com/"]\n\tinsteadOf = mygh:\n', encoding="utf-8")
+            # The rewrite makes another target, which the page must have you confirm.
+            info = hub.git_info(root)
+            self.assertIn("Sync target changed", info["paused_details"] or "", "the rewrite is seen")
+            self.assertIn("Uploading to GitHub is paused", info["paused"], "in plain words")
+            self.assertIsNone(info["fetch_error"], "GitHub was not unreachable")
+
+    def test_the_fetch_is_running_while_its_targets_are_worked_out(self):
+        """A page that asks then must keep watching, or it never shows what was found."""
+        from unittest import mock
+        seen = []
+        with mock.patch.object(hub, "fetch_targets", side_effect=lambda: seen.append(hub.FETCH["running"]) or []):
+            hub.fetch_all()
+        self.assertEqual(seen, [True])
+        self.assertFalse(hub.FETCH["running"])
 
     def test_errors_read_while_fetching_never_change_under_the_reader(self):
         """The cards read the fetch errors (git_info, from other threads) while the fetches
@@ -797,6 +1270,35 @@ class HubServer(unittest.TestCase):
 
     def post(self, path, body):
         return request(self.url, path, json.dumps(body).encode(), HEADERS)
+
+    def test_a_rename_while_another_window_holds_the_list_says_so(self):
+        """The page showed only "server not reachable": the lock's timeout dropped the request."""
+        _, added = self.post("/api/projects/add", {"path": str(PROJECT)})
+        with registry.FileLock(self.tmp / "state" / "projects.lock"):            # another window
+            status, r = request(self.url, "/api/projects/rename", json.dumps(
+                {"id": added["id"], "name": "Renamed"}).encode(), HEADERS, timeout=30)
+        self.assertEqual(status, 409, r)
+        self.assertIn("Another Prism window is busy", r["error"])
+        self.assertEqual(self.post("/api/projects/rename", {"id": added["id"], "name": "Renamed"})[0], 200,
+                         "and goes through once it is free")
+
+    def test_a_damaged_project_list_can_be_put_back_from_its_backup(self):
+        """The page showed nothing when projects.json was damaged; it says so now and can put
+        back the version before its last change, keeping the damaged one to look at."""
+        state = self.tmp / "state"
+        _, first = self.post("/api/projects/add", {"path": str(PROJECT)})
+        self.post("/api/projects/update", {"id": first["id"], "pinned": True})    # a .bak now
+        (state / "projects.json").write_bytes(b'{"projects": [')                  # a power cut
+        status, r = request(self.url, "/api/projects")
+        self.assertEqual((status, r.get("damaged_state"), r.get("backup")), (409, "projects.json", True), r)
+        status, r = self.post("/api/state/restore", {"file": "projects.json"})
+        self.assertEqual(status, 200, r)
+        status, listed = request(self.url, "/api/projects")
+        self.assertEqual((status, [p["id"] for p in listed["projects"]]), (200, [first["id"]]))
+        self.assertEqual((state / "projects.json.damaged").read_bytes(), b'{"projects": [')
+        status, r = self.post("/api/state/restore", {"file": "projects.json"})
+        self.assertEqual(status, 409, "a readable list is not replaced")
+        self.assertEqual(self.post("/api/state/restore", {"file": "../x.json"})[0], 400)
 
     def test_manage_projects(self):
         self.assertEqual(request(self.url, "/api/ping")[1]["app"], "prism-home")

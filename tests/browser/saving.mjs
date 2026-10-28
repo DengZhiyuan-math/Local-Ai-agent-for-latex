@@ -1,3 +1,4 @@
+import { closeSocket } from "./close.mjs";
 // Saving in the editor (tabs.js) on the real page: autosave, a file changed on disk while
 // you have edits (the banner, Keep mine), and edits held during an agent's Edit turn.
 // usage: node saving.mjs <editor url> <project folder>
@@ -45,7 +46,7 @@ const auto = await ev(`
   const ok = await T.until(() => !isDirty(activeTab()));
   const t = activeTab();
   const state = { ok, path: t.path, dirty: isDirty(t), inFlight: t.inFlight, conflict: t.conflict, mtime: t.mtime,
-                  status: $("#build-status").textContent, editTurn: C.editTurn };
+                  status: ($("#notifications")?.textContent || ""), editTurn: C.editTurn };
   if (!ok) state.direct = await Promise.race([TABS.save(t), new Promise((r) => setTimeout(() => r("no answer in 5 s"), 5000))]);
   return state;`);
 const disk0 = readFileSync(file, "utf8");
@@ -72,13 +73,13 @@ if (banner.shown) {
 
 // During an agent's Edit turn nothing is written; it is saved when the turn ends.
 await ev(`C.editTurn = true; TABS.turnStarted(); cm.replaceRange("% held\\n", { line: 1, ch: 0 }); return true`);
-const held = await ev(`const r = await saveAll(); return { r, status: $("#build-status").textContent }`);
+const held = await ev(`const r = await TABS.saveAll(); return { r, status: ($("#notifications")?.textContent || "") }`);
 check("held during an Edit turn, and said so", held.r.reason === "held" && !readFileSync(file, "utf8").includes("% held")
   && held.status.includes("saved when the agent's turn ends"), JSON.stringify(held));
 await ev(`C.editTurn = false; flushSaves(); return true`);
 check("saved once the turn is over", await ev(`return T.until(() => !isDirty(activeTab()))`) && readFileSync(file, "utf8").includes("% held"));
 check("no page errors", errors.length === 0, errors.join(" | "));
 console.log(results.join("\n"));
-ws.close();
+await closeSocket(ws);
 await fetch("http://127.0.0.1:9333/json/close/" + tab.id);   // its page goes too: it holds connections
-process.exit(0);
+process.exitCode = results.some(line => line.startsWith("FAIL")) ? 1 : 0;

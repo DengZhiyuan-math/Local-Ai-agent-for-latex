@@ -1,0 +1,27 @@
+/Volumes/Codex-Workspace/Projects/prism-local/tests/test_agent.py:197: SyntaxWarning: "\[" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\["? A raw string is also an option.
+  raw = json.dumps({"file_path": str(root / "main.tex"), "old_string": "a \[x\]",
+/Volumes/Codex-Workspace/Projects/prism-local/tests/test_agent.py:198: SyntaxWarning: "\e" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\e"? A raw string is also an option.
+  "new_string": "a \begin{equation}x\end{equation}"})
+/Volumes/Codex-Workspace/Projects/prism-local/tests/test_agent.py:210: SyntaxWarning: "\[" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\["? A raw string is also an option.
+  self.assertEqual("".join(e.get("old", "") for e in live), "a \[x\]")
+/Volumes/Codex-Workspace/Projects/prism-local/tests/test_agent.py:211: SyntaxWarning: "\e" is an invalid escape sequence. Such sequences will not work in the future. Did you mean "\\e"? A raw string is also an option.
+  self.assertEqual("".join(e.get("text", "") for e in live), "a \begin{equation}x\end{equation}")
+{"event": "agent_start", "job": 1793181081453, "provider": "edit", "project_key": "tmpnay9g3mz-4ed25fbf68", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpnay9g3mz", "session_id": null}
+.{"event": "agent_start", "job": 1793181081668, "provider": "replace", "project_key": "tmpgichljny-ed665faf14", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpgichljny", "session_id": null}
+.{"event": "agent_start", "job": 1793181081876, "provider": "wild", "project_key": "tmpad6v9yi2-e707b49ece", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpad6v9yi2", "session_id": null}
+{"event": "agent_start", "job": 1793181081877, "provider": "wild", "project_key": "tmpad6v9yi2-e707b49ece", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpad6v9yi2", "session_id": null}
+.{"event": "agent_start", "job": 1793181082300, "provider": "replace", "project_key": "project-9ce36dbb30", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpskvrme9h/project", "session_id": null}
+.....{"event": "agent_start", "job": 1793181082540, "provider": "cli", "project_key": "tmp1ytf_7fu-99a1ef6dd6", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp1ytf_7fu", "session_id": null}
+{"event": "agent_start", "job": 1793181082541, "provider": "cli", "project_key": "tmp1ytf_7fu-99a1ef6dd6", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp1ytf_7fu", "session_id": null}
+..{"event": "agent_start", "job": 1793181082951, "provider": "claudecode", "project_key": "tmp4xx72w61-e2ec09ccb8", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp4xx72w61", "session_id": null}
+.{"event": "agent_start", "job": 1793181083190, "provider": "codex", "project_key": "tmpepc979e_-91590377b5", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpepc979e_", "session_id": null}
+.{"event": "agent_start", "job": 1793181083423, "provider": "deepcode", "project_key": "tmp8mpn06tb-fb461b056f", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp8mpn06tb", "session_id": null}
+.{"event": "agent_start", "job": 1793181083668, "provider": "api", "project_key": "tmp4pi9bc27-6d89d73b05", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp4pi9bc27", "session_id": null}
+.......{"event": "agent_start", "job": 1793181084404, "provider": "api", "project_key": "tmpfmwbp88k-c8bd8dfe76", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpfmwbp88k", "session_id": null}
+.{"event": "agent_start", "job": 1793181084914, "provider": "api", "project_key": "tmp7f5fdt2_-9401149be0", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp7f5fdt2_", "session_id": null}
+{"event": "agent_start", "job": 1793181084915, "provider": "api", "project_key": "tmp7f5fdt2_-9401149be0", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp7f5fdt2_", "session_id": "41522949d5134c88bbb06433ed17362e"}
+.
+----------------------------------------------------------------------
+Ran 22 tests in 4.175s
+
+OK

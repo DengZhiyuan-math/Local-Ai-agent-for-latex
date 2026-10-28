@@ -51,7 +51,83 @@ const Util = (() => {
              leaveOut: (r.private_dirs || []).filter((d) => !d.ignored) };
   }
 
-  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState };
+  function createStore(access, { project = () => null, now = Date.now, onError = () => {} } = {}) {
+    let used = {};
+    try { used = JSON.parse(access().getItem("prism.storage.used") || "{}"); } catch { /* no history */ }
+    const touch = (key) => {
+      used[key] = now();
+      try { access().setItem("prism.storage.used", JSON.stringify(used)); } catch { /* value already saved */ }
+    };
+    return {
+      get(key, fallback) {
+        try {
+          const value = access().getItem("prism." + key);
+          if (value === null) return fallback;
+          if (key.endsWith(".log")) touch("prism." + key);
+          return JSON.parse(value);
+        } catch { return fallback; }
+      },
+      set(key, value) {
+        const full = "prism." + key;
+        try {
+          const storage = access(), text = JSON.stringify(value);
+          try { storage.setItem(full, text); }
+          catch (e) {
+            if (!(e.name === "QuotaExceededError" || e.code === 22 || e.code === 1014)) throw e;
+            // Not knowing its project (the PDF window, an editor before its first tree), a
+            // page cannot tell its own chat from other projects': it removes none.
+            if (!project()) throw e;
+            const candidates = Array.from({ length: storage.length }, (_, i) => storage.key(i))
+              .filter((k) => { const m = /^prism\.chat\.([^.]+)\..+\.log$/.exec(k); return m && m[1] !== project() && k !== full; })
+              .sort((a, b) => (used[a] || 0) - (used[b] || 0));
+            let saved = false;
+            for (const old of candidates) {
+              storage.removeItem(old); delete used[old];
+              try { storage.setItem(full, text); saved = true; break; } catch { /* next oldest */ }
+            }
+            if (!saved) throw e;
+          }
+          if (key.endsWith(".log")) touch(full);
+          return true;
+        } catch {
+          onError("Browser storage is full or unavailable. Settings or chat history could not be saved.");
+          return false;
+        }
+      },
+    };
+  }
+  function boundedLog(elements, limit = 400000) {
+    let html = "";
+    for (let i = elements.length - 1; i >= 0; i--) if (elements[i].length + html.length <= limit) html = elements[i] + html;
+    return html;
+  }
+  function frameBatch(draw, { schedule = requestAnimationFrame, cancel = cancelAnimationFrame } = {}) {
+    const pending = new Map(); let frame = null;
+    function flush() {
+      if (frame !== null) cancel(frame);
+      frame = null;
+      const batch = [...pending]; pending.clear();
+      for (const [key, value] of batch) draw(key, value);
+    }
+    return { set(key, value) { pending.set(key, value); if (frame === null) frame = schedule(flush); }, flush };
+  }
+  function describeBuild(r, diagnostics) {
+    const errs = diagnostics.filter((d) => d.severity === "error").length;
+    const warns = diagnostics.length - errs;
+    let text, cls = "err";
+    if (r.cancelled) [text, cls] = ["build stopped", "warn"];
+    else if (r.timed_out) text = "stopped: the build took too long";
+    else if (r.exit === 0 || r.pdf_updated) {
+      text = errs ? `PDF built with ${plural(errs, "error")}` : r.exit === 0 ? "OK" : "PDF built with errors";
+      cls = errs || r.exit !== 0 ? "err" : warns ? "warn" : "ok";
+    } else text = `FAILED (exit ${r.exit})`;
+    // What ran, e.g. "pdflatex (default) · 3 passes · bibtex main".
+    const how = [r.main, r.builder === "builtin" ? `${r.engine} (${r.engine_reason === "default" ? "default" : "because of " + r.engine_reason})` : r.builder,
+      r.builder === "builtin" && r.passes ? plural(r.passes, "pass", "passes") : "",
+      ...(r.steps || []).filter((s) => !/\(pass \d+\)$/.test(s))].filter(Boolean).join(" · ");
+    return { text: text + (warns && !r.cancelled ? ` · ${plural(warns, "warning")}` : "") + ` · ${r.seconds}s`, cls, title: how, errors: errs };
+  }
+  return { ago, plural, escapeHtml, diffHtml, waitForRestart, publishState, createStore, boundedLog, frameBatch, describeBuild };
 })();
 
 if (typeof module !== "undefined") module.exports = Util;

@@ -63,6 +63,51 @@ class GitSyncTest(unittest.TestCase):
         return git(self.root, "log", "-1", "--format=%s"), \
             git(self.root, "show", "--name-only", "--format=", "HEAD").splitlines()
 
+    def test_a_rejected_push_is_not_failed_by_an_earlier_error(self):
+        """GitHub has new commits; the pull brings nothing in now (the agent is working):
+        the push must say that, not an hour-old "Could not reach GitHub"."""
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Saved")
+        self.g.error = "Could not reach GitHub: Could not resolve host: github.com"
+        real = self.g.git
+
+        def rejected(*args, **kw):
+            if args[0] == "push":
+                return subprocess.CompletedProcess(args, 1, "", " ! [rejected] main -> main (fetch first)")
+            return real(*args, **kw)
+        with mock.patch.object(self.g, "git", side_effect=rejected), \
+                mock.patch.object(self.g, "pull", side_effect=lambda manual=False: gitsync.Outcome(
+                    "local", "The agent is working: merged once its turn ends.")):
+            out = self.g.push(manual=True)
+        self.assertNotIn("resolve host", out.message or "")
+        self.assertIn("newer changes", out.message)
+
+    def test_a_push_that_timed_out_says_what_to_do(self):
+        """Not "Command '['git', '--no-optional-locks', 'push', …]' timed out after 180 seconds"."""
+        def stalled():
+            raise subprocess.TimeoutExpired(["git", "--no-optional-locks", "push", "-q", "--", "origin", "HEAD:main"], 180)
+        self.g._safe(stalled)
+        self.assertEqual(self.g.error, "GitHub did not answer within 180 seconds; check your internet "
+                                       "connection. It is tried again by itself.")
+
+    def test_an_idle_push_check_runs_no_git(self):
+        """The push due every few seconds, with nothing new, asks git nothing: what it would
+        answer changes only with the refs, the index or the configuration (refs_stamp)."""
+        import proc
+        self.assertEqual(self.g.push(manual=True).state, "synced")
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            for _ in range(3):
+                self.assertEqual(self.g.push(manual=True).state, "synced")
+        self.assertEqual(run.call_count, 0, [c.args[0] for c in run.call_args_list])
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Saved")
+        self.assertEqual((self.g.push(manual=True).state, self.g.ahead), ("synced", 0))
+        self.assertEqual(git(self.remote, "log", "-1", "--format=%s", "main"), "Saved: main.tex", "a new commit is pushed")
+        git(self.root, "remote", "add", "spare", str(self.remote))     # the configuration changed
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.g.push(manual=True)
+        self.assertGreater(run.call_count, 0, "a changed configuration is looked at again")
+
     def test_your_edits_are_committed_while_a_push_is_on_the_network(self):
         """A push on a slow network takes minutes: the commit of your edits before an agent's
         turn (in the request that starts the turn) does not wait for it."""
@@ -149,7 +194,7 @@ class GitSyncTest(unittest.TestCase):
         lock = repository.FilesLock(lambda: self.root / ".git")
         code = ("import sys, time; sys.path.insert(0, sys.argv[1]); import repository; "
                 "from pathlib import Path; l = repository.FilesLock(lambda: Path(sys.argv[2])); "
-                "l.acquire(); print('held', flush=True); time.sleep(1.5)")
+                "l.acquire(); print('held', flush=True); time.sleep(1.5); l.release()")
         p = subprocess.Popen([sys.executable, "-c", code, str(Path(gitsync.__file__).parent), str(self.root / ".git")],
                              stdout=subprocess.PIPE, text=True)
         self.addCleanup(p.wait)
@@ -344,6 +389,78 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual(self.last(), ("Agent: Expand the remark into a paragraph", ["main.tex"]))
         self.assertIn("sec.tex", git(self.root, "status", "--porcelain"), "your edit is not in it")
 
+    def test_delayed_watch_event_after_agent_commit_does_not_report_pending(self):
+        self.g.source_events = gitsync.diskwatch.Changes()
+        (self.root / "main.tex").write_text("agent\n", encoding="utf-8")
+        self.g.after_turn(["main.tex"], "Improve the proof")
+        self.g.source_events.changed()  # OS notification delivered after the commit
+        self.g.tick()
+        self.assertEqual(git(self.remote, "show", "main:main.tex"), "agent")
+        self.assertFalse(self.g.status()["pending"], "already uploaded edits must not show as pending")
+
+    def test_agent_commit_clears_watched_pending_but_keeps_other_edits_due(self):
+        self.g.source_events = gitsync.diskwatch.Changes()
+        (self.root / "main.tex").write_text("agent\n", encoding="utf-8")
+        self.g.source_events.changed()
+        self.g.tick()  # notification arrives before the agent commits
+        self.assertTrue(self.g.schedule.pending)
+        self.g.after_turn(["main.tex"], "Improve the proof")
+        self.assertFalse(self.g.schedule.pending, "the agent already committed the watched edit")
+        self.g.source_events.changed()
+        self.g.tick()
+        self.assertFalse(self.g.schedule.pending)
+        (self.root / "sec.tex").write_text("your separate edit\n", encoding="utf-8")
+        self.g.source_events.changed()
+        self.g.tick()
+        self.assertTrue(self.g.schedule.pending, "uncommitted edits still need autosave")
+        self.clock.advance(gitsync.IDLE + 1)
+        self.g.tick()
+        self.assertEqual(git(self.remote, "show", "main:sec.tex"), "your separate edit")
+
+    @unittest.skipUnless(sys.platform in ('win32', 'darwin'), 'native filesystem notifications')
+    def test_worker_syncs_external_edits_without_an_editor_save(self):
+        """Edits by Codex/Explorer must enter the same automatic schedule as browser saves."""
+        self.assert_external_autosave(lambda: self.clock.advance(gitsync.IDLE + 1))
+
+    @unittest.skipUnless(sys.platform in ('win32', 'darwin'), 'native filesystem notifications')
+    def test_external_edit_is_pushed_by_the_real_timer_without_a_manual_action(self):
+        from syncschedule import Schedule
+        self.g.schedule = Schedule()  # actual wall clock, not the fixture's movable clock
+        with mock.patch('syncschedule.IDLE', .15):
+            self.assert_external_autosave()
+
+    def assert_external_autosave(self, advance=None):
+        started = threading.Event()
+        original_start = self.g._start
+
+        def start():
+            original_start()
+            started.set()
+
+        with mock.patch.object(gitsync, 'TICK', .01), mock.patch.object(self.g, '_start', start):
+            worker = threading.Thread(target=self.g.run)
+            worker.start()
+            try:
+                self.assertTrue(started.wait(10))
+                self.assertTrue(self.g.status()['external_watch'])
+                (self.root / 'main.tex').write_text('external edit\n', encoding='utf-8')
+                deadline = time.monotonic() + 2
+                while not self.g.schedule.pending and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(self.g.schedule.pending, 'external edits never reached the automatic sync schedule')
+                if advance:
+                    advance()
+                deadline = time.monotonic() + 10
+                while not self.g.last_push and time.monotonic() < deadline:
+                    time.sleep(.01)
+                self.assertTrue(self.g.last_push, self.g.error)
+                self.assertEqual(git(self.remote, 'show', 'main:main.tex'), 'external edit')
+                self.assertTrue(self.last()[0].startswith('Autosave:'))
+            finally:
+                self.g.stop.set()
+                worker.join(10)
+                self.assertFalse(worker.is_alive())
+
     def test_agent_turn_skips_ignored_build_output(self):
         (self.root / ".gitignore").write_text("build/\n", encoding="utf-8")
         git(self.root, "add", ".gitignore")
@@ -386,10 +503,35 @@ class GitSyncTest(unittest.TestCase):
         (other / "sec.tex").write_text("from the other computer\n", encoding="utf-8")
         git(other, "commit", "-q", "-am", "elsewhere")
         git(other, "push", "-q")
-        self.g.pull()
+        done = self.g.pull()
+        self.assertEqual((done.state, done.error), ("synced", None))
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "from the other computer\n")
         self.assertEqual(self.g.behind, 0)
-        self.assertIn("Pulled 1 commit", self.g.notice)
+        self.assertIn("Brought in 1 change from GitHub", self.g.notice)
+
+    def test_a_pull_and_a_button_say_what_they_did(self):
+        """What a pull or a button met is returned to whoever asked; status() keeps it too,
+        until a step succeeds (the worker's commit, say)."""
+        away = self.remote.with_name(self.remote.name + "-away")      # GitHub cannot be reached
+        self.remote.rename(away)
+        self.addCleanup(away.rename, self.remote)                      # removed with the tmpdirs
+        done = self.g.pull()
+        self.assertEqual(done.state, "failed")
+        self.assertIn("Could not reach GitHub", done.error)
+        st = self.g.status()                                             # plain words, git's apart
+        self.assertEqual(st["error"], gitsync.said(done.error))
+        self.assertNotIn("\n", st["error"])
+        self.assertEqual(st["error_details"], gitsync.details(done.error))
+        self.assertTrue(st["error_details"], "git's own message is kept for Details")
+        clicked = self.g.now("pull")
+        self.assertIn("Could not reach GitHub", clicked.error)
+        (self.root / "main.tex").write_text("two\n", encoding="utf-8")
+        self.g.commit_all("Autosave")
+        self.assertIsNone(self.g.status()["error"])
+        self.assertIn("Could not reach GitHub", clicked.error, "the click's answer stays its own")
+        self.assertIn("Could not reach GitHub", self.g.now("resolve").error)
+        with mock.patch.object(self.g, "busy_fn", return_value=True):
+            self.assertEqual(self.g.now("commit").state, "local")
 
     def test_only_a_button_may_ask_for_a_login(self):
         seen, real = [], gitsync.gitenv.git
@@ -423,7 +565,7 @@ class GitSyncTest(unittest.TestCase):
         g.stop.set()                      # run() does its start-up work, then no ticks
         g.run()
         self.assertEqual((self.root / "sec.tex").read_text(encoding="utf-8"), "written elsewhere\n")
-        self.assertIn("Pulled 1 commit", g.notice)
+        self.assertIn("Brought in 1 change from GitHub", g.notice)
 
     def test_diverged_histories_are_merged_not_rewritten(self):
         """Both sides moved on (a co-author pushed while you wrote): a merge keeps both; no

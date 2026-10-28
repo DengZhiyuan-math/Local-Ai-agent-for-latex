@@ -26,8 +26,9 @@ import threading
 import time
 from functools import lru_cache
 
-from backends import (FILE_TOOL_RULE, SYSTEM_APPEND, NO_WINDOW, CliBackend, Job, executable, find_bin,
-                      agent_env, start, kill_tree, end_group)
+from backends import (CliBackend, Job, executable, find_bin, agent_env, start,
+                      kill_tree, end_group)
+from proc import run as run_bounded
 from fsutil import METADATA, is_metadata, metadata_paths, project_path
 import mcp_compile
 import sessionmeta
@@ -38,14 +39,12 @@ PROFILE = "prism-editor"
 @lru_cache(maxsize=8)
 def runtime_support(bin_path: str, stamp: int) -> str | None:
     try:
-        version = subprocess.run([bin_path, "--version"], capture_output=True, text=True,
-                                 timeout=10, **NO_WINDOW)
+        version = run_bounded([bin_path, "--version"], text=True, timeout=10)
         match = re.search(r"(\d+)\.(\d+)\.(\d+)", version.stdout)
         if version.returncode or not match or tuple(map(int, match.groups())) < (0, 138, 0):
             return "This Codex CLI version lacks the required named permission profiles. Update Codex CLI."
         for subcommand in (["exec"], ["exec", "resume"]):
-            p = subprocess.run([bin_path, *subcommand, "--help"], capture_output=True, text=True,
-                               timeout=10, **NO_WINDOW)
+            p = run_bounded([bin_path, *subcommand, "--help"], text=True, timeout=10)
             if p.returncode or any(flag not in p.stdout for flag in
                                    ("--ignore-user-config", "--ignore-rules")):
                 return "This Codex CLI version lacks isolated per-turn configuration. Update Codex CLI."
@@ -139,6 +138,7 @@ class Codex(CliBackend):
     efforts = ("minimal", "low", "medium", "high", "xhigh")
     enforces_scope = True
     input_types = ("text", "image")
+    file_tool_rule = CODEX_FILE_TOOL_RULE
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -180,7 +180,7 @@ class Codex(CliBackend):
     def _read_models(self, root: Path) -> list[dict]:
         """Metadata RPC only; no thread is started and no inference request is made."""
         proc = start([self.bin(), "app-server", "--listen", "stdio://", "-c", "features.hooks=false",
-                      "-c", "features.apps=false"], cwd=root, env=agent_env(), stdin=subprocess.PIPE,
+                      "-c", "features.apps=false"], cwd=root, env=agent_env(root=root), stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
         responses = queue.Queue()
         def read():
@@ -274,8 +274,7 @@ class Codex(CliBackend):
         if why:
             return why
         try:
-            p = subprocess.run([binary, "login", "status"], capture_output=True, text=True,
-                               timeout=10, **NO_WINDOW)
+            p = run_bounded([binary, "login", "status"], text=True, timeout=10)
             if p.returncode:
                 detail = (p.stdout + p.stderr).strip()
                 if "not logged in" in detail.lower():
@@ -340,10 +339,9 @@ class Codex(CliBackend):
                 cmd += ["--image", str(path)]
         # Codex has no append-system-prompt flag. Refresh the editor instructions on
         # every turn so resumed chats also replace an earlier Claude-only tool rule.
-        instructions = SYSTEM_APPEND.replace(FILE_TOOL_RULE, CODEX_FILE_TOOL_RULE)
         prompt = ("[Instructions from the editor for this turn]\n"
                   "These instructions replace earlier editor instructions.\n"
-                  f"{instructions}\n[Message]\n{job.prompt}")
+                  f"{self.system_text()}\n[Message]\n{job.prompt}")
         return cmd + ["-"], prompt
 
     def handle(self, d: dict, job: Job, st: dict) -> None:
@@ -369,10 +367,10 @@ class Codex(CliBackend):
         iid = str(item.get("id") or "")
         seen: set = st.setdefault("tools", set())
 
-        def tool(name: str, summary: str) -> None:
+        def tool(name: str, summary: str, path: str | None = None) -> None:
             if iid not in seen:
                 seen.add(iid)
-                job.tool(iid, name, summary)
+                job.tool(iid, name, summary, path=path)
 
         if kind == "agent_message" and completed and item.get("text"):
             job.emit({"t": "message_start"})
@@ -386,7 +384,7 @@ class Codex(CliBackend):
         elif kind == "file_change":
             changes = item.get("changes") if isinstance(item.get("changes"), list) else []
             paths = [_rel(c.get("path", ""), job.root) for c in changes if isinstance(c, dict)]
-            tool("Edit", ", ".join(paths))
+            tool("Edit", ", ".join(paths), paths[0] if len(paths) == 1 else None)
             if completed:
                 job.tool_result(iid, item.get("status") == "failed")
         elif kind == "mcp_tool_call":
@@ -402,5 +400,15 @@ class Codex(CliBackend):
             tool("WebSearch", item.get("query") or "")
             if completed:
                 job.tool_result(iid, False)
+        elif kind == "reasoning":
+            # Its reasoning, as the panel shows a model's thinking (a static "working…" before).
+            thought: set = st.setdefault("reasoning", set())
+            if iid not in thought:
+                thought.add(iid)
+                job.emit({"t": "thinking_start"})
+            if completed and item.get("text"):
+                job.emit({"t": "thinking", "text": str(item["text"])})
         elif kind == "error" and completed:
-            job.emit({"t": "error", "message": item.get("message") or "Codex error"})
+            # An error item is Codex's non-fatal notice (its turn goes on); turn.failed and a
+            # top-level error say how a turn failed.
+            job.emit({"t": "error", "message": item.get("message") or "Codex error", "notice": True})

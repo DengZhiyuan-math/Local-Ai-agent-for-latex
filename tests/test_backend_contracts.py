@@ -5,6 +5,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))    # test_agent, from wherever it is run
 from backend_openai import OpenAICompat, ToolError
 from test_agent import job_for
 from test_agent import manager, wait_done
@@ -137,6 +138,75 @@ class ChangeCoverage(unittest.TestCase):
             self.assertEqual(done["undo_unavailable"], ["large.bin"])
             self.assertEqual(m.undo(done["turn"])["skipped"], ["large.bin"])
             self.assertEqual((root / "large.bin").read_bytes(), b"new-content")
+
+
+class ToolPlace(unittest.TestCase):
+    """Every backend says which file a file tool works on, project-relative, so the editor
+    shows the agent there (turn.js's marks): not Claude Code's alone."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "sec").mkdir()
+        (self.root / "sec" / "a.tex").write_text("one\ntwo\nthree\n", encoding="utf-8")
+
+    def places(self, job):
+        return [(e["name"], e.get("path"), e.get("lines")) for e in job.events if e["t"] == "tool"]
+
+    def test_codex_deep_code_and_the_api_name_the_file(self):
+        job = job_for(root=self.root)
+        Codex("codex").handle({"type": "item.started", "item": {
+            "type": "file_change", "id": "1", "changes": [{"path": str(self.root / "sec" / "a.tex")}]}}, job, {})
+        OpenAICompat("ds", {"base_url": "http://x"})._call(job, {"id": "2", "name": "read_file", "arguments":
+                                                               json.dumps({"path": "sec/a.tex", "offset": 2, "limit": 2})}, [])
+        job.tool("3", "edit_file", "outside", path=str(self.root.parent / "elsewhere.tex"))
+        self.assertEqual(self.places(job), [("Edit", "sec/a.tex", None), ("Read", "sec/a.tex", [2, 3]),
+                                            ("edit_file", None, None)])
+
+    def test_the_marks_follow(self):
+        """What turn.js makes of such an event: the file marked, the lines read."""
+        node = subprocess.run(["node", "-e", """
+const Turn = require(process.argv[1]);
+const t = Turn.create({ now: () => 0 });
+const steps = t.feed([{t: "tool", id: "2", name: "Read", summary: "sec/a.tex", path: "sec/a.tex", lines: [2, 3]}]);
+console.log(JSON.stringify(steps.filter((s) => s.mark)));""",
+                               str(Path(__file__).resolve().parents[1] / "prism_local" / "static" / "turn.js")],
+                              capture_output=True, text=True)
+        self.assertEqual(json.loads(node.stdout), [{"mark": "clear-read"}, {"mark": "on", "path": "sec/a.tex"},
+                                                   {"mark": "read", "path": "sec/a.tex", "from": 1, "to": 2}])
+
+
+class SystemText(unittest.TestCase):
+    """The editor's instructions are built in one place (Backend.system_text); each backend
+    only names its line on file tools. The text is what each adapter built for itself."""
+
+    def test_each_backend_gets_the_text_it_had(self):
+        from backends import FILE_TOOL_RULE, SYSTEM_APPEND
+        from backend_claude import ClaudeCode
+        from backend_codex import CODEX_FILE_TOOL_RULE
+        from backend_deepcode import DEEPCODE_FILE_TOOL_RULE
+        cases = ((ClaudeCode("claude"), SYSTEM_APPEND),
+                 (Codex("codex"), SYSTEM_APPEND.replace(FILE_TOOL_RULE, CODEX_FILE_TOOL_RULE)),
+                 (DeepCode("deepcode"), SYSTEM_APPEND.replace(FILE_TOOL_RULE, DEEPCODE_FILE_TOOL_RULE)),
+                 (OpenAICompat("api", {"base_url": "http://unused"}), SYSTEM_APPEND.replace(FILE_TOOL_RULE, "")))
+        for backend, text in cases:
+            with self.subTest(backend.kind):
+                self.assertEqual(backend.system_text(), text)
+        self.assertEqual(len({text for _, text in cases}), 4)
+
+    def test_the_adapters_send_it(self):
+        from backend_claude import ClaudeCode
+        with tempfile.TemporaryDirectory() as tmp:
+            job = job_for(root=Path(tmp), prompt="go", mode="edit")
+            claude = ClaudeCode("claude", {"bin": sys.executable})
+            with mock.patch("backend_claude.use_config_dir"):
+                cmd, _ = claude.command(job)
+            self.assertEqual(cmd[cmd.index("--append-system-prompt") + 1], claude.system_text())
+            codex = Codex("codex", {"bin": sys.executable})
+            self.assertIn("\n" + codex.system_text() + "\n[Message]\ngo", codex.command(job)[1])
+            deepcode = DeepCode("deepcode")
+            self.assertIn("\n" + deepcode.system_text() + "\n[Message]\ngo", deepcode.message(job))
+            api = OpenAICompat("api", {"base_url": "http://unused"})
+            self.assertTrue(api.system_prompt(Path(tmp)).startswith(api.system_text() + "\n"))
 
 
 class DefaultModel(unittest.TestCase):
@@ -280,6 +350,31 @@ class DeepCodeContract(unittest.TestCase):
 
 
 class VisualAttachments(unittest.TestCase):
+    def test_follow_up_keeps_one_copy_of_the_original_image(self):
+        api = FakeAPI([[{"choices": [{"delta": {"content": reply}}]}]
+                       for reply in ("image received", "the same image")])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "figure.png").write_bytes(b"\x89PNG\r\n\x1a\n\x00fixture")
+            backend = OpenAICompat("api", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                "default_model": "vision-fixture", "input_types": ["text", "image"]})
+            m = manager(root, api=backend)
+            first = wait_done(m.jobs[m.start("describe", None, "ask", attachments=["figure.png"])["job"]])
+            second = wait_done(m.jobs[m.start("explain that image", first["session_id"], "ask")["job"]])
+            self.assertEqual((first["exit"], second["exit"]), (0, 0))
+            self.assertEqual(first["session_id"], second["session_id"])
+            images = []
+            for request in api.requests:
+                images.append([part["image_url"]["url"]
+                               for message in request["body"]["messages"]
+                               if isinstance(message.get("content"), list)
+                               for part in message["content"] if part.get("type") == "image_url"])
+            self.assertEqual(len(images), 2)
+            self.assertEqual(len(images[0]), 1)
+            self.assertEqual(images[1], images[0], "the follow-up still sees the original image once")
+
     def test_api_receives_image_content_and_unsupported_inputs_are_rejected(self):
         api = FakeAPI([[{"choices": [{"delta": {"content": "image received"}}]}]])
         self.addCleanup(api.server_close)
@@ -301,6 +396,85 @@ class VisualAttachments(unittest.TestCase):
             backend.input_types = ("text",)
             self.assertIn("does not support image", m.start("describe", None, "ask",
                                                           attachments=["figure.png"])["error"])
+
+
+class OneErrorPerFailure(unittest.TestCase):
+    """A failed turn says what went wrong once, with every backend: as an error event while
+    it ran, or as the done event's error, not both (and not twice in one of them)."""
+
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        (self.root / "main.tex").write_text("x\n", encoding="utf-8")
+
+    def told(self, backend):
+        m = manager(self.root, lambda: ["main.tex"], **{backend.id: backend})
+        r = m.start("go", None, "ask")
+        self.assertIn("job", r, r)
+        job = m.jobs[r["job"]]
+        done = wait_done(job, 30)
+        self.assertEqual(done["outcome"], "failed")
+        return [e["message"] for e in job.events if e["t"] == "error"] + ([done["error"]] if done["error"] else [])
+
+    def cli(self, cls, script):
+        """`cls` running `script` (Python) as its CLI, with no login or settings to check."""
+        path = self.root / "cli.py"
+        path.write_text(script, encoding="utf-8")
+
+        class Fake(cls):
+            def unavailable(self):
+                return None
+
+            def preflight(self, root):
+                return None
+
+            def bin(self):
+                return str(path)
+
+            def command(self, job):
+                return [sys.executable, str(path)], job.prompt
+        return Fake(cls.__name__.lower())
+
+    def test_claude_code(self):
+        from backend_claude import ClaudeCode
+        said = self.told(self.cli(ClaudeCode, (
+            "import json, sys\n"
+            "init = json.loads(sys.stdin.readline())\n"
+            "print(json.dumps({'type': 'control_response', 'response': {'subtype': 'success', "
+            "'request_id': init['request_id'], 'response': {}}}), flush=True)\n"
+            "user = json.loads(sys.stdin.readline())\nassert user['type'] == 'user'\n"
+            "print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': 's'}))\n"
+            "print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True, "
+            "'result': 'API Error: 529 overloaded', 'session_id': 's'}))\n"
+            "print('retrying', file=sys.stderr)\nsys.exit(1)\n")))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("529 overloaded", said[0])
+
+    def test_codex(self):
+        said = self.told(self.cli(Codex, (
+            "import json, sys\nsys.stdin.read()\n"
+            "print(json.dumps({'type': 'thread.started', 'thread_id': 't'}))\n"
+            "print(json.dumps({'type': 'turn.failed', 'error': {'message': 'stream disconnected'}}))\n"
+            "print('WARN reconnecting', file=sys.stderr)\nsys.exit(1)\n")))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("stream disconnected", said[0])
+
+    def test_deep_code(self):
+        backend = self.cli(DeepCode, "import sys\nsys.stdin.read()\nsys.stderr.write('Error: invalid API key')\nsys.exit(1)\n")
+        with mock.patch.dict(os.environ, {"HOME": str(self.root), "USERPROFILE": str(self.root)}):
+            said = self.told(backend)
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("invalid API key", said[0])
+
+    def test_openai_compatible_api(self):
+        api = FakeAPI([(500, "upstream overloaded")])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        os.environ["PRISM_TEST_KEY"] = "sk-test"
+        self.addCleanup(os.environ.pop, "PRISM_TEST_KEY", None)
+        said = self.told(OpenAICompat("api", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                              "api_key_env": "PRISM_TEST_KEY", "models": ["m"]}))
+        self.assertEqual(len(said), 1, said)
+        self.assertIn("upstream overloaded", said[0])
 
 
 if __name__ == "__main__":

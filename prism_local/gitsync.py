@@ -18,6 +18,7 @@ off per clone (.git/prism-local.json, never committed).
 GitSync is what the editor and the Home page call; what it decides with lives apart:
 - synctarget.py: where the repository syncs to, and the target its author confirmed;
 - repository.py: where a project's folder is in git (locate), and its locks;
+- repoview.py: what changed in it, as the editor, the Home page and the commits count it;
 - integrate.py: every merge, losing nothing;
 - syncschedule.py: when to commit, push and pull, on a clock it is given.
 
@@ -42,8 +43,10 @@ import integrate
 import keepboth
 import registry
 import gitenv
-import sources
-from repository import SHARED_MARKER, FilesLock, RepoBusy, Repository, locate, shared_marker  # noqa: F401
+import repoview
+import diskwatch
+from errors import say
+from repository import SHARED_MARKER, FilesLock, Place, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
                         repository_identity, safe_git_message)
 import synctarget
@@ -132,10 +135,40 @@ def record_move(old: Path, new: Path) -> str | None:
 
 @dataclass(frozen=True)
 class Outcome:
-    """What one sync step did, for whoever asked it: not what another thread did meanwhile
-    (the shared `error` may be someone else's)."""
+    """What one sync step (a push, a pull, a resolve, a button) did, for whoever asked it:
+    not what another thread did meanwhile (status()'s `error` is the last error any step
+    met, maybe another's)."""
     state: str                    # "synced": GitHub has it; "local": kept here (message: why); "failed"
     message: str | None = None
+
+    @property
+    def error(self) -> str | None:
+        """What went wrong; None unless the step failed."""
+        return self.message if self.state == "failed" else None
+
+
+class _Looking(RepoSettings):
+    """The repository's settings as status() reads them: its look at the target binds
+    and repairs nothing (validate_target does, in the worker or at a button)."""
+
+    def bind(self, target: dict) -> None:
+        pass
+
+    def _repair(self, bound: dict) -> list[str]:
+        return []
+
+
+UNREACHABLE = "Could not reach GitHub. Check the internet connection; Prism tries again by itself.\n"
+
+
+def said(error: str | None) -> str | None:
+    """An error's plain words: its first line (see GitSync._failed)."""
+    return error.split("\n", 1)[0] if error else error
+
+
+def details(error: str | None) -> str | None:
+    """What an error says for those who want to know (git's message): after its first line."""
+    return (error.split("\n", 1)[1].strip() or None) if error and "\n" in error else None
 
 
 def _names(paths: list[str]) -> str:
@@ -176,6 +209,7 @@ class GitSync:
         self.last_push = 0.0
         self.ahead = self.behind = 0
         self.has_remote = False
+        self._remote_stamp = None             # _remote_state's answers are for this (refs_stamp)
         self.upstream: str | None = None
         self.target: dict | None = None
         self.blocked_reason: str | None = None
@@ -189,6 +223,8 @@ class GitSync:
         self.clash: list[str] = []            # files you and GitHub both changed (project paths)
         self.kept: list[dict] = []            # where both versions were kept: {"path", "line", "who", "mtime"}
         self.stop = threading.Event()
+        self.source_events = None
+        self.source_generation = 0
 
     @property
     def notice(self) -> str | None:
@@ -276,10 +312,6 @@ class GitSync:
         """A project-relative path as git sees it (from the repository's top)."""
         return self.prefix + path
 
-    def _pathspec(self) -> str:
-        """This project's files only. literal: a folder may be called "a*b"."""
-        return f":(top,literal){self.prefix.rstrip('/')}" if self.prefix else "."
-
     # ------------------------------------------------------------ the switch
     @property
     def settings(self) -> RepoSettings | None:
@@ -296,11 +328,12 @@ class GitSync:
 
     # ------------------------------------------------------------ what changed
     def changes(self) -> list[str]:
-        """Paths (from the top) with changes worth recording: no build output, no huge files."""
-        out = self._ok("status", "--porcelain", "-z", "-uall", "--", self._pathspec(), timeout=30)
-        top, outdir = self.top or self.root_fn(), self.prefix + self.outdir_fn().strip("/")
-        return sorted({path for xy, path in sources.parse_status(out)
-                       if sources.recordable(path, xy == "??", top, outdir)})
+        """Paths (from the top) with changes worth recording: no build output, no huge files
+        (repoview.Changes.recordable). Asked of git now: a commit follows."""
+        if not self.check_repo():
+            raise RuntimeError("This project has no repository to sync")
+        place = Place("shared" if self.prefix else "own", self.repo, self.prefix)
+        return repoview.status(place).recordable(self.outdir_fn())
 
     def commit(self, paths: list[str], message: str) -> bool:
         """Commit exactly `paths` (other changes stay as they are). False: nothing to commit."""
@@ -359,7 +392,15 @@ class GitSync:
     def validate_target(self, fresh: bool = False) -> bool:
         with self.lock:
             if self.check_repo():
-                self.target, self.blocked_reason = self.settings.validate(fresh)
+                settings = self.settings
+                self.target, self.blocked_reason = settings.validate(fresh)
+                if settings.repaired:
+                    # A repository Prism set up, which another program or a terminal changed.
+                    self.notice = ("Prism put back this project's connection to GitHub, which had been "
+                                   "changed outside Prism" + ("" if self.blocked_reason is None else
+                                                              ", but it still cannot sync"))
+                    print(json.dumps({"event": "git_target", "git_top": str(self.top), "stage": "repair",
+                                      "repaired": settings.repaired}), flush=True)
             else:
                 self.target, self.blocked_reason = None, "This project has no repository to sync"
             signature = (self.blocked_reason, json.dumps(public_target(self.target), sort_keys=True))
@@ -379,17 +420,35 @@ class GitSync:
         """Fetch GitHub's branch into the tracking ref; None when there is nothing to fetch
         from. The transfer holds only the repository's network lock (Repository.transferring:
         RepoBusy after `wait` seconds): commits, merges and saves go on meanwhile."""
-        if not self.validate_target(fresh=True) or (not manual and not self.enabled):
+        if not self.validate_target() or (not manual and not self.enabled):
             return None
-        t = self.target
-        self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
         with self.repo.transferring(wait):
+            t = self._checked_target()
+            if t is None:
+                return None
+            self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
             return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
                             t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
                             interactive=manual)
 
+    def _checked_target(self) -> dict | None:
+        """The sync target as the configuration names it now, checked (validate_target,
+        read afresh), or None when it may not be synced with (blocked_reason says why).
+        Asked holding the network lock, right before a fetch or push: the wait for that
+        lock lasts as long as another window's transfer (minutes on a slow network), and
+        git reads the configuration when it starts, so a change made meanwhile (another
+        program, a terminal) is seen here, not sent to."""
+        return dict(self.target) if self.validate_target(fresh=True) else None
+
     def _remote_state(self) -> None:
         self.validate_target()
+        # git is asked again only when the branches, the remotes or the configuration
+        # changed on the disk, or the target did: an idle push check every few seconds
+        # then runs no git at all.
+        stamp = refs_stamp(self.git_dir)
+        key = None if stamp is None else (stamp, json.dumps(self.target, sort_keys=True, default=str))
+        if key is not None and key == self._remote_stamp:
+            return
         # A target names one of the repository's remotes (_target checked it, and looks
         # again when the configuration changes): only without one is git asked.
         self.has_remote = bool(self.target) or bool(self.git("remote", timeout=20).stdout.strip())
@@ -404,36 +463,37 @@ class GitSync:
         else:
             n = self.git("rev-list", "--count", "HEAD", timeout=20).stdout.strip()
             self.ahead, self.behind = (int(n) if n.isdigit() else 0), 0
+        self._remote_stamp = key
 
     @one_at_a_time
     def push(self, retry: bool = True, tries: int = PUSH_TRIES, manual: bool = False) -> Outcome:
         """Push. If GitHub has commits this copy lacks (a co-author pushed), bring them in
         (pull: a merge, never a rewrite) and push again, as long as GitHub keeps moving on
         (co-authors pushing one after another), up to `tries` times. Never forced. Returns
-        what this push did (`error` also says so, for the pages). The transfer holds only
+        what this push did (a failure is kept for the pages too). The transfer holds only
         the network lock: a commit (your edits before an agent's turn) does not wait for it."""
         if not self.check_repo():
             raise RuntimeError("This project has no repository to sync")
-        attempts = tries if retry else 1
+        attempts = max(1, tries) if retry else 1
         for attempt in range(attempts):
             with self.lock:
                 self._remote_state()
                 if not self.has_remote:
-                    return Outcome("local", "The repository has no remote, so nothing was pushed.")
+                    return Outcome("local", "This project is not on GitHub yet, so nothing was uploaded.")
                 if self.blocked_reason:
-                    return Outcome("local", "Sync paused: " + self.blocked_reason)
+                    return Outcome("local", str(synctarget.plain(self.blocked_reason)))
                 if not manual and not self.enabled:
                     return Outcome("local", "Automatic sync is off.")
                 if not self.ahead:
                     return Outcome("synced")
-                if not self.validate_target(fresh=True):
-                    return Outcome("local", "Sync paused: " + str(self.blocked_reason))
-                args = ["push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
-                        self.target["remote"], f"HEAD:{self.target['branch_ref']}"]
             self.state = "pushing"
             try:
                 with self.repo.transferring():
-                    r = self.git(*args, timeout=180, interactive=manual)
+                    t = self._checked_target()
+                    if t is None:
+                        return Outcome("local", str(synctarget.plain(self.blocked_reason)))
+                    r = self.git("push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
+                                 t["remote"], f"HEAD:{t['branch_ref']}", timeout=180, interactive=manual)
             finally:
                 self.state = "idle"
             if r.returncode == 0:
@@ -447,19 +507,27 @@ class GitSync:
             behind = any(s in msg for s in ("rejected", "fetch first", "non-fast-forward",
                                             "refusing a push that would drop commits"))
             if behind and attempt < attempts - 1:
-                self.pull(manual=manual)
-                if self.error:
-                    return Outcome("failed", self.error)        # pull said what is wrong
+                # Only what this pull says counts, not an earlier error ("Could not reach
+                # GitHub", an hour ago) still shown on the pages.
+                pulled = self.pull(manual=manual)
+                if pulled.error:
+                    return pulled                               # pull said what is wrong
                 if self.behind and self.busy_fn():
                     return Outcome("local", "The agent is working: pushed once its turn ends.")
                 time.sleep(min(0.3 * (attempt + 1), 1.5))
                 continue
             with self.lock:
                 self.schedule.push_failed()
-                self.error = ("GitHub has changes this copy does not have yet; pull first."
-                              if behind else "Push failed: " + msg[-300:])
-            return Outcome("failed", self.error)
-        return Outcome("failed", self.error)
+                return self._failed("GitHub has newer changes, from a co-author, that kept arriving "
+                                    "while Prism brought them in; it tries again by itself.\n" + msg[-300:]
+                                    if behind else "Could not upload to GitHub.\n" + msg[-300:])
+
+    def _failed(self, message: str) -> Outcome:
+        """A step's failure: returned to whoever asked, and kept for the pages (status()'s
+        `error`, until a step succeeds). Its first line is said in plain words; what follows
+        (git's own message) is shown under Details (said, details)."""
+        self.error = message
+        return Outcome("failed", message)
 
     def record_file(self, path: str, message: str) -> Outcome:
         """Commit one file the editor wrote (an upload, `path` in the project) alone, other
@@ -478,94 +546,101 @@ class GitSync:
         if pushed.state == "synced":
             return Outcome("synced", f"Committed and pushed to {self.upstream or 'origin'}.")
         if pushed.state == "local":
-            return Outcome("local", "Committed. " + str(pushed.message))
-        return Outcome("failed", "Committed, but not pushed: " + str(pushed.message))
+            return Outcome("local", "Saved in the project's history. " + str(pushed.message))
+        return Outcome("failed", "Saved in the project's history, but not uploaded: " + str(pushed.message))
 
     @one_at_a_time
-    def pull(self, manual: bool = False) -> None:
+    def pull(self, manual: bool = False) -> Outcome:
         """Fetch, and bring GitHub's commits in. Your changes are committed first. When only
         GitHub moved on, a fast-forward; when both did (co-authors writing at the same time),
         a merge commit that keeps both sides. Nothing is ever rewritten or thrown away: when
         the two sides changed the same lines, the merge is called off, both versions stay
-        where they are (GitHub's there, yours committed here), and `error` says which files.
-        The fetch holds only the network lock; the merge holds the repository and the files."""
+        where they are (GitHub's there, yours committed here), and the error says which files.
+        Returns what this pull did (a failure is kept for the pages too). The fetch holds
+        only the network lock; the merge holds the repository and the files."""
         if not self.check_repo():
             raise RuntimeError("This project has no repository to sync")
         self.schedule.fetched()
         if not self.has_remote and not self.git("remote", timeout=20).stdout.strip():
-            return
+            return Outcome("local", "This project is not on GitHub yet, so there was nothing to get.")
         self.state = "pulling"
         try:
             r = self.fetch(manual=manual)
             if r is None:
-                return
+                return Outcome("local", str(synctarget.plain(self.blocked_reason)) if self.blocked_reason
+                               else "Automatic sync is off.")
             if r.returncode != 0:
-                self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
-                return
-            push_after = self._take_in()
+                return self._failed(UNREACHABLE + safe_git_message((r.stderr or r.stdout).strip())[-200:])
+            took, push_after = self._take_in()
         finally:
             self.state = "idle"
         if push_after:
-            self.push(retry=False, manual=manual)       # put the dropped commits back on GitHub now
+            return self.push(retry=False, manual=manual)    # put the dropped commits back on GitHub now
+        return took
 
-    def _take_in(self) -> bool:
-        """After a fetch: merge what it brought (see pull). True when this copy has commits
-        a rewrite dropped from GitHub, to push back now (after the locks are let go)."""
+    def _take_in(self) -> tuple[Outcome, bool]:
+        """After a fetch: merge what it brought (see pull). Returns what it did, and whether
+        this copy has commits a rewrite dropped from GitHub, to push back now (after the
+        locks are let go)."""
         with self.lock, self._changing(files=False):
             self._remote_state()
             if self.blocked_reason:
-                return False
+                return Outcome("local", str(synctarget.plain(self.blocked_reason))), False
             if self.busy_fn():
                 # An agent turn is running: it reads and writes the files now, and a merge
                 # changing them under it could have its writes drop a co-author's text.
                 # Fetched; merged once the turn ends.
-                return False
-            healed = self._heal_rewrite()
+                return Outcome("local", "The agent is working: GitHub's changes come in once its turn ends."), False
+            healed, error = self._heal_rewrite()
             if healed is None:               # a rewrite to keep: this copy waits
-                return False
+                return self._failed(error), False
             if not self.behind:
                 if self.clash:               # resolved elsewhere (a terminal, a co-author)
                     self.error, self.clash = None, []
-                return bool(healed and self.ahead)
-            with self._changing():
-                try:
-                    if self.busy_fn():       # an agent turn is writing: after it
-                        return False
-                    if self.commit_all("Autosave before pulling"):
-                        self._remote_state()
-                        if self.blocked_reason:
-                            return False
-                    n = self.behind
-                    if not self.ahead:
-                        m = self.git("merge", "-q", "--ff-only", self.tracking_ref, timeout=60)
-                        if m.returncode == 0:
-                            self.notice = f"Pulled {n} commit{'s' if n != 1 else ''} from GitHub"
-                            self.error, self.clash = None, []
+            else:
+                with self._changing():
+                    try:
+                        if self.busy_fn():       # an agent turn is writing: after it
+                            return Outcome("local", "The agent is working: GitHub's changes come in once its turn ends."), False
+                        if self.commit_all("Autosave before pulling"):
+                            self._remote_state()
+                            if self.blocked_reason:
+                                return Outcome("local", str(synctarget.plain(self.blocked_reason))), False
+                        n = self.behind
+                        if not self.ahead:
+                            m = self.git("merge", "-q", "--ff-only", self.tracking_ref, timeout=60)
+                            if m.returncode == 0:
+                                self.notice = f"Brought in {n} change{'s' if n != 1 else ''} from GitHub"
+                                self.error, self.clash = None, []
+                            else:
+                                error = "Could not bring in the changes from GitHub.\n" + (m.stderr or m.stdout).strip()[-200:]
                         else:
-                            self.error = "Could not update from GitHub: " + (m.stderr or m.stdout).strip()[-200:]
-                    else:
-                        self._merge(n)
-                finally:
-                    self._finish_crashed_merge()    # a merge its timeout cut off
-            self._remote_state()
-            if healed:
-                self.notice = self._heal_note        # says more than "combined"
-            return bool(healed and self.ahead and not self.error)
+                            error = self._merge(n) or error
+                    finally:
+                        self._finish_crashed_merge()    # a merge its timeout cut off
+                self._remote_state()
+                if healed:
+                    self.notice = self._heal_note    # says more than "combined"
+            if error:
+                return self._failed(error), False
+            return Outcome("synced"), bool(healed and self.ahead)
 
-    def _heal_rewrite(self) -> bool | None:
+    def _heal_rewrite(self) -> tuple[bool | None, str | None]:
         """Someone rewrote the branch on GitHub (a force push from a terminal, `--no-verify`
         past the guard): commits it had before are gone from it. Every prism-local copy
         keeps them, so bring them back into this branch (the usual merge with GitHub's new
         history then follows, and the push puts them back on GitHub). Git's log of where
         GitHub's branch has been (the reflog of refs/remotes/...) says what it had, also when
         the Home page fetched in between. `"restore_rewritten": false` in
-        .git/prism-local.json leaves a deliberate rewrite alone (removing a file from history)."""
+        .git/prism-local.json leaves a deliberate rewrite alone (removing a file from history).
+        Returns (healed, error): True when they are put back; False when nothing was dropped,
+        or what was could not be put back (the error says why); None when this copy waits."""
         if not self.upstream:
-            return False
+            return False, None
         ref = f"refs/remotes/{self.upstream}"
         now = self.git("rev-parse", "-q", "--verify", ref, timeout=20).stdout.strip()
         if not now:
-            return False
+            return False, None
         was = self.git("reflog", "show", "--format=%H", "-n", "20", ref, timeout=20).stdout.split()
         # Positions it had that are no longer in its history (newest first). Those the last
         # look found in the history of its tip then are still in it while that tip is (a
@@ -589,19 +664,19 @@ class GitSync:
                     lost.append(c)
         if not lost:
             self._in_history = (ref, now, frozenset(ok))
-            return False
+            return False, None
         tip = lost[0]                            # the newest position it had: it holds the rest
         dropped = self.git("rev-list", "--count", f"{now}..{tip}", timeout=20).stdout.strip()
         who = self.git("log", "-1", "--format=%an", now, timeout=20).stdout.strip() or "someone"
         if self.settings.read().get("restore_rewritten") is False:
             # A rewrite on purpose (a file removed from history): no merge, no push, so as not
             # to bring it back; this copy keeps everything, and waits until it matches GitHub.
-            self.notice = (f"{who} rewrote the history on GitHub ({dropped} commits dropped); left as "
-                           "it is (restore_rewritten is off)")
-            self.error = ("GitHub's history was rewritten on purpose (restore_rewritten is off): this "
-                          "copy does not sync until it follows the new history. It keeps everything; "
-                          "once you are sure, in a terminal: git reset --keep @{u}")
-            return None
+            self.notice = (f"{who} replaced the history on GitHub, dropping {dropped} saved "
+                           f"change{'s' if dropped != '1' else ''}; this project is set to leave that alone")
+            return None, ("Someone replaced the history on GitHub, and this project is set to leave that "
+                          "alone: it does not sync until it follows the new history. Everything is kept "
+                          "here.\nrestore_rewritten is off in .git/prism-local.json. Once you are sure, "
+                          "in a terminal: git reset --keep @{u}")
         if self.git("merge-base", "--is-ancestor", tip, "HEAD", timeout=20).returncode != 0:
             with self._changing():
                 try:
@@ -612,21 +687,21 @@ class GitSync:
                 finally:
                     self._finish_crashed_merge()    # a merge its timeout cut off
             if failed:
-                self.error = ("The history on GitHub was rewritten (a force push) and its old commits "
-                              "could not be brought back by themselves: " + failed)
-                return False
+                return False, ("Someone replaced the history on GitHub, and Prism could not put back "
+                               "what it dropped by itself. Everything is kept here.\n" + failed)
         self._remote_state()
-        self._heal_note = (f"{who} rewrote the history on GitHub (a force push) and dropped {dropped} "
-                           f"commit{'s' if dropped != '1' else ''}; they are put back, nothing is lost")
+        self._heal_note = (f"{who} replaced the history on GitHub, dropping {dropped} saved "
+                           f"change{'s' if dropped != '1' else ''}; Prism put them back, nothing is lost")
         self.notice = self._heal_note
-        return True
+        return True, None
 
-    def _merge(self, n: int) -> None:
-        """Merge GitHub's branch into this one, losing nothing (integrate.merge)."""
-        self._apply(integrate.merge(self.repo, self.tracking_ref, n, self.prefix))
+    def _merge(self, n: int) -> str | None:
+        """Merge GitHub's branch into this one, losing nothing (integrate.merge). Returns
+        why it could not."""
+        return self._apply(integrate.merge(self.repo, self.tracking_ref, n, self.prefix))
 
-    def _apply(self, r: integrate.Result) -> None:
-        """What a merge did, for the pages."""
+    def _apply(self, r: integrate.Result) -> str | None:
+        """What a merge did, for the pages; returns its error."""
         if r.kept:
             with self._state:
                 paths = {k["path"] for k in r.kept}
@@ -636,6 +711,7 @@ class GitSync:
         self.error = r.error
         if r.clash is not None:
             self.clash = r.clash
+        return r.error
 
     def kept_both(self) -> list[dict]:
         """The places where both versions were kept and are still there."""
@@ -683,21 +759,21 @@ class GitSync:
                 "diff": diff.stdout}
 
     @one_at_a_time
-    def resolve_mine(self) -> None:
+    def resolve_mine(self) -> Outcome:
         """After a clash, once you have edited the files to hold what both of you want: merge
         GitHub's branch, taking your version of the lines both changed (integrate.combine_mine),
-        and push. Their version stays in their commits; nothing leaves the history."""
+        and push. Their version stays in their commits; nothing leaves the history. Returns
+        what it did (a failure is kept for the pages too)."""
         self.commit_all("Combined with GitHub's version")     # recorded even when offline
         r = self.fetch(manual=True)
         if r is None:
-            return
+            return Outcome("local", str(synctarget.plain(self.blocked_reason)))
         if r.returncode != 0:
-            self.error = "Could not reach GitHub: " + safe_git_message((r.stderr or r.stdout).strip())[-200:]
-            return
+            return self._failed(UNREACHABLE + safe_git_message((r.stderr or r.stdout).strip())[-200:])
         with self.lock, self._changing(files=False):
             self._remote_state()
             if self.blocked_reason:
-                return
+                return Outcome("local", str(synctarget.plain(self.blocked_reason)))
             if not self.behind:
                 self.clash = []
             else:
@@ -706,13 +782,12 @@ class GitSync:
                         self.commit_all("Combined with GitHub's version")     # saved during the fetch
                         failed = integrate.combine_mine(self.repo, self.tracking_ref)
                         if failed:
-                            self.error = failed
-                            return
+                            return self._failed(failed)
                     finally:
                         self._finish_crashed_merge()        # a merge its timeout cut off
                 self.error, self.clash = None, []
                 self.notice = "Combined with GitHub's version"
-        self.push(manual=True)
+        return self.push(manual=True)
 
     # ------------------------------------------------------------ hooks
     def touched(self) -> None:
@@ -737,36 +812,68 @@ class GitSync:
         first = next((ln.strip() for ln in prompt.splitlines()
                       if ln.strip() and not ln.startswith("[")), "") or "(no message)"
         first = first if len(first) <= 72 else first[:71] + "…"
-        self._safe(lambda: self._record(lambda: [p for p in self.changes() if p in changed],
-                                        lambda _: f"Agent: {first}"))
+        def record_turn():
+            with self.lock, self._changing():
+                mark = self.schedule.mark()
+                self._record(lambda: [p for p in self.changes() if p in changed],
+                             lambda _: f"Agent: {first}")
+                if not self.changes():
+                    self.schedule.recorded(mark)
+        self._safe(record_turn)
 
-    def _safe(self, fn) -> None:
+    def _safe(self, fn):
+        """fn(), what it returns; a failure is kept for the pages and returned as an Outcome."""
         try:
-            fn()
+            return fn()
         except RepoBusy:
-            pass                            # another window is at it; the next tick tries again
+            # another window is at it; the next tick tries again
+            return Outcome("local", "Another editor of this repository is syncing it.")
         except (OSError, subprocess.SubprocessError, RuntimeError, ValueError, keepboth.MergeError) as e:
-            self.error = str(e)[-300:]
+            return self._failed(say(e)[-300:])
 
     # ------------------------------------------------------------ the worker
     def tick(self) -> None:
         if not self.active():
             return
+        if self.source_events is not None:
+            generation = self.source_events.stamp()
+            if generation != self.source_generation:
+                # Notifications may arrive after an agent committed the write, or
+                # describe generated/ignored files. Only actual source changes
+                # need autosave; a clean tree must not restart its countdown.
+                with self.lock, self.writes:
+                    mark = self.schedule.mark()
+                    if self.changes():
+                        self.touched()
+                    else:
+                        self.schedule.recorded(mark)
+                    self.source_generation = generation
         steps = {"commit": lambda: self.commit_all("Autosave"), "push": self.push, "pull": self.pull}
         for step in self.schedule.due(self.busy_fn()):
             self._safe(steps[step])
 
     def run(self) -> None:
-        self._guarded("start", self._start)
-        while not self.stop.wait(TICK):
-            self._guarded("tick", self.tick)
+        # Browser saves call touched(), but files written by another editor or an
+        # external Codex session do not pass through Project.save. Native events
+        # feed those edits into the same schedule, without scanning on every tick.
+        root = self.root_fn()
+        self.source_events = diskwatch.Changes(excluded=(root / self.outdir_fn(),))
+        try:
+            self.source_events.configure([root])
+            self._guarded("start", self._start)
+            while not self.stop.wait(TICK):
+                self._guarded("tick", self.tick)
+        finally:
+            self.source_events.close()
+            self.source_events = None
 
     def _guarded(self, stage: str, fn) -> None:
         """A failure, or a bug, in one step must not end autosave for the session."""
         try:
             fn()
         except Exception as e:
-            self.error = f"{type(e).__name__}: {e}"[-300:]
+            self.error = ("Something went wrong while syncing; Prism tries again by itself.\n"
+                          + f"{type(e).__name__}: {e}"[-300:])
             print(json.dumps({"event": "git_sync", "git_top": str(self.top), "stage": stage,
                               "result": "failed", "error": self.error}), flush=True)
 
@@ -798,41 +905,49 @@ class GitSync:
             self._safe(lambda: self.commit_all("Autosave"))
             self._safe(self.push)
 
-    def now(self, action: str) -> None:
+    def now(self, action: str) -> Outcome:
         """A button: commit everything now and push, or pull. During an agent turn it waits:
         committing would record the agent's half-done writes, merging would change the files
-        under it. The turn ends with its own commit, and syncing follows by itself."""
+        under it. The turn ends with its own commit, and syncing follows by itself. Returns
+        what this click did: by the time the page asks status(), its `error` may be the
+        worker's."""
         if self.busy_fn():
             self.notice = "The agent is working: this copy syncs as soon as its turn ends"
-            return
+            return Outcome("local", self.notice)
         if action == "pull":
-            self._safe(lambda: self.pull(manual=True))
-        elif action == "resolve":
-            self._safe(self.resolve_mine)
-        else:
-            self._safe(lambda: self.commit_all("Saved"))
-            self._safe(lambda: self.push(manual=True))
+            return self._safe(lambda: self.pull(manual=True))
+        if action == "resolve":
+            return self._safe(self.resolve_mine)
+        self._safe(lambda: self.commit_all("Saved"))
+        return self._safe(lambda: self.push(manual=True))
 
     # ------------------------------------------------------------ for the editor
     def status(self) -> dict:
+        """What the pages show: what the worker and the buttons last recorded (`error`: the
+        last error a step met), and a look at the sync target. It changes nothing: a target
+        not bound yet is bound by the worker's next step (validate_target), not by a page
+        asking every two seconds."""
         own = self.check_repo()
+        target, blocked = self.target, self.blocked_reason
         # The editor asks every two seconds: while a commit, fetch or push holds the lock
         # (minutes on a slow network), it gets what is known instead of waiting in line.
         if own and self.lock.acquire(blocking=False):
             try:
-                self.validate_target()
+                target, blocked = _Looking(self.repo).validate()
             finally:
                 self.lock.release()
         st = {"own": own, "enabled": own and self.enabled,
-              "target": public_target(self.target),
+              "target": public_target(target),
               "bound_target": public_target(self.settings.read().get("sync_target")) if own else None,
-              "blocked_reason": self.blocked_reason,
-              "github": github_url(self.target) if own and not self.blocked_reason else None,
+              "blocked_reason": blocked, "blocked_plain": synctarget.plain(blocked),
+              "github": github_url(target) if own and not blocked else None,
               "shared": self.top.name if own and self.prefix else None, "clash": self.clash,
               "kept": self.kept_both() if own and self.kept else [],
-              "guarded": bool(getattr(self, "guarded", False)), "state": self.state, "error": self.error,
+              "guarded": bool(getattr(self, "guarded", False)), "state": self.state,
+              "error": said(self.error), "error_details": details(self.error),
               "remote": self.has_remote, "upstream": self.upstream, "ahead": self.ahead,
               "behind": self.behind, "last_commit": self.last_commit, "last_push": self.last_push or None,
+              "external_watch": bool(self.source_events and self.source_events.watches),
               "pending": self.schedule.pending, "next_autosave": self.schedule.next_autosave()}
         # Kept, not taken by the first who asks: each page shows each notice (by its number)
         # once, also when several ask (the tree's poll, a button's answer, another tab).

@@ -1,0 +1,217 @@
+import { closeSocket } from "./close.mjs";
+// Frontend audit regressions against the runner's isolated editor and Chrome profile.
+const url = process.argv[2];
+let failures = 0;
+function check(name, ok) { console.log(`${ok ? "PASS" : "FAIL"} ${name}`); if (!ok) failures++; }
+async function page(inject = "") {
+  const tab = await (await fetch("http://127.0.0.1:9333/json/new?about:blank", { method: "PUT" })).json();
+  const ws = new WebSocket(tab.webSocketDebuggerUrl);
+  await new Promise((r) => ws.addEventListener("open", r));
+  let id = 0;
+  const pending = new Map(), errors = [];
+  ws.addEventListener("message", (m) => {
+    const d = JSON.parse(m.data);
+    if (d.id && pending.has(d.id)) { pending.get(d.id)(d); pending.delete(d.id); }
+    if (d.method === "Runtime.exceptionThrown") errors.push(d.params.exceptionDetails.exception?.description || d.params.exceptionDetails.text);
+  });
+  const send = (method, params = {}) => new Promise((r) => { const i = ++id; pending.set(i, r); ws.send(JSON.stringify({ id: i, method, params })); });
+  const ev = async (code) => {
+    const r = await send("Runtime.evaluate", { expression: `(async () => { ${code} })()`, awaitPromise: true, returnByValue: true });
+    if (r.result.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description || "evaluate failed");
+    return r.result.result.value;
+  };
+  await send("Runtime.enable"); await send("Page.enable");
+  if (inject) await send("Page.addScriptToEvaluateOnNewDocument", { source: inject });
+  await send("Page.navigate", { url });
+  await send("Page.bringToFront");
+  const wait = async (condition) => {
+    for (let i = 0; i < 160; i++) {
+      if (await ev(`try { return !!(${condition}); } catch { return false; }`)) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error("Timed out: " + condition + " " + errors.join(" | "));
+  };
+  return { ev, wait, errors, close: async () => { await closeSocket(ws); await fetch("http://127.0.0.1:9333/json/close/" + tab.id); } };
+}
+
+let p = await page(`
+  localStorage.setItem("prism.session", JSON.stringify({ tabs: ["sec/a.tex", "main.tex"], active: "main.tex" }));
+  const originalFetch = window.fetch; let trees = 0;
+  window.fetch = async (...args) => {
+    if (String(args[0]).startsWith("/api/tree")) {
+      window.auditTrees = ++trees;
+      if (trees === 1) return new Response('{}', { status: 503 });
+      if (trees === 2) await new Promise(r => setTimeout(r, 900));
+    }
+    return originalFetch(...args);
+  };`);
+try {
+  // Once the first tree has failed (the second, held back, is on its way): not before.
+  await p.wait("window.auditTrees >= 2 && typeof store !== 'undefined'");
+  check("a failed first tree request preserves the saved session", await p.ev(`return !S.ready && store.get("session").tabs.length === 2;`));
+  await p.wait("S.ready && !S.restoring && S.tabs.length === 2");
+  check("session tabs restore after the first successful response", await p.ev(`return S.active === "main.tex" && !!TABS.get("sec/a.tex");`));
+  check("deleted files keep their text and cannot be autosaved", await p.ev(`
+    await openFile("sec/a.tex"); const t = activeTab(); t.doc.setValue("keep these edits");
+    const realTree = Q.tree, realSave = Q.saveFile;
+    Q.tree = async () => ({ ...S.watch, _status: 200, files: S.files.filter(f => f.path !== t.path) });
+    await poll(); let writes = 0; Q.saveFile = async () => { writes++; return { _status: 200 }; };
+    const saved = await TABS.save(t);
+    Q.tree = realTree; Q.saveFile = realSave;
+    return saved.reason === "gone" && writes === 0 && t.doc.getValue() === "keep these edits" && $("#banner").textContent.includes("deleted");`));
+  check("“server not reachable” goes once the server answers again", await p.ev(`
+    const realTree = Q.tree, st = $("#build-status");
+    Q.tree = async () => ({ _status: 0, error: "fixture: offline" });
+    await poll(); const said = st.textContent, red = st.classList.contains("err");
+    Q.tree = realTree; await poll();
+    return said === "server not reachable" && red && st.textContent === "" && !st.classList.contains("err");`));
+  check("a reused port stops polling and saving without replacing edits", await p.ev(`
+    let polls = 0; Q.tree = async () => { polls++; return { ...S.watch, _status: 200, project_key: "another-paper" }; };
+    await poll(); await poll(); const t = activeTab(), text = t.doc.getValue();
+    const saved = await TABS.save(t);
+    return foreignProject && polls === 1 && !saved.ok && text === "keep these edits" && !!$("#other-project");`));
+  check("startup and reconciliation raise no page errors", p.errors.length === 0);
+} finally { await p.close(); }
+p = await page();
+try {
+  await p.wait("S.ready && !S.restoring && S.active");
+  check("a temporary event failure keeps the turn and saves held", await p.ev(`
+    const real = Q.events; let calls = 0;
+    Q.events = async () => ++calls === 1 ? { _status: 502 } : { _status: 200, done: true,
+      events: [{ t: "done", turn: 9001, provider: "slow", changed: [], outcome: "stopped", exit: 1, stderr: "terminated" }] };
+    const following = followTurn(9001, "slow", "edit");
+    await new Promise(r => setTimeout(r, 30));
+    const held = C.job === 9001 && C.editTurn && (await TABS.save(activeTab())).reason === "held";
+    await following; Q.events = real;
+    return held && calls === 2 && !C.job && !$("#chat-log").lastElementChild.querySelector(".err");`));
+  check("stopped turns have one neutral outcome", await p.ev(`return $("#chat-log").textContent.includes("Stopped") && !$("#chat-log").textContent.includes("terminated");`));
+  check("Undo is disabled during a turn and Stop failures remain retryable", await p.ev(`
+    renderTurnCard({ turn: 8000, outcome: "ok", exit: 0, changed: [{ path: "main.tex", diff: "+x" }] });
+    const realEvents = Q.events, realStop = Q.stop; let release;
+    Q.events = () => new Promise(r => { release = r; });
+    Q.stop = async () => ({ _status: 503, error: "temporarily busy" });
+    const following = followTurn(9002, "slow", "edit");
+    const disabled = document.querySelector('[data-undo="8000"]').disabled;
+    await stopTurn(); const retryable = !C.stopping && $("#chat-send").textContent === "Stop";
+    release({ _status: 200, done: true, events: [{ t: "done", turn: 9002, outcome: "ok", exit: 0, changed: [] }] });
+    await following; Q.events = realEvents; Q.stop = realStop;
+    return disabled && retryable && !document.querySelector('[data-undo="8000"]').disabled;`));
+  check("a missing job reports an unknown result without offering Undo", await p.ev(`
+    const real = Q.events; Q.events = async () => ({ _status: 404, error: "unknown job" });
+    await followTurn(9003, "slow", "edit"); Q.events = real;
+    return $("#chat-log").textContent.includes("result is unknown") && !document.querySelector('[data-undo="9003"]');`));
+  check("turn lifecycle raises no page errors", p.errors.length === 0);
+  check("attachments and a draft added while sending remain for the next message", await p.ev(`
+    const realAgent = Q.agent, realEvents = Q.events; let release;
+    ATT.files = [{ id: 100, name: "first.txt", path: "first.txt", size: 1 }];
+    $("#chat-input").value = "first message";
+    Q.agent = () => new Promise(r => { release = r; });
+    Q.events = async () => ({ _status: 200, done: true, events: [{ t: "done", outcome: "ok", exit: 0, changed: [] }] });
+    const sending = sendMessage();
+    for (let i = 0; i < 100 && !release; i++) await new Promise(r => setTimeout(r, 10));
+    if (!release) throw Error("message was not sent");
+    ATT.files.push({ id: 101, name: "next.txt", path: "next.txt", size: 2 });
+    $("#chat-input").value = "next draft";
+    release({ _status: 200, job: 9004 }); await sending;
+    const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && $("#chat-input").value === "next draft";
+    ATT.files = []; ATT.render(); $("#chat-input").value = ""; Q.agent = realAgent; Q.events = realEvents;
+    return kept;`));
+  check("removing an attachment takes its upload back, whether it was still uploading or done", await p.ev(`
+    const realUpload = Q.upload, realCancel = Q.uploadCancel, ids = [], cancelled = []; let finish = null;
+    Q.upload = (body) => { ids.push(body.upload_id); return new Promise(r => { finish = r; }); };
+    Q.uploadCancel = async (id) => { cancelled.push(id); return { _status: 200, deleted: true }; };
+    const started = async () => { for (let i = 0; i < 100 && !finish; i++) await new Promise(r => setTimeout(r, 10)); };
+    let adding = ATT.add([new File(["one"], "one.txt")]); await started();
+    ATT.remove(ATT.files[0].id);                    // still being sent: the server may have it all the same
+    finish({ _status: 0, error: "server not reachable" }); await adding; finish = null;
+    adding = ATT.add([new File(["two"], "two.txt")]); await started();
+    finish({ _status: 200, path: "prism-uploads/two.txt", size: 3 }); await adding;
+    const uploaded = ATT.files[0]?.path === "prism-uploads/two.txt";
+    ATT.remove(ATT.files[0].id);
+    Q.upload = realUpload; Q.uploadCancel = realCancel;
+    return uploaded && ids.length === 2 && ids[0] !== ids[1] && JSON.stringify(cancelled) === JSON.stringify(ids) && !ATT.files.length;`));
+} finally { await p.close(); }
+p = await page();
+try {
+  await p.wait("S.ready && !S.restoring && S.active");
+  check("1000 edits preserve the tab bar nodes", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(), node = $("#tabs").firstElementChild;
+    const mutations = new MutationObserver(() => {}); mutations.observe($("#tabs"), { childList: true });
+    for (let i = 0; i < 1000; i++) t.doc.replaceRange("x", { line: 0, ch: 0 });
+    const rebuilt = mutations.takeRecords().length; mutations.disconnect();
+    t.doc.setValue(text); TABS.synced(t, t.mtime);
+    return rebuilt === 0 && $("#tabs").firstElementChild === node;`));
+  check("unchanged sync actions retain their DOM nodes", await p.ev(`
+    const st = { own: true, remote: true, enabled: true, kept: [{ path: "main.tex", line: 1, who: "A" }], clash: [] };
+    renderSync(st); const button = $("#sync-kept button"); renderSync(st);
+    return button === $("#sync-kept button");`));
+  check("streamed reply batches draw their final text once per frame", await p.ev(`
+    const real = Q.events; let calls = 0;
+    let replacements = 0;
+    const collect = records => { replacements += records.filter(r => r.target.matches?.(".msg.assistant")).length; };
+    const mutations = new MutationObserver(collect); mutations.observe($("#chat-log"), { childList: true, subtree: true });
+    Q.events = async () => ++calls <= 100 ? { _status: 200, done: false, events: [{ t: "delta", text: "x" }] }
+      : { _status: 200, done: true, events: [{ t: "done", outcome: "ok", exit: 0, changed: [] }] };
+    await followTurn(9100, "slow", "ask"); Q.events = real;
+    collect(mutations.takeRecords()); mutations.disconnect();
+    const message = [...$("#chat-log").querySelectorAll(".msg.assistant")].at(-1);
+    if (message.dataset.md !== "x".repeat(100) || replacements > 2)
+      throw Error(JSON.stringify({ sourceLength: message.dataset.md?.length, replacements }));
+    return true;`));
+  check("performance changes raise no page errors", p.errors.length === 0);
+  check("a turn you leave alone shows the agent's step and follows it to its file", await p.ev(`
+    await openFile("sec/a.tex"); $("#chat-input").focus();          // where a message is sent from
+    C.job = 9199; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
+    await AV.begin("follow-test", "Write", "main.tex");
+    const shown = !$("#agent-view").hidden;
+    await AV.end("follow-test", true);
+    const followed = shown && S.active === "main.tex";
+    C.job = null; return followed;`));
+  check("typing on in the message box ends following the agent", await p.ev(`
+    await openFile("sec/a.tex"); $("#chat-input").focus();
+    C.job = 9198; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
+    await AV.begin("type-test", "Write", "main.tex");
+    $("#chat-input").value = "next"; $("#chat-input").dispatchEvent(new Event("input"));
+    const hidden = $("#agent-view").hidden;
+    await AV.end("type-test", true);
+    const kept = hidden && S.active === "sec/a.tex" && $("#chat-log").textContent.includes("Jump to main.tex");
+    $("#chat-input").value = ""; C.job = null; return kept;`));
+  check("typing in chat keeps the selected file and focus when an agent step ends", await p.ev(`
+    await openFile("sec/a.tex"); C.job = 9200; C.follow = true; C.followOpened = openAsked;
+    await AV.begin("focus-test", "Write", "main.tex");
+    $("#chat-input").focus(); await AV.end("focus-test", true);
+    const kept = S.active === "sec/a.tex" && document.activeElement === $("#chat-input")
+      && $("#chat-log").textContent.includes("Jump to main.tex");
+    C.job = null; return kept;`));
+  check("local command chips preserve an unfinished draft", await p.ev(`
+    const model = C.model; $("#chat-input").value = "unfinished draft";
+    const chip = document.createElement("a"); chip.dataset.insert = "/model audit-model"; $("#chat-log").append(chip); chip.click();
+    const kept = $("#chat-input").value === "unfinished draft" && C.model === "audit-model";
+    C.model = model; provSet("model", model); $("#chat-input").value = ""; chip.remove(); return kept;`));
+  check("an edited tab stays open while its saves are held", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(); t.doc.replaceRange("draft", { line: 0, ch: 0 });
+    C.editTurn = true; await closeTab(t.path);
+    const kept = TABS.get(t.path) === t; C.editTurn = false; t.doc.setValue(text); TABS.synced(t, t.mtime); return kept;`));
+  check("closing a deleted file's tab during an Edit turn asks first, promising no save", await p.ev(`
+    const t = activeTab(), text = t.doc.getValue(), ask = window.confirm; let asked = false;
+    t.doc.replaceRange("draft", { line: 0, ch: 0 }); t.conflict = "gone";
+    window.confirm = () => { asked = true; return false; };
+    C.editTurn = true; await closeTab(t.path); C.editTurn = false; window.confirm = ask;
+    const ok = asked && TABS.get(t.path) === t; t.doc.setValue(text); TABS.synced(t, t.mtime); return ok;`));
+  check("an error the server words is kept until dismissed", await p.ev(`
+    const real = Q.fileAction; Q.fileAction = async () => ({ _status: 500, error: "GitHub did not answer within 30 seconds" });
+    await fileAction("rename", {}); Q.fileAction = real;
+    const row = [...document.querySelectorAll('#notifications [role="alert"]')].find(el => el.textContent.includes("did not answer"));
+    if (!row) return false; row.querySelector("button").click(); return true;`));
+  check("disk reload restores compilation line diagnostics", await p.ev(`
+    const t = activeTab(); S.diagnostics = [{ file: t.path, line: 1, severity: "error" }]; applyDiagnostics();
+    t.doc.setValue("temporary text"); TABS.synced(t, t.mtime); await reloadFromDisk(t);
+    const marked = (t.doc.getLineHandle(0).bgClass || "").includes("cm-line-error");
+    S.diagnostics = []; applyDiagnostics(); return marked;`));
+  check("error notifications remain after four seconds and can be dismissed", await p.ev(`
+    toast("Save failed: persistent audit error"); await new Promise(r => setTimeout(r, 4200));
+    const row = [...document.querySelectorAll('#notifications [role="alert"]')].find(el => el.textContent.includes("persistent audit error"));
+    if (!row) return false; row.querySelector("button").click(); return !row.isConnected;`));
+  check("usability changes raise no page errors", p.errors.length === 0);
+} finally { await p.close(); }
+process.exitCode = failures ? 1 : 0;

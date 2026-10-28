@@ -15,7 +15,7 @@
    equation, align, gather, … and \text{} inside them is text again; comments and the
    arguments of \label, \ref, \cite, \begin, … get no snippets at all.
 
-   Your own snippets: ~/.prism-local/snippets.js (Snippets menu → Edit my snippets). Pure
+   Your own snippets: ~/.prism-local/snippets.js (Home → Settings → Snippets). Pure
    functions are exported for the tests (tests/test_snippets.py runs them under Node). */
 "use strict";
 
@@ -600,17 +600,39 @@ const Snippets = (() => {
       return true;
     }
 
-    cm.on("inputRead", (ed, ch) => {
-      if (!settings.enabled() || ch.origin !== "+input" || ch.text.length !== 1) return;
-      const typed = ch.text[0];
-      if (pendingSpace && /^[A-Za-z]$/.test(typed) && ch.from.line === pendingSpace.line && ch.from.ch === pendingSpace.ch) {
+    // `typed` went in at `from`: a space before it after a command (see MACROS), then the
+    // snippet it completes, or the fraction.
+    function typedAt(from, typed) {
+      if (pendingSpace && /^[A-Za-z]$/.test(typed) && from.line === pendingSpace.line && from.ch === pendingSpace.ch) {
         pendingSpace = null;
-        const name = /\\([A-Za-z]+)$/.exec(cm.getLine(ch.from.line).slice(0, ch.from.ch));
-        if (name && !MACROS.some((k) => k.startsWith(name[1] + typed))) cm.replaceRange(" ", ch.from, ch.from, "+input");
+        const name = /\\([A-Za-z]+)$/.exec(cm.getLine(from.line).slice(0, from.ch));
+        if (name && !MACROS.some((k) => k.startsWith(name[1] + typed))) cm.replaceRange(" ", from, from, "+input");
       } else pendingSpace = null;
       if (typed.length !== 1) return;
       if (tryExpand(true)) return;
       if (typed === "/" && settings.fraction()) tryFraction();
+    }
+    cm.on("inputRead", (ed, ch) => {
+      if (!settings.enabled() || ch.origin !== "+input" || ch.text.length !== 1) return;
+      typedAt(ch.from, ch.text[0]);
+    });
+    // Typed through an input method (Chinese, Japanese, … also in its Latin mode), the text
+    // comes as a composition (origin "*compose"), which inputRead leaves alone: expanding in
+    // the middle of one would break it. Once it is committed, it expands as typed keys do:
+    // right then, not after a timeout, by which the next key's composition may have begun.
+    // CodeMirror's own compositionend (added when the editor was made, so it runs first) has
+    // read the committed text into the document and ended the composition.
+    // What it committed is what inputRead saw last, as "*compose".
+    // Several letters at once (typed, then committed with Shift) count as their last one typed.
+    let composed = null;
+    cm.on("inputRead", (ed, ch) => { composed = ch.origin === "*compose" && ch.text.length === 1 && ch.text[0] ? ch : null; });
+    cm.getInputField().addEventListener("compositionstart", () => { composed = null; });
+    cm.getInputField().addEventListener("compositionend", () => {
+      const ch = composed;
+      composed = null;
+      if (!ch || !settings.enabled() || cm.somethingSelected()) return;
+      const t = ch.text[0];
+      typedAt({ line: ch.from.line, ch: ch.from.ch + t.length - 1 }, t[t.length - 1]);
     });
     cm.on("beforeChange", (ed, ch) => {
       if (ch.origin === "undo" || ch.origin === "redo") { clearSessions(); return; }
@@ -711,7 +733,20 @@ const Snippets = (() => {
 ]
 `;
 
-  return { attach, load, compile, match, parse, expandText, contextAt, scanLine, fractionTerm, tabout, openDepth,
+  // Every snippet as text, one a line: yours (from load), then the built-in ones if they are on.
+  function listing(mine, withDefaults) {
+    const row = (s) => {
+      const trig = s.trigger instanceof RegExp ? "/" + s.trigger.source + "/" : String(s.trigger);
+      const repl = typeof s.replacement === "function" ? "(function)" : String(s.replacement).replace(/\n/g, "⏎").replace(/\t/g, "");
+      return `${trig.padEnd(14)} ${(s.options || "").padEnd(5)} ${repl}${s.description ? "    — " + s.description : ""}`;
+    };
+    return "trigger        opts  replacement\n"
+      + "(options: t text, m math, M display, n inline, A as you type, else Tab, r regex, v on a selection, w after a word boundary)\n\n"
+      + (mine.length ? "Yours\n" + mine.map(row).join("\n") + "\n\n" : "")
+      + (withDefaults ? "Built in\n" + DEFAULTS.map(row).join("\n") : "(the built-in snippets are off: your file says defaults: false)");
+  }
+
+  return { attach, load, listing, compile, match, parse, expandText, contextAt, scanLine, fractionTerm, tabout, openDepth,
     visualMatch, DEFAULTS, TEMPLATE, VARS };
 })();
 

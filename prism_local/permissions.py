@@ -125,7 +125,7 @@ class WebPermissions:
                             raise ValueError("Saved permission grants are damaged")
                         if list(entry["grant"]) not in grants:
                             grants.append(list(entry["grant"]))
-                        registry.write_json(path, data)
+                        registry.write_state(path, data)
                 except (OSError, ValueError, TimeoutError) as e:
                     return {"error": f"Could not save permission: {e}"}
             if decision == "allow" and scope == "session":

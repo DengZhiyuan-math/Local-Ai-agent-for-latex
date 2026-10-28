@@ -4,7 +4,8 @@ An Overleaf-style LaTeX studio that runs on your own computer: an editor, a PDF 
 stays in sync with the source, an AI agent that edits your project, and a Home page for all
 your papers, each kept in git and on GitHub.
 
-- **Editor**: tabs, LaTeX highlighting, search, folding of sections and environments, and
+- **Editor**: tabs, LaTeX highlighting, find and replace in a file or the whole project, go to
+  line, search with the agent's help, folding of sections and environments, and
   completion of `\cref{…}`, `\cite{…}` and your own `\newcommand`s. Edits save themselves.
 - **Files**: drag files onto the sidebar to add them to the project (up to 25 MB each).
   Different files with the same name get a number; existing files are kept. Text files
@@ -26,9 +27,43 @@ to `pip install`, no npm, and it works offline.
 
 ## Install
 
-### 1. Prerequisites
+### One line
 
-Python 3.9 or newer, a TeX distribution and git. The GitHub CLI is optional (for GitHub).
+**Windows**: open **PowerShell** (Start menu → type PowerShell), paste this and press Enter:
+
+```powershell
+irm https://raw.githubusercontent.com/DengZhiyuan-math/Local-Ai-agent-for-latex/main/install.ps1 | iex
+```
+
+**macOS and Linux**: open **Terminal**, paste this and press Enter:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/DengZhiyuan-math/Local-Ai-agent-for-latex/main/install.sh | sh
+```
+
+It finds or installs Python and git (Windows: for you only, with winget; macOS: Apple's
+developer tools, one click in the window that opens; Linux: it names the one command to
+run), puts Prism in a folder of its own (`%LOCALAPPDATA%\Prism\prism-local`,
+`~/Library/Application Support/Prism/prism-local`, `~/.local/share/prism/prism-local`),
+adds **Prism** to the Start menu, Applications or the application menu, and opens the Home
+page. Running it again updates Prism. `PRISM_DIR` chooses another folder.
+
+On the Home page, **Getting started** does the rest, one click each: the GitHub CLI, your
+GitHub login, LaTeX and, if you want it, the AI assistant. For LaTeX, **Quick start**
+downloads [Tectonic](https://tectonic-typesetting.github.io/) (one program; packages come
+on the first compile, which needs the internet), and **Full LaTeX** installs MiKTeX
+(Windows); a TeX you already have is used as it is. Settings lists the same programs later.
+
+### By hand
+
+The steps the one line does, for those who want to choose.
+
+#### 1. Prerequisites
+
+Python 3.9 or newer and a TeX distribution. Prism also uses git (every version of your
+papers) and the GitHub CLI (your papers on GitHub): you do not need to know either, and
+the Home page installs them for you (**Getting started**, one click each). To install
+everything yourself instead:
 
 | System | One command |
 |---|---|
@@ -44,15 +79,18 @@ Python 3.9 or newer, a TeX distribution and git. The GitHub CLI is optional (for
   is used.
 - Open a new terminal afterwards, so that the new programs are on `PATH`.
 
-### 2. Get prism-local
+#### 2. Get prism-local
 
 ```sh
 git clone https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git prism-local
 ```
 
+Without git: on the [repository's page](https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex)
+choose **Code → Download ZIP** and unpack it into a folder named `prism-local`. A copy made
+with git updates itself; a downloaded one does not (download it again for a new version).
 That is the whole installation: there is nothing to build.
 
-### 3. Start it
+#### 3. Start it
 
 **Windows**: make a **Prism** shortcut in the Start menu and on the desktop, then click it:
 
@@ -88,11 +126,15 @@ The Home page opens. Create a project (**+ New project**) or add a folder you al
 
 ### Optional: GitHub and the AI agent
 
-- **GitHub**: log the GitHub CLI in once, `gh auth login`. Projects can then get a private
-  repository each (or one per folder), and every change is pushed by itself.
-- **Claude Code** for the agent panel: install it
-  (`irm https://claude.ai/install.ps1 | iex` on Windows,
-  `curl -fsSL https://claude.ai/install.sh | bash` elsewhere) and run `claude` once to log in.
+- **GitHub**: on the Home page, **Getting started** installs the GitHub CLI and logs you in:
+  **Log in to GitHub** shows a code, which you enter on the GitHub page it opens (once).
+  Projects can then get a private repository each (or one per folder), and every change is
+  saved there by itself. On another computer, **From GitHub…** copies a project of yours
+  there and keeps it in sync. (In a terminal, `gh auth login` does the same login.)
+- **Claude Code** for the agent panel: **Getting started** (or Settings → Programs)
+  installs it and opens a window where you log in once. In a terminal:
+  `irm https://claude.ai/install.ps1 | iex` on Windows,
+  `curl -fsSL https://claude.ai/install.sh | bash` elsewhere, then run `claude` once to log in.
   [Codex](https://github.com/openai/codex), DeepSeek's
   [Deep Code](https://github.com/lessweb/deepcode-cli) (`npm install -g @vegamo/deepcode-cli`)
   or an API key work too; see
@@ -160,6 +202,19 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
   or change its color from its ⋯ menu.
 - Folders and tags exist only in this list. No file moves on disk unless you choose one
   repository for a folder (below).
+- **Changes in Explorer / Finder**: Windows directory notifications and macOS FSEvents
+  trigger reconciliation. Home receives server-sent events and updates automatically;
+  it does not poll the project list or periodically scan directories. A missing path triggers a recovery
+  scan once, and a persistent missing path is not searched repeatedly. Startup and changes
+  to the registered directory set also reconcile once. On other platforms, missing-path
+  recovery is available without automatic discovery notifications. A group whose name matches its projects' containing
+  disk folder is linked automatically (shown as **Disk folder** in its preview).
+  Inside these containers, new projects with `main.tex` or `prism.json` appear with their
+  subfolders. Same-volume moves and renames within the watched directory trees keep the
+  project's tags, pinned state and history. Deleted or unavailable folders stay listed as
+  missing, so restoring them works; projects explicitly removed from Home stay removed.
+  Hidden folders, build output and directory links are excluded. For a move outside these
+  trees or onto another drive, use **Add existing…** at the new location.
 
 **GitHub**
 
@@ -197,35 +252,46 @@ The list and settings live in `%LOCALAPPDATA%\prism-local` on Windows,
 
 ## History and sync with GitHub
 
-Open the Git menu and **Confirm sync target** for an existing repository before its first
-remote sync. The menu shows the repository and branch used by both fetch and push. A changed
-remote, branch, push URL or URL rewrite pauses remote sync and keeps your local edits and
-commits. Correct the configuration or confirm the new target in that menu. A repository
-created by Prism is bound to its known target when it is created.
+You do not need to know git. Create a private GitHub repository for a project from the
+GitHub button (or **+ GitHub** on the Home page), and from then on Prism saves every change
+there by itself:
 
-The automatic sync switch controls autosave commits, uploads and closing sync. The explicit
-**Save to GitHub now** and **Get changes from GitHub** actions still work with the switch
-off. They use the same target checks.
-
-In a project with a repository (its own, or its folder's shared one):
-
-- your changes are committed two minutes after you stop editing (at the latest ten minutes
-  after the first), and every agent turn gets a commit of its own with your request as the
-  message;
-- every commit is pushed, and changes on GitHub (another computer) are pulled in: right when
-  the project opens, then every five minutes. Histories that diverged are reported, never
-  merged for you;
-- when the Home page starts, it checks GitHub for every project in the background (a fetch:
-  no file changes) and marks the projects with new commits *↓ N new on GitHub*; opening the
+- your changes are saved to the project's history two minutes after you stop editing (at
+  the latest ten minutes after the first), and every agent turn is saved on its own, with
+  your request as its description;
+- on Windows and macOS, native filesystem events also schedule edits made by another
+  editor or an external Codex session while the project is open. They use the same
+  automatic commit and upload flow; build output and git metadata do not schedule saves;
+- everything saved is uploaded to GitHub, and what changed on GitHub (another computer, a
+  co-author) is brought in: right when the project opens, then every five minutes. Where
+  you and a co-author changed the same lines, both versions are kept for you to choose;
+- when the Home page starts, it looks at GitHub for every project in the background (no
+  file changes) and marks the projects with new changes *↓ N new on GitHub*; opening the
   project brings them in;
-- the GitHub button at the top says where things stand, and has *Save to GitHub now*, *Get
-  changes from GitHub* and a switch;
+- the GitHub button at the top says where things stand, and has **Save to GitHub now**,
+  **Get changes from GitHub** and a switch, **Save to GitHub by itself**. The two actions
+  work with the switch off too;
 - the **History** tab lists every version of the open file, shows what each changed, and
-  restores one; the **Diff** tab shows what is not committed yet, or what the last commit
-  changed.
+  restores one; the **Diff** tab shows what is not saved to the history yet, or what the
+  last save changed.
 
-Files changed on disk by other programs (Claude Code in a terminal, `git checkout`, another
-editor) reload by themselves, and a save never silently overwrites a newer version on disk.
+Prism keeps the repositories it set up in order itself. If another program changes how
+such a project is connected to GitHub, Prism puts it back and goes on. It never uploads
+somewhere other than the GitHub repository the project belongs to: if the project is
+pointed at a different repository, uploading pauses (your edits stay saved on this
+computer) and the GitHub button says so in plain words, and it goes on by itself once the
+project points back. **Sync with the new one** in that menu makes the new repository the
+project's.
+
+Files changed on disk by other programs (Claude Code in a terminal, another editor) reload
+by themselves, and a save never silently overwrites a newer version on disk.
+
+**For those who know git.** Each project syncs one branch with one remote branch, bound in
+`.git/prism-local.json` when Prism creates the repository or, for one you set up yourself,
+when it first syncs. In a repository you set up, Prism does not change your settings: a
+changed remote, branch, push URL, URL rewrite, pushRemote/pushDefault or mirror pauses
+upload until it names the bound target again, or you choose the new one. Details of every
+pause are under **Details** in the GitHub menu.
 
 ## Writing together
 
@@ -314,11 +380,28 @@ name is typed once, for both). The ⚡ menu above the editor lists them all.
   `gather`, … Inside `\text{}` it is text again. Comments and the arguments of `\label`,
   `\ref`, `\cite`, `\begin` … get no snippets, and neither does a command you type out
   (`\sum`, `\alpha`).
-- The ⚡ menu turns snippets, auto-fraction and the `&`/`\\` keys on and off.
+- **Home → Settings → Snippets in the editor** turns snippets, auto-fraction and the `&`/`\\`
+  keys on and off, for every project. An editor already open takes a change when you go back to it.
 
-**Your own snippets** go in `~/.prism-local/snippets.js` (⚡ → Edit my snippets): an array of
+**Your own snippets** go in `~/.prism-local/snippets.js` (Home → Settings → Edit my snippets): an array of
 `{trigger, replacement, options}`, in the format of obsidian-latex-suite. They come before the
 built-in ones; `{snippets: [...], defaults: false}` drops the built-in ones.
+
+The app also distributes `prism_local/shared-snippets.js` with its updates. Without a
+local snippets file, every project uses this bundle. An existing local file (including
+one selected by `PRISM_SNIPPETS`) replaces the bundle completely; it is never overwritten
+by an app update. Saving in Home → Settings creates or updates that local override. To
+return to the distributed rules, remove or rename the local snippets file.
+
+To distribute later changes to your local rules, run `python bin/export-snippets.py`
+from the app checkout, review `prism_local/shared-snippets.js`, and commit and push it
+with the app update. This copies the configured local file into the tracked bundle;
+it does not change the local file or publish anything by itself.
+
+Typing `\begin{` opens environment candidates (for example `equation`, `align`,
+`itemize` and `enumerate`). Type a prefix, select with the arrow keys and confirm with
+Enter or Tab to insert the matching `\end{...}` and move into the indented body.
+Escape cancels. An existing matching end is reused.
 
 | Option | Meaning |
 |---|---|
@@ -343,6 +426,11 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘J / Ctrl-J | Show the cursor line in the PDF |
 | double-click or Ctrl/⌘-click in PDF | Jump to the source line |
 | click a link in PDF / Alt+← | Follow a reference, citation, contents entry or URL / go back |
+| ⌘F / Ctrl-F | Find in the open file (Enter: next, Shift+Enter: previous, Esc: close; Alt+C match case, Alt+W whole word, Alt+R regular expression) |
+| ⌘⌥F / Ctrl-H | Find and replace in the open file (Enter: replace this one; Replace all is one undo) |
+| ⌘⇧F / Ctrl-Shift-F | Search the project, in the sidebar; Replace all there changes every file |
+| ↓ / ↑ in the results | Go through the project's results (or the agent's changes), each shown in its file; Enter: edit there; Space: tick or untick a change; ↑ on the first goes back to the search box. In the find box, ↓ ↑ are next and previous |
+| Ctrl-G | Go to a line, or line:column (also: click "Ln, Col" under the editor) |
 | ⌘F / Ctrl-F after clicking the PDF | Search the PDF (Enter: next, Shift+Enter: previous, Esc: close) |
 | Ctrl-Q | Fold or unfold the section, environment or `\[ … \]` at the cursor |
 | Ctrl-K Ctrl-0 / Ctrl-K Ctrl-J | Fold all / unfold all |
@@ -350,6 +438,24 @@ JavaScript and runs in the editor page: write it yourself, or read before you pa
 | ⌘/ / Ctrl-/ | Toggle `%` comments |
 | ⌘B / Ctrl-B | Show/hide the file sidebar |
 | Ctrl-Space | Completion |
+
+Under the editor, the status line shows the cursor's line and column (and how many characters
+are selected); a click there asks for a line to go to.
+
+In a regular expression, the replacement may use `$1`, `$2` … for its groups and `$&` for the
+whole match. Search in the project includes unsaved edits of open files. Its Replace all
+changes open files in their tabs (⌘Z there takes it back) and the others on disk, each only
+if nothing changed it since it was read.
+
+**Search with the agent.** For a change a plain search cannot express ("rename the index i
+to j in every formula", "write `\mathscr{O}` instead of `\mathcal{O}`"), open Search
+(⌘⇧F / Ctrl-Shift-F), choose **✦ With the agent** and describe it. The agent chosen in the
+agent panel reads the project in a read-only turn of its own (not in your conversation) and
+proposes rules (a regular expression, its replacement, and where it applies: in formulas,
+in the text, or anywhere) and, where no rule fits, single changes. Prism finds every place
+each rule matches and lists every change with its line, before and after; untick what should
+stay, or edit a rule and the list follows. **Apply** makes the ticked changes as Replace all
+does. Nothing changes before you apply.
 
 ## Building
 
@@ -479,7 +585,11 @@ selected in the editor (also: select text and press ⌘L). A selection becomes a
   asked: the turn runs in Claude Code's default permission mode with `Edit`/`Write` allowed
   for those files only, so any other write is refused. For a line range, Claude is asked to
   keep to those lines.
-- **Without @-mentions**, Claude may change any file in the project and create new ones.
+- **Without @-mentions**, edits default to the file open when you send the message.
+  Explicit requests to edit other files take priority. The compile main file is not an
+  automatic edit target. This default guides the agent; it retains permission to edit
+  other project files and create files. If no file is open and the target is unclear,
+  the agent is instructed to ask which file to edit.
 - The line above the message box shows the scope before you send. The card at the end of a
   turn reports blocked edits, and any change outside the mentioned files (for example made
   by an allowed shell command), which **Undo this turn** reverts.
@@ -505,7 +615,8 @@ Consequences:
   `.claude/settings.json` (for example `"Bash(make:*)"`); it then has the shell, limited to
   those commands. The card at the end of a turn names any step that was refused.
 - **Ask** mode (`plan`) is read-only.
-- Nothing from the editor is sent unless you @-mention it.
+- The active file's path is sent with each message; selected source text is sent when
+  you @-mention it.
 - **Add files** to a message with **+**, by dragging them onto the panel, or by pasting an
   image. They are saved in the project's `prism-uploads/` folder (up to 25 MB each) and the
   message tells the agent where they are; Claude Code also reads PDFs and images.
@@ -704,7 +815,7 @@ python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop    
 ```
 
 - **Options.** `make-shortcut.ps1` takes `-Name`, `-NoDesktop`, `-Folder` (where to put the
-  shortcut) and `-Browser`; `make_desktop_entry.py` takes `--name`, `--browser`, `--desktop`
+  shortcut), `-Browser` and `-Python` (the Python whose `pythonw.exe` runs it); `make_desktop_entry.py` takes `--name`, `--browser`, `--desktop`
   and `--remove`. To remove a Windows shortcut, delete its `.lnk` file.
 - **Browser modes.** `window` (the default): a Chrome or Edge window with a tab strip, holding
   only Prism. `app`: an app window without tabs or address bar; the pop-out PDF gets its own
@@ -784,6 +895,7 @@ python launcher/prism_launcher.pyw [project | --home] [--browser window|app|defa
 ## Layout
 
 ```
+install.ps1, install.sh    the one-line install (Windows; macOS and Linux)
 bin/prism-local            command-line launcher
 bin/prism-home             command-line launcher for the Home page
 launcher/                  one-click launcher: prism_launcher.pyw, make-shortcut.ps1 (Windows),
@@ -794,6 +906,7 @@ prism_local/proc.py        starting and stopping programs (process trees on Wind
 prism_local/httpbase.py    what both servers share: request checks, presence, idle exit
 prism_local/fsutil.py      project files: which ones are shown, safe writes, line endings
 prism_local/hub.py         Home page server: project list, templates, starting editors
+prism_local/sharedrepo.py  a folder's projects in one shared repository, or one each, and back
 prism_local/registry.py    shared state: project list, running instances, ports
 prism_local/presence.py    which pages are open, for --exit-when-idle
 prism_local/agent.py       agent turns for every provider: scope, per-turn diffs and undo
@@ -801,8 +914,10 @@ prism_local/backends.py    the backend interface, presets and ~/.prism-local/age
 prism_local/backend_*.py   Claude Code, Codex CLI, Deep Code CLI and OpenAI-compatible API backends
 prism_local/mcp_compile.py the agent's compile tool (MCP, stdio): builds through the editor server
 prism_local/gitsync.py     commits, pushes and pulls the project's changes (History, sync)
+prism_local/repoview.py    where a project is in git and what changed in it, asked again only on a change
 prism_local/selfupdate.py  updates prism-local itself from GitHub when a server starts
-prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, app.css)
+prism_local/tools.py       git, the GitHub CLI, LaTeX and Claude Code: found, or installed from Home
+prism_local/static/        front end (app.js, pdfview.js, viewer.*, home.*, common.js, snippets.js, findlogic.js, agentsearch.js, app.css)
 prism_local/static/vendor/ CodeMirror 5.65.18 (MIT), PDF.js 3.11.174 (Apache-2.0), with local CMaps for CJK PDFs,
                            marked 12.0.2 (MIT) and KaTeX 0.16.11 (MIT) for the agent's replies
 examples/minimal/          a small amsart project to try it on

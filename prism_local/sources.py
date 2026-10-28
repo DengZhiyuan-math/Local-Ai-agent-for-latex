@@ -39,7 +39,7 @@ def recordable(path: str, untracked: bool, top: Path, outdir: str) -> bool:
 def gitignore(outdir: str = "build", shared: bool = False) -> list[str]:
     """The lines of a new repository's .gitignore: build output, LaTeX's auxiliary files,
     a save half-way, macOS's folder files; in a repository shared by several projects also
-    the .git a project set aside when it joined (hub.py)."""
+    the .git a project set aside when it joined (sharedrepo.py)."""
     return [f"{outdir.strip('/') or 'build'}/", *([".git-prism-*/"] if shared else []), f"*{TEMP}",
             ".DS_Store", *(f"*{ext}" for ext in AUX)]
 

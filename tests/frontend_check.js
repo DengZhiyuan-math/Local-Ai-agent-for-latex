@@ -57,23 +57,29 @@ check("publishState", () => {
 
 // ---------------------------------------------------------------- syncstate.js
 const SyncState = require("../prism_local/static/syncstate.js");
-check("describeSync: paused shows the bound and the current target", () => {
+check("describeSync: paused says so in plain words, the bound and current target under details", () => {
   const bound = { repository_identity: "github.com/owner/paper", branch_ref: "refs/heads/main" };
   const d = SyncState.describeSync({ own: true, enabled: true, remote: true, state: "idle", target: null,
                                      bound_target: bound, blocked_reason: "Fetch and push differ" }, () => "now");
-  assert.strictEqual(d.text, "Sync paused");
+  assert.strictEqual(d.text, "Upload paused");
   assert.strictEqual(d.cls, "warn");
-  assert.ok(d.detail.includes("github.com/owner/paper, branch main"), d.detail);
-  assert.ok(d.detail.includes("Current target: unavailable"), d.detail);
+  assert.ok(d.detail.includes("your edits are saved on this computer"), d.detail);
+  assert.ok(!/target|branch|Fetch/.test(d.detail), d.detail);
+  assert.ok(d.tech.includes("github.com/owner/paper, branch main"), d.tech);
+  assert.ok(d.tech.includes("Current target: unavailable"), d.tech);
+  const said = SyncState.describeSync({ own: true, enabled: true, remote: true, state: "idle", blocked_reason: "x",
+                                         blocked_plain: "Uploading to GitHub is paused; because." }, () => "");
+  assert.strictEqual(said.detail, "Uploading to GitHub is paused; because.");
 });
 check("describeSync: what is due, and synced", () => {
   const base = { own: true, enabled: true, remote: true, state: "idle" };
   assert.match(SyncState.describeSync({ ...base, pending: true, next_autosave: 90 }, () => "").detail, /in about 2 min/);
-  assert.strictEqual(SyncState.describeSync({ ...base, ahead: 2 }, () => "").text, "2 to push");
-  assert.strictEqual(SyncState.describeSync({ ...base, state: "pulling" }, () => "").text, "Pulling…");
+  assert.strictEqual(SyncState.describeSync({ ...base, ahead: 2 }, () => "").text, "Not uploaded yet");
+  assert.strictEqual(SyncState.describeSync({ ...base, state: "pulling" }, () => "").text, "Getting changes…");
   const ok = SyncState.describeSync({ ...base, last_push: 5, target: { repository_identity: "github.com/o/p", branch_ref: "refs/heads/main" } },
                                     () => "3 min ago");
-  assert.deepStrictEqual([ok.text, ok.detail], ["Saved to GitHub", "Synced to github.com/o/p, branch main, 3 min ago."]);
+  assert.deepStrictEqual([ok.text, ok.detail, ok.tech], ["Saved to GitHub", "Everything is on GitHub, 3 min ago.",
+                                                       "Synced to github.com/o/p, branch main."]);
   assert.strictEqual(SyncState.describeSync({ own: false }, () => "").text, "Not on GitHub");
 });
 
@@ -244,7 +250,7 @@ check("a file changed on disk is not overwritten: the conflict, then Keep mine",
   const { s, changes } = store(srv);
   const t = s.add("a.tex", new FakeDoc("x"), 1);
   t.doc.type("y");
-  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "conflict" });
+  assert.deepStrictEqual(await s.save(t), { ok: false, reason: "conflict", message: "a.tex changed on disk — not saved. Resolve in the banner." });
   assert.deepStrictEqual([t.conflict, changes], ["disk", ["conflict"]]);
   assert.deepStrictEqual(await s.save(t, true), { ok: true }, "force: the author keeps theirs");
   assert.deepStrictEqual([srv.calls[1].force, t.conflict], [true, null]);
@@ -289,13 +295,16 @@ check("a reload: kept when typed into meanwhile, else the disk's text", () => {
 
 check("saveAll says why, the reason needing you most", async () => {
   const srv = fakeServer((b) => (b.path === "a.tex" ? { _status: 500, error: "disk full" } : { _status: 409, conflict: true }));
-  const { s } = store(srv);
+  const { s, notes } = store(srv);
   for (const p of ["a.tex", "b.tex", "c.tex"]) s.add(p, new FakeDoc(""), 0);
   s.tabs[0].doc.type("1"); s.tabs[1].doc.type("2");
   const r = await s.saveAll();
-  assert.deepStrictEqual(r, { ok: false, reason: "conflict", paths: ["a.tex", "b.tex"], message: "Save failed: disk full" });
-  assert.match(Tabs.unsavedWhy(r), /conflict/);
-  assert.match(Tabs.unsavedWhy({ ok: false, reason: "failed", message: "Save failed: disk full" }), /disk full/);
+  const conflict = "b.tex changed on disk — not saved. Resolve in the banner.";
+  assert.deepStrictEqual(r, { ok: false, reason: "conflict", paths: ["a.tex", "b.tex"], message: conflict });
+  // What the page then says is what saving said already: one notice, not two.
+  assert.ok(notes.includes(Tabs.unsavedWhy(r)), Tabs.unsavedWhy(r));
+  const failed = { ok: false, reason: "failed", message: "Save failed: disk full" };
+  assert.strictEqual(Tabs.unsavedWhy(failed), "Save failed: disk full");
   assert.deepStrictEqual(await store(fakeServer(saved(1))).s.saveAll(), { ok: true });
 });
 
@@ -400,6 +409,268 @@ check("needsCompile: a changed file newer than the PDF, or not listed yet", () =
   assert.strictEqual(Turn.needsCompile(["b.tex"], files, 20), true);
   assert.strictEqual(Turn.needsCompile(["new.tex"], files, 20), true);
   assert.strictEqual(Turn.needsCompile(["a.tex"], files, null), true, "no PDF yet");
+});
+
+check("environment candidates appear inside begin braces and filter by prefix", () => {
+  const symbols = { labels: [], bibkeys: [], macros: [] };
+  const all = Chat.completions("\\begin{", symbols, false);
+  for (const name of ["equation", "align", "itemize", "enumerate"])
+    assert.ok(all.items.some((i) => i.text === name && i.kind === "environment"), name);
+  const filtered = Chat.completions("\\begin{ali", symbols, false);
+  assert.ok(filtered.items.some((i) => i.text === "align"));
+  assert.ok(filtered.items.every((i) => i.text.startsWith("ali")));
+  assert.ok(Chat.completions("\\begin{align", symbols, false).items.some((i) => i.text === "align"));
+  assert.strictEqual(Chat.completions("% \\begin{ali", symbols, false), null);
+  assert.strictEqual(Chat.completions("\\\\begin{ali", symbols, false), null);
+});
+
+check("accepting an environment inserts its end and puts the cursor in the indented body", () => {
+  const source = "  \\begin{ali}";
+  const edit = Chat.environmentEdit(source, source.length - 1, "align", "    ");
+  const result = source.slice(0, edit.from) + edit.text + source.slice(edit.to);
+  assert.strictEqual(result, "  \\begin{align}\n      \n  \\end{align}");
+  assert.strictEqual(edit.cursor, result.indexOf("\n") + 7);
+});
+
+check("existing environment ends are reused without taking a nested parent's end", () => {
+  const accept = (source, indent = "\t") => {
+    const cursor = source.indexOf("|");
+    source = source.replace("|", "");
+    const edit = Chat.environmentEdit(source, cursor, "align", indent);
+    return { text: source.slice(0, edit.from) + edit.text + source.slice(edit.to), cursor: edit.cursor };
+  };
+  assert.deepStrictEqual(accept("\\begin{ali|}\n  x &= y\n\\end{align}"),
+    { text: "\\begin{align}\n  x &= y\n\\end{align}", cursor: 16 });
+  assert.strictEqual(accept("\\begin{align}\n\t\\begin{ali|}\n\\end{align}").text,
+    "\\begin{align}\n\t\\begin{align}\n\t\t\n\t\\end{align}\n\\end{align}");
+  assert.strictEqual(accept("\\begin{ali|}\n\\begin{align}\nx\n\\end{align}\n\\end{align}").text,
+    "\\begin{align}\n\\begin{align}\nx\n\\end{align}\n\\end{align}");
+  assert.strictEqual(accept("\\begin{ali|} % \\end{align}").text,
+    "\\begin{align}\n\t\n\\end{align} % \\end{align}");
+  assert.deepStrictEqual(accept("\\begin{ali|}\n\\end{align}"),
+    { text: "\\begin{align}\n\t\n\\end{align}", cursor: 15 });
+  assert.deepStrictEqual(accept("\\begin{ali|}\\end{align}", "  "),
+    { text: "\\begin{align}\n  \n\\end{align}", cursor: 16 });
+});
+
+check("message composition keeps commands first and scopes only mentioned files", () => {
+  assert.deepStrictEqual(Chat.compose({ text: "/review", refs: "REF", attached: "FILE", mode: "edit",
+    mentions: [{ file: "a.tex" }, { file: "a.tex" }, { file: "b.tex" }] }),
+    { prompt: "/review\n\nREF\n\nFILE", scope: ["a.tex", "b.tex"] });
+  assert.deepStrictEqual(Chat.compose({ text: "explain", refs: "REF", attached: "FILE", mode: "ask", mentions: [{ file: "a.tex" }] }),
+    { prompt: "FILE\n\nREF\n\nexplain", scope: null });
+  for (const text of ["/usr/bin/latex fails", "/ what does this do"])           // a path, a lone slash
+    assert.strictEqual(Chat.compose({ text, refs: "REF" }).prompt, "REF\n\n" + text, text);
+});
+check("build descriptions distinguish a stopped build from a PDF with errors", () => {
+  assert.strictEqual(Util.describeBuild({ cancelled: true, exit: 1, seconds: 2 }, []).cls, "warn");
+  const pdf = Util.describeBuild({ pdf_updated: true, exit: 1, seconds: 3 }, [{ severity: "error" }]);
+  assert.strictEqual(pdf.cls, "err"); assert.ok(pdf.text.includes("PDF built with 1 error"));
+  assert.strictEqual(Util.describeBuild({ exit: 0, seconds: 1 }, []).text, "OK · 1s");
+});
+
+// ---------------------------------------------------------------- mathtext.js
+const MathText = require("../prism_local/static/mathtext.js");
+const katex = require("../prism_local/static/vendor/katex/katex.min.js");
+const marked = require("../prism_local/static/vendor/marked.min.js");
+// As the page has it: the reply's HTML, each formula as [display: tex] or [inline: tex].
+const MDJS = new marked.Marked({ gfm: true, breaks: true });
+const fakeKatex = { renderToString: (tex, o) => `[${o.displayMode ? "display" : "inline"}: ${tex.trim()}]` };
+const reply = (text, macros) => MathText.render(text, { markdown: (s) => MDJS.parse(s), katex: fakeKatex, macros });
+
+check("math: what LaTeX writes, Markdown does not touch", () => {
+  const cases = [
+    ["Let $x_1 * y_2$ and $a^*$, $b^*$.", ["[inline: x_1 * y_2]", "[inline: a^*]", "[inline: b^*]"]],
+    ["spaces $ x^2 $ inside", ["[inline: x^2]"]],
+    ["over a\nline $a +\n b$ break", ["[inline: a +\n b]"]],
+    ["\\(x\\) and \\[y\\]", ["[inline: x]", "[display: y]"]],
+    ["$$\n\\begin{aligned} a &= b \\\\ c \\end{aligned}\n$$", ["[display: \\begin{aligned} a &= b \\\\ c \\end{aligned}]"]],
+    ["\\begin{align}\na &= b \\\\\nc\n\\end{align}", ["[display: \\begin{align}\na &= b \\\\\nc\n\\end{align}]"]],
+    ["| a | b |\n|---|---|\n| $|x|$ | $\\|y\\|$ |", ["[inline: |x|]", "[inline: \\|y\\|]"]],
+    ["the $n$th and $x$2", ["[inline: n]", "[inline: x]"]],
+    ["由于$x>0$，所以$\\sqrt{x}$有定义。", ["[inline: x>0]", "[inline: \\sqrt{x}]"]],
+    ["1. one\n   \\[\n   a = b\n   \\]\n2. two", ["[display: a = b]"]],
+  ];
+  for (const [text, want] of cases) {
+    const html = reply(text);
+    for (const w of want) assert.ok(html.includes(w), `${JSON.stringify(text)} → ${html}`);
+    assert.ok(!/\$|\\\(|\\\[/.test(html.replace(/\[(inline|display): [\s\S]*?\]/g, "")), `nothing left as source: ${html}`);
+  }
+  assert.ok(reply("| a | b |\n|---|---|\n| $|x|$ | c |").includes("<td>c</td>"), "the | in math is not a cell");
+});
+
+check("math: what is not math", () => {
+  const plain = (text) => MathText.split(text).math.length;
+  assert.strictEqual(plain("costs $5 and $6"), 0, "money");
+  assert.strictEqual(plain("price \\$5 and \\$6"), 0, "escaped");
+  assert.strictEqual(plain("`$x$` and ``a $y$ b``"), 0, "code spans");
+  assert.strictEqual(plain("```latex\n$x$ \\[y\\]\n```\n"), 0, "a fence");
+  assert.strictEqual(plain("~~~\n$x$\n"), 0, "a fence not closed yet");
+  assert.strictEqual(plain("a $x\n\ny$ b"), 0, "not over a blank line");
+  assert.strictEqual(plain("still coming: $x^2 + "), 0, "not closed (streaming)");
+  assert.strictEqual(plain("$$ $$ and $ $"), 0, "empty");
+  assert.strictEqual(plain("\\begin{theorem} $x$ \\end{theorem}"), 1, "a theorem is text, its math is math");
+  assert.ok(reply("`$x$`").includes("<code>$x$</code>"));
+  assert.ok(reply("    $x$ indented code").includes("<pre><code>$x$ indented code"), "in a code block it goes back as source");
+  assert.ok(!MathText.split("a \uE000 b").text.includes("\uE000"), "a reply's own placeholder characters go");
+});
+
+check("math: KaTeX gets the project's macros and what it lacks, mapped", () => {
+  const html = MathText.render("$\\norm{x}$ $\\eqref{eq:a}$\n\\begin{equation}\\label{eq:a} a \\end{equation}\n"
+    + "\\begin{multline} a \\\\ b \\end{multline}\n\\begin{eqnarray} a &=& b \\end{eqnarray}",
+  { markdown: (s) => MDJS.parse(s), katex, macros: { "\\norm": "\\left\\|#1\\right\\|" } });
+  assert.ok(!html.includes("katex-error") && !html.includes("#cc0000"), html.slice(0, 600));
+  assert.ok(html.includes("eq:a"), "\\eqref shows its key");
+  assert.strictEqual(MathText.prepare("\\begin{eqnarray*} a \\end{eqnarray*}"), "\\begin{array}{rcl} a \\end{array}");
+  // An unknown macro is marked, and the rest of the formula is still drawn.
+  const unknown = MathText.render("$\\nosuch + x$", { markdown: (s) => s, katex });
+  assert.ok(unknown.includes('class="katex"') && unknown.includes("#cc0000"), unknown.slice(0, 300));
+});
+
+check("math: navigation sees original labels without invalidating formula cache", () => {
+  const seen = [];
+  let typeset = 0;
+  const renderer = { renderToString: () => { typeset++; return "<span>formula</span>"; } };
+  const options = { markdown: s => MDJS.parse(s), katex: renderer,
+    afterMath: (html, formula) => { seen.push(formula.tex); return html + '<span class="navigation">label</span>'; } };
+  const text = "$\\label{eq:main}x$ and `$\\ref{eq:code}$`";
+  const first = MathText.render(text, options);
+  const second = MathText.render(text, options);
+  assert.deepStrictEqual(seen, ["\\label{eq:main}x", "\\label{eq:main}x"]);
+  assert.strictEqual(typeset, 1, "navigation must reuse the cached KaTeX formula");
+  assert.ok(first.includes('</span><span class="navigation">label</span>'), first);
+  assert.strictEqual(first, second);
+});
+
+check("math: source label links stay outside KaTeX and escape label text", () => {
+  const fs = require("fs"), vm = require("vm");
+  const app = fs.readFileSync(require.resolve("../prism_local/static/app.js"), "utf8");
+  const source = app.slice(app.indexOf("function labelLink("), app.indexOf("function linkLabels("));
+  const afterMath = vm.runInNewContext(source + ";mathLabelLinks", { ChatLogic: Chat, esc: Util.escapeHtml });
+  const html = MathText.render('$\\label{eq:"<&}x$', { markdown: s => s, katex: fakeKatex, afterMath });
+  assert.ok(html.includes('[inline: x]<span class="label-links">'), html);
+  assert.ok(html.includes('data-label="eq:&quot;&lt;&amp;"'), html);
+  assert.ok(html.includes('>eq:&quot;&lt;&amp;</a>'), html);
+});
+
+// ---------------------------------------------------------------- findlogic.js
+const FindLogic = require("../prism_local/static/findlogic.js");
+const spans = (text, opts) => FindLogic.matches(text, opts).list.map((x) => text.slice(x.from, x.to));
+check("find: match case, whole word and regular expressions", () => {
+  const text = "Cat cat, concat; cat_s. Ünter ünterm";
+  assert.deepStrictEqual(spans(text, { query: "cat" }), ["Cat", "cat", "cat", "cat"]);
+  assert.deepStrictEqual(spans(text, { query: "Cat", caseSensitive: true }), ["Cat"]);
+  assert.deepStrictEqual(spans(text, { query: "cat", wholeWord: true }), ["Cat", "cat"]);
+  assert.deepStrictEqual(spans(text, { query: "ünter", wholeWord: true }), ["Ünter"], "a letter of any script is a word's");
+  assert.deepStrictEqual(spans(text, { query: "c[a-z]+t", regex: true }), ["Cat", "cat", "concat", "cat"]);
+  assert.deepStrictEqual(spans("aab ab", { query: "ab", wholeWord: true }), ["ab"]);
+});
+check("find: typed text is literal; LaTeX's escapes are not errors", () => {
+  assert.deepStrictEqual(spans("a $x^2$ and \\frac{1}{2}", { query: "$x^2$" }), ["$x^2$"]);
+  assert.deepStrictEqual(spans("\\frac{1}{2}", { query: "\\frac{" }), ["\\frac{"]);
+  assert.deepStrictEqual(spans("50\\% off", { query: "\\%", regex: true }), ["%"]);
+  assert.deepStrictEqual(spans("a\\{b", { query: "\\\\\\{", regex: true }), ["\\{"]);
+});
+check("find: an invalid expression is said, not thrown; empty matches are left out", () => {
+  const r = FindLogic.matches("abc", { query: "(a", regex: true });
+  assert.deepStrictEqual([r.list.length, r.error], [0, "Invalid pattern"]);
+  assert.deepStrictEqual(FindLogic.matches("abc", { query: "" }).list, []);
+  assert.deepStrictEqual(spans("ab\nab", { query: "^|x*", regex: true }), []);
+  assert.deepStrictEqual(spans("ab\nab", { query: "^a", regex: true }), ["a", "a"], "^ is each line's start");
+  const capped = FindLogic.matches("aaaa", { query: "a" }, 3);
+  assert.deepStrictEqual([capped.list.length, capped.more], [3, true]);
+});
+check("replace: $1, $&, $$ in a regular expression; as typed otherwise", () => {
+  const opts = { query: "(\\w+)@(\\w+)", regex: true };
+  const text = "x a@b y c@d";
+  const { list } = FindLogic.matches(text, opts);
+  assert.strictEqual(FindLogic.replaceAll(text, list, "$2 at $1 [$&] $$ $3 $0", opts), "x b at a [a@b] $ $3 $0 y d at c [c@d] $ $3 $0");
+  assert.strictEqual(FindLogic.replaceAll(text, list, "$10", opts), "x a0 y c0", "$10 with one digit's group, as String.replace");
+  const lit = { query: "a@b" };
+  assert.strictEqual(FindLogic.replaceAll(text, FindLogic.matches(text, lit).list, "$1$&", lit), "x $1$& y c@d");
+  // the same as String.prototype.replace
+  const re = /(\w+)@(\w+)/g;
+  assert.strictEqual(FindLogic.replaceAll(text, list, "<$2|$1|$&>", opts), text.replace(re, "<$2|$1|$&>"));
+});
+check("find: lines and columns of the matches, and a long line's excerpt", () => {
+  const text = "one\r\ntwo cat\n\ncat";
+  const where = FindLogic.lines(text, FindLogic.matches(text, { query: "cat" }).list);
+  assert.deepStrictEqual(where, [{ line: 1, ch: 4, len: 3, text: "two cat" }, { line: 3, ch: 0, len: 3, text: "cat" }]);
+  const long = "x".repeat(100) + "HIT" + "y".repeat(100);
+  const e = FindLogic.excerpt(long, 100, 3);
+  assert.strictEqual(e.hit, "HIT");
+  assert.ok(e.before.startsWith("…") && e.after.endsWith("…") && e.before.length + e.after.length < 90, JSON.stringify(e));
+  assert.deepStrictEqual(FindLogic.excerpt("  short cat", 8, 3), { before: "short ", hit: "cat", after: "" });
+});
+check("regions: formulas of every kind, comments, and what only looks like them", () => {
+  const text = "Let $x_i$ be \\(y_i\\), cost \\$5 and \\$6; 50\\% i.\n"
+    + "$$a_i$$ \\[b_i\\] % c_i here\n"
+    + "\\begin{align*}\n d_i &= 1 % e_i\n\\end{align*}\n"
+    + "\\begin{theorem} f_i \\end{theorem} line\\\\[2pt] g_i $ lone\n\nnot $ math";
+  const r = FindLogic.regions(text);
+  const spansOf = (list) => list.map(([a, b]) => text.slice(a, b));
+  assert.deepStrictEqual(spansOf(r.math), ["$x_i$", "\\(y_i\\)", "$$a_i$$", "\\[b_i\\]",
+    "\\begin{align*}\n d_i &= 1 % e_i\n\\end{align*}"]);
+  assert.deepStrictEqual(spansOf(r.comments), ["% c_i here", "% e_i"]);
+  const hits = (where) => FindLogic.scoped(FindLogic.matches(text, { query: "[a-gxy]_i", regex: true }).list, r, where)
+    .map((x) => text.slice(x.from, x.to));
+  assert.deepStrictEqual(hits("math"), ["x_i", "y_i", "a_i", "b_i", "d_i"], "not in a comment inside a display");
+  assert.deepStrictEqual(hits("text"), ["f_i", "g_i"]);
+  assert.strictEqual(hits("anywhere").length, 9);
+  // a match that runs out of its formula is not "in mathematics"
+  assert.deepStrictEqual(FindLogic.scoped(FindLogic.matches("$a$ b", { query: "a\\$ b", regex: true }).list,
+    FindLogic.regions("$a$ b"), "math"), []);
+});
+// ---------------------------------------------------------------- agentsearch.js
+const AgentSearch = require("../prism_local/static/agentsearch.js");
+const block = (o) => "Here is my proposal.\n```prism-search\n" + JSON.stringify(o) + "\n```\n";
+check("agent search: the prompt names the request, the files and the answer's form", () => {
+  const p = AgentSearch.prompt("rename the index i to j", { main: "main.tex", documentFiles: ["main.tex", "sec/a.tex"] });
+  assert.ok(p.startsWith("[prism-search]") && p.includes("Request: rename the index i to j") && p.includes("main.tex, sec/a.tex"));
+  assert.ok(p.includes("```prism-search\n{") && p.includes('"\\\\\\\\sum"') && p.includes("Do not change, create or delete any file"), p);
+});
+check("agent search: the answer's last block is read; what cannot be used is said", () => {
+  const ok = AgentSearch.parse("```json\n{\"rules\": []}\n```\n" + block({ summary: "S", rules: [
+    { find: "_i\\b", replace: "_j", where: "math", note: "n" },
+    { find: "(a", replace: "b" },
+    { find: "x", replace: "y", where: "nowhere", caseSensitive: false },
+    { find: "z" }], edits: [{ file: "./a.tex", line: 2, old: "q", new: "r" }, { file: "a.tex", line: 0, old: "q", new: "r" }] }));
+  assert.strictEqual(ok.summary, "S");
+  assert.deepStrictEqual(ok.rules, [{ find: "_i\\b", replace: "_j", where: "math", caseSensitive: true, note: "n" },
+    { find: "x", replace: "y", where: "anywhere", caseSensitive: false, note: "" }]);
+  assert.deepStrictEqual(ok.edits, [{ file: "a.tex", line: 2, old: "q", new: "r", note: "" }]);
+  assert.strictEqual(ok.problems.length, 4, ok.problems.join(" | "));
+  assert.ok(ok.problems[0].startsWith("Rule 2 is not a valid regular expression"), ok.problems[0]);
+  assert.ok(AgentSearch.parse("no block at all").error.includes("no prism-search block"));
+  assert.ok(AgentSearch.parse("```prism-search\n{rules: []}\n```").error.startsWith("The agent's proposal is not valid JSON"));
+  assert.deepStrictEqual(AgentSearch.parse('{"rules": [], "edits": []}').rules, [], "bare JSON is read too");
+});
+check("agent search: rules where they may be, edits where they say, one change per place", () => {
+  const files = [["main.tex", "Let $x_i$ and \\(a_{i}\\) for i in I.\n% x_i\n$\\sum_{i=1}^n y_i$ in $\\int$\n"],
+    ["refs.bib", "x_i\n"], ["sec/b.tex", "nothing here\n"]];
+  const p = AgentSearch.parse(block({ rules: [{ find: "_\\{?i\\b", replace: "_j", where: "math" },
+    { find: "(_\\{)i(\\})", replace: "$1j$2", where: "math" }],
+    edits: [{ file: "main.tex", line: 3, old: "\\sum_{i=1}", new: "\\sum_{j=1}" },
+      { file: "main.tex", line: 1, old: "i", new: "j" }, { file: "main.tex", line: 9, old: "a", new: "b" },
+      { file: "gone.tex", line: 1, old: "a", new: "b" }, { file: "main.tex", line: 1, old: "zzz", new: "b" }] }));
+  const r = AgentSearch.changes(files, p);
+  assert.deepStrictEqual(r.files.map((f) => f.path), ["main.tex"], "math only: not the .bib, not a comment");
+  const c = r.files[0].changes;
+  assert.deepStrictEqual(c.map((x) => [x.by, x.line, files[0][1].slice(x.from, x.to), x.text]),
+    [["rule", 0, "_i", "_j"], ["rule", 0, "_{i", "_j"], ["edit", 2, "\\sum_{i=1}", "\\sum_{j=1}"], ["rule", 2, "_i", "_j"]]);
+  assert.deepStrictEqual(r.counts, { rules: [3, 0], edits: 1 }, "rule 2's matches overlap rule 1's: the first is kept");
+  assert.strictEqual(c[2].after, "$\\sum_{j=1}^n y_i$ in $\\int$");
+  assert.strictEqual(r.problems.length, 4, r.problems.join(" | "));
+  assert.ok(r.problems.some((x) => x.includes("more than once on line 1")) && r.problems.some((x) => x.includes("no line 9"))
+    && r.problems.some((x) => x.includes("gone.tex is not")) && r.problems.some((x) => x.includes("does not have “zzz”")));
+  assert.strictEqual(AgentSearch.apply(files[0][1], c.filter((x) => x.by === "edit")), files[0][1].replace("\\sum_{i=1}", "\\sum_{j=1}"));
+});
+check("go to line: a line, or a line and a column, from 1", () => {
+  assert.deepStrictEqual(FindLogic.lineSpec("120"), { line: 119, ch: 0 });
+  assert.deepStrictEqual(FindLogic.lineSpec(" 12:5 "), { line: 11, ch: 4 });
+  assert.deepStrictEqual(FindLogic.lineSpec("12,5"), { line: 11, ch: 4 });
+  assert.deepStrictEqual(FindLogic.lineSpec("0"), { line: 0, ch: 0 });
+  for (const bad of ["", "x", "12:", "-3", "1.5"]) assert.strictEqual(FindLogic.lineSpec(bad), null, bad);
 });
 
 Promise.all(pending).then(() => {

@@ -19,6 +19,7 @@ import shutil
 import time
 import zlib
 from pathlib import Path
+from errors import Conflict, LockBusy, Refused
 from fsutil import replace_file
 
 WIN = os.name == "nt"
@@ -56,8 +57,14 @@ def read_json(path: Path) -> dict | None:
         return None
 
 
-class StateUnreadable(ValueError):
-    """A state file is there but cannot be read: damaged, or held by another program."""
+class StateUnreadable(Conflict):
+    """A state file is there but cannot be read: damaged, or held by another program. A
+    damaged one says so to the page (details), and whether its backup can be put back."""
+
+    def __init__(self, message: str, path: Path | None = None):
+        bak = backup_of(path) if path else None
+        super().__init__(message, details={"damaged_state": path.name, "backup": _readable(bak)}
+                         if path else None)
 
 
 def read_state(path: Path, tries: int = 10) -> dict:
@@ -80,13 +87,65 @@ def read_state(path: Path, tries: int = 10) -> dict:
     except ValueError as e:
         data = e
     if not isinstance(data, dict):
+        bak = backup_of(path)
         raise StateUnreadable(f"{path} is damaged; nothing was changed. Fix it, or rename it "
-                              "to start afresh.")
+                              "to start afresh" + (f" (the version before its last change is {bak})."
+                                                   if bak.is_file() else "."), path)
     return data
+
+
+def _readable(path: Path) -> bool:
+    try:
+        return isinstance(json.loads(path.read_text(encoding="utf-8")), dict)
+    except (OSError, ValueError):
+        return False
+
+
+STATE_FILES = ("projects.json", "settings.json")
+
+
+def restore_backup(name: str) -> None:
+    """Put back the version of a damaged state file before its last change (its .bak),
+    keeping the damaged one as <name>.damaged. Only a damaged one: a readable file, or one
+    another program holds, is left alone."""
+    if name not in STATE_FILES:
+        raise Refused(f"not a state file: {name}")
+    path = state_dir() / name
+    with FileLock(path.with_suffix(".lock"), timeout=10):
+        try:
+            read_state(path, tries=1)
+            raise Conflict(f"{name} can be read: nothing to put back")
+        except StateUnreadable as e:
+            if not e.details:
+                raise                               # held, not damaged
+        bak = backup_of(path)
+        if not _readable(bak):
+            raise Conflict(f"{bak} cannot be read either; nothing was changed")
+        replace_file(path.with_name(name + ".damaged"), path.read_bytes())
+        replace_file(path, bak.read_bytes(), durable=True)
+
+
+def backup_of(path: Path) -> Path:
+    return path.with_name(path.name + ".bak")
 
 
 def write_json(path: Path, data) -> None:
     replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"))
+
+
+def write_state(path: Path, data) -> None:
+    """projects.json or settings.json: on the disk before it replaces the old one, and
+    the old one kept as `<name>.bak`, for when the disk loses what it was told it had."""
+    try:
+        old = path.read_bytes()
+    except OSError:
+        old = None
+    if old and old.strip():
+        try:
+            replace_file(backup_of(path), old)
+        except OSError:
+            pass                            # no copy this time: the write itself matters
+    replace_file(path, json.dumps(data, indent=1, ensure_ascii=False).encode("utf-8"), durable=True)
 
 
 class FileLock:
@@ -106,7 +165,7 @@ class FileLock:
             except OSError:
                 if time.monotonic() > deadline:
                     self.fh.close()
-                    raise TimeoutError(f"another Prism process holds {self.path}")
+                    raise LockBusy(f"Another Prism window is busy with {self.path.name}; try again in a moment")
                 time.sleep(0.1)
 
     def __exit__(self, *exc):
@@ -144,7 +203,7 @@ def update_projects(fn):
     with FileLock(path.with_suffix(".lock"), timeout=10):
         data = load_projects()
         result = fn(data)
-        write_json(path, data)
+        write_state(path, data)
     return result
 
 
@@ -242,56 +301,63 @@ def move_folder(old: Path, new: Path, wait: float = 20.0, *, across: bool = Fals
             sync = f.get("sync") or {}
             if sync.get("repo") and inside(Path(sync["repo"]), old):
                 sync["repo"] = str(new / Path(sync["repo"]).relative_to(old))
-    # Read and validate before touching the files. Keep the metadata lock through the
-    # move, so another request cannot write an outdated project list back over it.
+    # Read and validate before touching the files, and leave a journal. The move itself
+    # runs without the project list's lock (it may take seconds, or a whole copy across
+    # drives, and every other change to the list would wait for it and then fail; the
+    # folders are reserved by the caller, instances.exclusive). Then the list as it is
+    # by then is repointed: a change another window made meanwhile is kept.
     file = _registry_path()
+    lock = file.with_suffix(".lock")
     journal = state_dir() / "moves" / (project_key(old) + ".json")
     mover = shutil.move if across else os.rename
-    with FileLock(file.with_suffix(".lock"), timeout=10):
+    with FileLock(lock, timeout=10):
         data = load_projects()
         repoint(data)
         write_json(journal, {"from": str(old), "to": str(new), "projects": data,
                              "instruction": "Check which folder exists, then restore its paths in projects.json."})
-        moved = False
-        try:
-            deadline = time.monotonic() + wait
-            while True:
-                try:
-                    mover(old, new)
-                    moved = True
-                    break
-                except OSError as exc:
-                    if across:
-                        # shutil.move may already have copied part/all of a directory
-                        # before failing to remove the source. Retrying could move it
-                        # inside the now-existing target. Keep the journal for recovery.
-                        if new.exists():
-                            raise OSError(f"the move from {old} to {new} did not finish; keep both folders. "
-                                          f"Recovery details: {journal}. {exc}") from exc
-                        raise
-                    if not isinstance(exc, PermissionError):
-                        raise
-                    if time.monotonic() > deadline:
-                        raise PermissionError(f"{old.name} is in use by another program; close it and try again")
-                    time.sleep(0.25)
+    moved = saved = False
+    try:
+        deadline = time.monotonic() + wait
+        while True:
             try:
-                write_json(file, data)
+                mover(old, new)
+                moved = True
+                break
             except OSError as exc:
-                try:
-                    mover(new, old)
-                    moved = False
-                except OSError:
-                    raise MoveIncomplete(new, journal, exc) from exc
-                raise OSError(f"the project list could not be saved; the folder was restored to {old}: {exc}") from exc
-        finally:
-            # Leave evidence if rollback failed (or a cross-device copy was partial).
-            rolled_back = not moved and old.is_dir() and (same or not new.exists())
-            saved = moved and read_json(file) == data
-            if rolled_back or saved:
-                try:
-                    journal.unlink()
-                except OSError:
-                    pass
+                if across:
+                    # shutil.move may already have copied part/all of a directory
+                    # before failing to remove the source. Retrying could move it
+                    # inside the now-existing target. Keep the journal for recovery.
+                    if new.exists():
+                        raise OSError(f"the move from {old} to {new} did not finish; keep both folders. "
+                                      f"Recovery details: {journal}. {exc}") from exc
+                    raise
+                if not isinstance(exc, PermissionError):
+                    raise
+                if time.monotonic() > deadline:
+                    raise PermissionError(f"{old.name} is in use by another program; close it and try again")
+                time.sleep(0.25)
+        try:
+            with FileLock(lock, timeout=10):
+                data = load_projects()
+                repoint(data)
+                write_state(file, data)
+            saved = True
+        except OSError as exc:
+            try:
+                mover(new, old)
+                moved = False
+            except OSError:
+                raise MoveIncomplete(new, journal, exc) from exc
+            raise OSError(f"the project list could not be saved; the folder was restored to {old}: {exc}") from exc
+    finally:
+        # Leave evidence if rollback failed (or a cross-device copy was partial).
+        rolled_back = not moved and old.is_dir() and (same or not new.exists())
+        if rolled_back or saved:
+            try:
+                journal.unlink()
+            except OSError:
+                pass
 
 
 def safe_touch(project: Path) -> None:

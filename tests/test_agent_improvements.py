@@ -73,6 +73,7 @@ class CompletionUsage(unittest.TestCase):
                 rate = [event for event in job.events if event["t"] == "rate"]
                 self.assertEqual(rate[0]["last_success"], 123)
                 self.assertFalse(rate[0]["stale"])
+                self.assertEqual(job.events[-1]["t"], "done", "completion remains the last event")
             self.assertEqual(backend.calls, [True, True])
 
     def test_selected_profile_is_applied_before_subscription_auth_guard(self):

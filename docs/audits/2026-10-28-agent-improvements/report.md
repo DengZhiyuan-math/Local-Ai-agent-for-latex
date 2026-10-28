@@ -2,6 +2,8 @@
 
 日期：2026-10-28。范围：BUG-002 → BUG-001 → FEAT-002 → FEAT-001。
 
+提交 PR 前已集成最新 main；最新测试结果见 [PR 集成验证](merge-validation.md)。本文保留原始实现阶段的记录。
+
 四项功能均已接通前后端。复用现有 Backend、AgentManager、流式事件、用户 settings、Project.symbols 和编辑器 tab。未新增运行时依赖。
 
 ## 根因和实现

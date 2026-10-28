@@ -217,14 +217,16 @@ const PV = {
 
   // Boxes over the matches. Where the page's text layer is drawn they are measured on its
   // text; elsewhere they are placed from the text items, in proportion to the characters.
-  async drawHits() {
-    document.querySelectorAll(".pdf-hit").forEach((el) => el.remove());
+  async drawHits(page = null) {
+    const root = page ? page.div : document, index = this.find.index, pdf = this.pdf;
+    root.querySelectorAll(".pdf-hit").forEach((el) => el.remove());
     const f = this.find;
     if (!f.hits.length || !f.index || f.index.pdf !== this.pdf) return;
     const pages = await f.index.pages;
-    document.querySelectorAll(".pdf-hit").forEach((el) => el.remove());
+    if (index !== f.index || pdf !== this.pdf) return;
+    root.querySelectorAll(".pdf-hit").forEach((el) => el.remove());
     f.hits.forEach((h, n) => {
-      const pv = this.views[h.idx]; if (!pv) return;
+      const pv = this.views[h.idx]; if (!pv || (page && pv !== page)) return;
       const { map, items } = pages[h.idx];
       const spans = new Map();                       // item -> [first char, last char]
       for (let i = h.start; i < h.end; i++) {
@@ -269,7 +271,7 @@ const PV = {
     await pdfjsLib.renderTextLayer({ textContentSource: tc, container: div, viewport: pv.vp, textDivs })
       .promise.catch(() => {});
     pv.textDivs = textDivs;
-    if (this.find.hits.some((h) => this.views[h.idx] === pv)) this.drawHits();   // measure them now
+    if (this.find.hits.some((h) => this.views[h.idx] === pv)) this.drawHits(pv);   // measure only this page now
   },
 
   async load(mtime, main) {
@@ -292,7 +294,9 @@ const PV = {
     if (!mtime) return true;
     let data;
     try {
-      const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""));
+      // Named for this page's project, as api() does: another project on the port refuses it.
+      const res = await fetch("/pdf?t=" + mtime + "&main=" + encodeURIComponent(main || ""),
+        { headers: projectKey ? { "X-Prism-Project": projectKey } : {} });
       if (!res.ok) return seq !== this.seq;
       data = new Uint8Array(await res.arrayBuffer());
     } catch { return seq !== this.seq; }
@@ -449,8 +453,9 @@ const PV = {
   updatePageLabel() {
     if (!this.views.length) return;
     const sc = $("#pdf-scroll"), mid = sc.scrollTop + sc.clientHeight / 3;
-    let cur = 1;
-    for (const pv of this.views) if (pv.div.offsetTop <= mid) cur = +pv.div.dataset.page;
+    let lo = 0, hi = this.views.length;
+    while (lo < hi) { const midIndex = (lo + hi) >>> 1; if (this.views[midIndex].div.offsetTop <= mid) lo = midIndex + 1; else hi = midIndex; }
+    const cur = Math.max(1, lo);
     $("#page-label").textContent = `${cur} / ${this.views.length}`;
   },
 

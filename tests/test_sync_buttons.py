@@ -14,6 +14,7 @@ import unittest
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tmpdirs import tmpdir  # noqa: E402
@@ -218,7 +219,7 @@ class SyncButtons(unittest.TestCase):
         self.coauthor_pushes("main.tex", "\\maketitle", "\\maketitle % from Alice")
         st = self.button("pull")
         self.assertIsNone(st["error"])
-        self.assertIn("Pulled 1 commit", st["notice"] or "")
+        self.assertIn("Brought in 1 change from GitHub", st["notice"] or "")
         self.assertIn("from Alice", self.read("main.tex"))
         st = self.button("pull")                       # nothing new
         self.assertIsNone(st["error"])
@@ -343,6 +344,57 @@ class SyncButtons(unittest.TestCase):
         self.assertEqual(status, 403)
         status, _ = self.req("/api/git/sync", {"action": "reset --hard"})
         self.assertEqual(status, 400)
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class ButtonAnswer(unittest.TestCase):
+    """What a button's request answers is what its click did, also when the editor's own
+    timer syncs at the same moment: the route served in this process, to step in between."""
+
+    def setUp(self):
+        import server
+        self.server = server
+        tmp = tmpdir()
+        self.remote = tmp / "paper.git"
+        git(tmp, "init", "-q", "--bare", "-b", "main", str(self.remote))
+        self.root = tmp / "paper"
+        shutil.copytree(REPO / "examples" / "minimal", self.root)
+        git(self.root, "init", "-q", "-b", "main")
+        identity(self.root, "Me")
+        git(self.root, "add", "-A")
+        git(self.root, "commit", "-q", "-m", "start")
+        git(self.root, "remote", "add", "origin", str(self.remote))
+        git(self.root, "push", "-q", "-u", "origin", "main")
+        server.set_root(self.root)
+        server.GITSYNC.bind_target()
+        self.srv = server.httpbase.Server(("127.0.0.1", 0), server.Handler)
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        self.addCleanup(self.srv.server_close)
+        self.addCleanup(self.srv.shutdown)
+        self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
+
+    def button(self, action):
+        r = urllib.request.Request(self.url + "/api/git/sync", json.dumps({"action": action}).encode(), HEADERS)
+        with HTTP.open(r, timeout=60) as resp:
+            return json.loads(resp.read())
+
+    def test_a_failed_pull_says_so_while_the_timer_syncs(self):
+        sync = self.server.GITSYNC
+        self.remote.rename(self.remote.with_name("away.git"))      # GitHub cannot be reached
+        pull = sync.pull
+
+        def pull_then_the_timer(**kw):
+            done = pull(**kw)
+            # Right then the editor's timer commits a save: a step that succeeds.
+            (self.root / "main.tex").write_text("saved meanwhile\n", encoding="utf-8")
+            timer = threading.Thread(target=lambda: sync.commit_all("Autosave"))
+            timer.start()
+            timer.join()
+            return done
+        with mock.patch.object(sync, "pull", side_effect=pull_then_the_timer):
+            st = self.button("pull")
+        self.assertIn("Could not reach GitHub", st["error"] or "", "the click's own failure")
+        self.assertEqual(git(self.root, "log", "-1", "--format=%s"), "Autosave: main.tex")
 
 
 if __name__ == "__main__":

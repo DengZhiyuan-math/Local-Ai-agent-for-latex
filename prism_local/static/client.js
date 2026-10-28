@@ -34,13 +34,16 @@ const Client = (() => {
       restart: () => post("/api/restart"),
       renameProject: (name) => post("/api/project/rename", { name }),
       snippets: () => get("/api/snippets"),
-      saveSnippets: (content) => post("/api/snippets", { content }),
       // files
       file: (path) => get("/api/file", { path }),
       saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),
+      // many files' text at once, for search and word counts: {files: [{path, mtime, content | skipped}]}
+      texts: (paths) => post("/api/texts", { paths }),
       // the Files menu: one of FILE_ACTIONS
       fileAction: (action, body) => post("/api/files/" + action, body),
-      upload: ({ name, data, destination }) => post("/api/upload", { name, data, destination }),
+      // upload_id: the page's name for it, so removing its chip can take it back
+      upload: ({ name, data, destination, upload_id, signal }) => api("/api/upload", { name, data, destination, upload_id }, { signal }),
+      uploadCancel: (upload_id) => post("/api/upload/cancel", { upload_id }),
       uploadSync: (paths) => get("/api/upload/sync", { paths: paths.join("\n") }),
       diff: (path) => get("/api/diff", { path }),
       // the build and the PDF
@@ -75,7 +78,11 @@ const Client = (() => {
 
   const FILE_ACTIONS = ["reveal", "copy", "paste", "rename", "new", "trash"];
 
-  return { create, query, FILE_ACTIONS };
+  // A project file opened in a new tab, which cannot send the X-Prism-Project header: the
+  // project is named in the URL, so another project that has taken the port refuses it.
+  const assetUrl = (path, projectKey) => "/api/asset" + query({ path, project_key: projectKey });
+
+  return { create, query, assetUrl, FILE_ACTIONS };
 })();
 
 // On a page (after common.js): its requests, Q.file(path) …

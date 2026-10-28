@@ -22,6 +22,7 @@ import sources
 from fsutil import write_bytes
 from projectconfig import Config
 from repository import RepoBusy, Repository, locate
+from synctarget import RepoSettings
 
 REPO_RE = re.compile(r"[A-Za-z0-9._-]{1,100}")     # a GitHub repository name
 # Text files are stored with \n line ends whatever each co-author's git does with them
@@ -68,7 +69,8 @@ def github_of(top: Path | None) -> str | None:
 
 def git_init(root: Path) -> None:
     """A repository of the project's own, with build output ignored, line ends kept the
-    same for co-authors on every system, and force pushes refused (gitsync.install_guard)."""
+    same for co-authors on every system, and force pushes refused (gitsync.install_guard).
+    One made here is one Prism manages (RepoSettings.managed)."""
     gi = root / ".gitignore"
     if not gi.exists():
         lines = sources.gitignore(Config(root).outdir)
@@ -81,6 +83,7 @@ def git_init(root: Path) -> None:
             run_git(root, "init", "-q", "-b", "main")
         except subprocess.CalledProcessError:          # git older than 2.28
             run_git(root, "init", "-q")
+        RepoSettings(Repository(root, root / ".git")).update(managed=True)
     if (root / ".git").is_dir():
         gitsync.install_guard(root / ".git")
 
@@ -122,10 +125,13 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
     if not REPO_RE.fullmatch(name):
         return {"error": f"not a GitHub repository name: {name}"}
     full = f"{owner}/{name}" if owner else name
+    who = owner or st["account"]
+    url = f"https://github.com/{who}/{name}"
     try:
         git_init(root)
         if run_git(root, "remote").stdout.strip():
-            return {"error": "This repository already has a remote. Confirm its sync target in the editor Git menu."}
+            return {"error": "This project is already connected to a repository online, and Prism syncs with "
+                             "it; nothing new was created."}
         repo = Repository.find(root, files=(lambda: files_lock) if files_lock else None)
         if repo is None:
             return {"error": "git init failed"}
@@ -134,23 +140,41 @@ def create_github_repo(root: Path, owner: str = "", name: str = "", files_lock=N
             unstage_big(repo)
             if repo.ok("status", "--porcelain", "--untracked-files=no").strip():
                 repo.ok("commit", "-q", "-m", "Initial commit")
+        branch = run_git(root, "symbolic-ref", "-q", "--short", "HEAD").stdout.strip()
+        # What it syncs with is the repository created here, bound before it exists: from
+        # the moment it has an origin, a look (the Home page, the editor's sync) finds it
+        # bound, and never binds whatever the configuration names instead. Its branch
+        # pushes to the branch of the same name there.
+        own = RepoSettings(repo)
+        own.update(managed=True)        # its remote and branches are set up here
+        own.bind({"repository_identity": f"github.com/{who}/{name}".lower(),
+                  "branch_ref": f"refs/heads/{branch}", "local_branch": f"refs/heads/{branch}"})
+        run_git(root, "config", f"branch.{branch}.remote", "origin")
+        run_git(root, "config", f"branch.{branch}.merge", f"refs/heads/{branch}")
     except subprocess.CalledProcessError as e:
         return {"error": f"git {e.cmd[1]} failed: {(e.stderr or e.stdout or '').strip()[:400]}"}
     except (OSError, subprocess.SubprocessError, RuntimeError) as e:   # RepoBusy, too
         return {"error": str(e)}
     failed = gh.create(root, full)
     if failed:
+        own.unbind()                    # nothing was created to sync with
         return {"error": failed}
-    who = owner or st["account"]
-    url = f"https://github.com/{who}/{name}"
     sync = project_sync(root)
     try:
+        def astray(c: dict) -> bool:
+            return c["repository_identity"] != f"github.com/{who}/{name}".lower() \
+                or c["branch_ref"] != c["local_branch"]
         candidate = sync.candidate()
-        if candidate["repository_identity"] != f"github.com/{who}/{name}".lower():
-            return {"error": "Created repository differs from the effective Git sync target; local files kept",
-                    "url": url}
-        if candidate["branch_ref"] != candidate["local_branch"]:
-            return {"error": "Created repository target differs from the current branch; local files kept",
+        if astray(candidate):
+            sync.validate_target(fresh=True)        # what it set up here, it puts back (repair)
+            candidate = sync.candidate(fresh=True)
+        if astray(candidate):
+            # Something on this computer sends it elsewhere (a URL rewrite in your git
+            # settings, a change made meanwhile). It stays bound to the repository created
+            # here: sync waits, and goes on by itself once they agree again.
+            return {"error": f"The GitHub repository {who}/{name} was created, but this computer's git "
+                             "settings send uploads elsewhere, so nothing was uploaded. Your files are "
+                             "kept here, and uploading starts by itself once the settings point to it.",
                     "url": url}
         sync.bind_target(gitsync.public_target(candidate))
         pushed = sync.push(manual=True)

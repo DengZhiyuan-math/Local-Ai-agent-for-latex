@@ -14,6 +14,7 @@ live in memory and end when the server stops.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import base64
 import mimetypes
@@ -21,19 +22,25 @@ import hashlib
 import threading
 import time
 import os
+import queue
 import re
+import threading
 import urllib.error
 import urllib.request
 import uuid
 from pathlib import Path
 
 import mcp_compile
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, attachment_type
+from backends import Backend, Job, attachment_type, file_place
 from fsutil import project_path, with_line_ends_of, write_bytes
 
 MAX_READ = 200_000        # characters of one read_file result
 MAX_HITS = 200            # search results
 MAX_SESSIONS = 20
+# What APIs answer when the conversation outgrew the model's context (OpenAI, DeepSeek,
+# Qwen, Moonshot, Ollama, vLLM say it in one of these ways).
+TOO_LONG = re.compile(r"context.length|context_length|maximum context|context window|too many tokens"
+                      r"|prompt is too long|reduce the length|exceeds? the (?:model'?s )?(?:max|context)", re.I)
 PROJECT_RULES = ("CLAUDE.md", "AGENTS.md")
 
 TOOL_PROMPT = """\
@@ -89,6 +96,7 @@ class ApiError(Exception):
 class OpenAICompat(Backend):
     kind = "openai"
     label = "OpenAI-compatible API"
+    file_tool_rule = ""             # its file tools are the only tools it has (TOOL_PROMPT)
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -189,10 +197,8 @@ class OpenAICompat(Backend):
     # ------------------------------------------------------------ the loop
     def run(self, job: Job) -> dict:
         import registry
-        if job.session_id and self.check_session(job.root, job.session_id):
-            raise ValueError("The API session does not belong to this project. Start a new chat.")
         model = job.model or self.default_model
-        saved = self.sessions.get(job.session_id or "")
+        saved = self.sessions.get(job.session_id or "")   # checked by AgentManager.start (check_session)
         if saved is None:
             sid = uuid.uuid4().hex
             msgs = [{"role": "system", "content": self.system_prompt(job.root)}]
@@ -227,11 +233,21 @@ class OpenAICompat(Backend):
             except ApiError as e:
                 if job.cancel.is_set():
                     res.update(is_error=True, subtype="stopped")
+                elif TOO_LONG.search(str(e)):
+                    res.update(is_error=True, exit=1, subtype="API error", stderr=str(e),
+                               error="This conversation is now too long for the model: start a new chat.")
                 else:
                     res.update(is_error=True, exit=1, subtype="API error", stderr=str(e))
                 break
             usage["in"] += u.get("prompt_tokens") or 0
             usage["out"] += u.get("completion_tokens") or 0
+            if job.cancel.is_set():
+                # Stopped while it streamed: what it said is kept, the tools it asked for
+                # do not run (the next message must not see a call left unanswered).
+                if text:
+                    msgs.append({"role": "assistant", "content": text})
+                res.update(is_error=True, subtype="stopped")
+                break
             msg: dict = {"role": "assistant", "content": text if text or not calls else None}
             if calls:
                 msg["tool_calls"] = [{"id": c["id"], "type": "function",
@@ -246,7 +262,8 @@ class OpenAICompat(Backend):
                 break
             for c in calls:
                 msgs.append({"role": "tool", "tool_call_id": c["id"],
-                             "content": self._call(job, c, denials)})
+                             "content": "Not run: the user stopped the turn." if job.cancel.is_set()
+                             else self._call(job, c, denials)})
         else:
             res.update(is_error=True, subtype=f"stopped after {self.max_steps} steps")
         for m in msgs:
@@ -262,7 +279,7 @@ class OpenAICompat(Backend):
         return res
 
     def system_prompt(self, root: Path) -> str:
-        parts = [SYSTEM_APPEND.replace(FILE_TOOL_RULE, ""), TOOL_PROMPT]
+        parts = [self.system_text(), TOOL_PROMPT]
         for name in PROJECT_RULES:
             try:
                 p = project_path(root, name)
@@ -289,44 +306,43 @@ class OpenAICompat(Backend):
         text, reasoning, usage = [], [], {}
         calls: dict[int, dict] = {}
         try:
-            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
-                job.http = resp
-                for raw in resp:
-                    if job.cancel.is_set():
-                        break
-                    line = raw.decode("utf-8", "replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        d = json.loads(data)
-                    except ValueError:
-                        continue
-                    if d.get("error"):
-                        raise ApiError(json.dumps(d["error"])[:2000])
-                    usage = d.get("usage") or usage
-                    for ch in d.get("choices") or []:
-                        delta = ch.get("delta") or {}
-                        if delta.get("content"):
-                            text.append(delta["content"])
-                            job.emit({"t": "delta", "text": delta["content"]})
-                        if delta.get("reasoning_content"):
-                            reasoning.append(delta["reasoning_content"])
-                            job.emit({"t": "thinking", "text": delta["reasoning_content"]})
-                        for tc in delta.get("tool_calls") or []:
-                            slot = calls.setdefault(tc.get("index", len(calls)),
-                                                    {"id": "", "name": "", "arguments": ""})
-                            slot["id"] = tc.get("id") or slot["id"]
-                            fn = tc.get("function") or {}
-                            slot["name"] = slot["name"] or fn.get("name") or ""
-                            slot["arguments"] += fn.get("arguments") or ""
+            for raw in self._stream(job, req):
+                if job.cancel.is_set():
+                    break
+                line = raw.decode("utf-8", "replace").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    d = json.loads(data)
+                except ValueError:
+                    continue
+                if d.get("error"):
+                    raise ApiError(json.dumps(d["error"])[:2000])
+                usage = d.get("usage") or usage
+                for ch in d.get("choices") or []:
+                    delta = ch.get("delta") or {}
+                    if delta.get("content"):
+                        text.append(delta["content"])
+                        job.emit({"t": "delta", "text": delta["content"]})
+                    if delta.get("reasoning_content"):
+                        reasoning.append(delta["reasoning_content"])
+                        job.emit({"t": "thinking", "text": delta["reasoning_content"]})
+                    for tc in delta.get("tool_calls") or []:
+                        slot = calls.setdefault(tc.get("index", len(calls)),
+                                                {"id": "", "name": "", "arguments": ""})
+                        slot["id"] = tc.get("id") or slot["id"]
+                        fn = tc.get("function") or {}
+                        slot["name"] = slot["name"] or fn.get("name") or ""
+                        slot["arguments"] += fn.get("arguments") or ""
         except urllib.error.HTTPError as e:
             with e:
                 detail = e.read().decode("utf-8", "replace")[:2000]
             raise ApiError(f"HTTP {e.code} from {self.base_url}: {detail}") from None
-        except (urllib.error.URLError, OSError, ValueError) as e:
+        except (urllib.error.URLError, OSError, ValueError, AttributeError, http.client.HTTPException) as e:
+            # AttributeError, HTTPException: the stream ended under the reader (Stop).
             raise ApiError(f"{type(e).__name__}: {e}") from None
         finally:
             job.http = None
@@ -336,6 +352,48 @@ class OpenAICompat(Backend):
             c["id"] = c["id"] or f"call_{uuid.uuid4().hex[:12]}"
             out.append(c)
         return "".join(text), out, "".join(reasoning), usage
+
+    def _stream(self, job: Job, req):
+        """The response's lines, read by a thread of its own, which hands them over. Stop
+        then ends the turn at once: a read blocked in that thread cannot be woken on
+        Windows (neither closing the response, which waits for the lock the read holds,
+        nor shutting its socket down does), so it is left to end by itself, at its next
+        data or the request's timeout, and closes the response then. What that thread
+        raised (an HTTPError, the connection lost) is raised here."""
+        lines: queue.Queue = queue.Queue()
+
+        def pump():
+            resp = None
+            try:
+                resp = urllib.request.urlopen(req, timeout=self.timeout)
+                job.http = resp
+                for raw in resp:
+                    lines.put(raw)
+                    if job.cancel.is_set():
+                        break
+                lines.put(None)
+            except BaseException as e:  # noqa: BLE001 — handed to the turn
+                lines.put(e)
+            finally:
+                if resp is not None:
+                    try:
+                        resp.close()
+                    except Exception:  # noqa: BLE001
+                        pass
+
+        threading.Thread(target=pump, daemon=True, name="api-stream").start()
+        while True:
+            try:
+                raw = lines.get(timeout=0.2)
+            except queue.Empty:
+                if job.cancel.is_set():
+                    return
+                continue
+            if raw is None:
+                return
+            if isinstance(raw, BaseException):
+                raise raw
+            yield raw
 
     # ------------------------------------------------------------ tools
     def _call(self, job: Job, c: dict, denials: list[str]) -> str:
@@ -347,7 +405,8 @@ class OpenAICompat(Backend):
         except ValueError:
             args = None
         summary = (args or {}).get("path") or (args or {}).get("pattern") or ""
-        job.tool(c["id"], TOOL_LABELS.get(name, name), summary)
+        path, lines = file_place(name, args or {})
+        job.tool(c["id"], TOOL_LABELS.get(name, name), summary, path=path, lines=lines)
         try:
             if args is None:
                 raise ToolError("the arguments are not a JSON object")
@@ -357,6 +416,8 @@ class OpenAICompat(Backend):
             out, err = f"Error: {e}", True
         except (KeyError, TypeError) as e:
             out, err = f"Error: missing or bad argument {e}", True
+        except Exception as e:  # noqa: BLE001 — a tool failing is the model's to hear, not the turn's end
+            out, err = f"Error: {type(e).__name__}: {e}", True
         job.tool_result(c["id"], err, out)
         return out
 

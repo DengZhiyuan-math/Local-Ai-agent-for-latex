@@ -47,6 +47,25 @@ class Snapshot(unittest.TestCase):
         self.assertEqual((self.root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
         self.assertEqual((self.root / "new.tex").read_text(encoding="utf-8"), "then yours\n")
 
+    def test_highlight_lines_follow_the_final_diff_not_replacement_text(self):
+        before = snapshot.FileState(b"definition\r\nA=g0\r\ncontext\r\nB=g0\r\ntail\r\n", 0o644, digest="before")
+        after = snapshot.FileState(b"A=ha\r\ncontext\r\nB=ha\r\ninserted\r\ntail\r\n", 0o644, digest="after")
+        [change] = snapshot.changes({"a.tex": before}, {"a.tex": after})
+        self.assertEqual(change["lines"], [[0, 1], [2, 4]])
+        # Line ranges are computed before the display diff is shortened.
+        with mock.patch.object(snapshot, "DIFF_MAX", 15):
+            [short] = snapshot.changes({"a.tex": before}, {"a.tex": after})
+        self.assertEqual(short["lines"], change["lines"])
+
+    def test_highlight_lines_for_creation_deletion_and_no_final_newline(self):
+        old = snapshot.FileState(b"unchanged\nold", 0o644, digest="before")
+        new = snapshot.FileState(b"unchanged\nnew", 0o644, digest="after")
+        for a, b, expected in [(old, new, [[1, 2]]), (None, new, [[0, 2]]),
+                               (old, None, []), (old, snapshot.FileState(b"unchanged\n", 0o644), [])]:
+            with self.subTest(a=a, b=b):
+                [change] = snapshot.changes({"a.tex": a} if a else {}, {"a.tex": b} if b else {})
+                self.assertEqual(change["lines"], expected)
+
     def test_a_file_too_big_to_keep_is_seen_but_not_undone(self):
         with mock.patch.object(snapshot, "MAX_FILE", 4):
             before, _ = snapshot.take(self.root)
@@ -70,6 +89,54 @@ class Snapshot(unittest.TestCase):
         snapshot.rebase(before, written, {"build/"})
         after, _ = snapshot.take(self.root)
         self.assertEqual(snapshot.changes(before, after), [])
+
+
+class TurnCost(unittest.TestCase):
+    """A turn's two snapshots on a project with big data: read once, the sources kept."""
+
+    def project(self):
+        import os
+        root = tmpdir()
+        (root / "data").mkdir()
+        (root / "data" / "big.csv").write_bytes(b"x" * 300_000)          # walked before sections/
+        (root / "sections").mkdir()
+        (root / "sections" / "a.tex").write_text("one\n", encoding="utf-8")
+        for p in (root / "data" / "big.csv", root / "sections" / "a.tex"):
+            os.utime(p, ns=(10**18, 10**18))                             # written long ago
+        return root
+
+    def test_the_budget_for_undo_goes_to_the_sources_first(self):
+        root = self.project()
+        with mock.patch.object(snapshot, "MAX_BYTES", 200_000):
+            snap, _ = snapshot.take(root)
+        self.assertIsNotNone(snap["sections/a.tex"].data, "a 4-byte .tex could not be undone")
+        self.assertIsNone(snap["data/big.csv"].data, "only its digest")
+
+    def test_what_did_not_change_is_not_read_again(self):
+        import os
+        root = self.project()
+        before, _ = snapshot.take(root)
+        (root / "sections" / "a.tex").write_bytes(b"two\n")                   # the turn's edit, now
+        reads = []
+        real = Path.read_bytes
+        with mock.patch.object(Path, "read_bytes", lambda p: reads.append(p.name) or real(p)):
+            after, _ = snapshot.take(root, since=before)
+        self.assertEqual(reads, ["a.tex"], "the unchanged big file was read again")
+        self.assertEqual([c["path"] for c in snapshot.changes(before, after)], ["sections/a.tex"])
+        # Changed in place with its size and mtime kept (as within a clock step): a file that
+        # recent is read again however its stat looks.
+        st = (root / "sections" / "a.tex").stat()
+        (root / "sections" / "a.tex").write_bytes(b"TWO\n")
+        os.utime(root / "sections" / "a.tex", ns=(st.st_atime_ns, st.st_mtime_ns))
+        again, _ = snapshot.take(root, since=after)
+        self.assertEqual(again["sections/a.tex"].data, b"TWO\n")
+
+    def test_a_big_text_file_is_described_not_diffed(self):
+        a = snapshot.FileState(b"line\n" * 30000, 0o644, digest="a")
+        b = snapshot.FileState(b"line\n" * 30001, 0o644, digest="b")
+        out = snapshot.diff("data.bib", a, b)
+        self.assertIn("Large file changed", out)
+        self.assertLess(len(out), 300)
 
 
 if __name__ == "__main__":

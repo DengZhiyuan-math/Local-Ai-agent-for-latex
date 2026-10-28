@@ -21,10 +21,10 @@ HTTP = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
 
 
-def request(url, path, data=None, headers=None):
+def request(url, path, data=None, headers=None, timeout=5):
     req = urllib.request.Request(url.rstrip("/") + path, data=data, headers=headers or {})
     try:
-        with HTTP.open(req, timeout=5) as r:
+        with HTTP.open(req, timeout=timeout) as r:
             return r.status, json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         with e:

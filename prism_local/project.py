@@ -44,6 +44,7 @@ UPLOAD_WAIT = 10        # seconds an upload or a menu action waits for git befor
 # saved in the project, so the agent reads them with its file tools.
 UPLOAD_DIR = "prism-uploads"
 MAX_UPLOAD = 25 * 1024 * 1024
+MAX_TEXT = 2 * 1024 * 1024       # larger files are not read for the page's search
 
 
 class Project:
@@ -60,6 +61,7 @@ class Project:
         self.turn = turn or NoTurn()
         self.on_change = on_change
         self._scans: dict[tuple, tuple] = {}
+        self._chains: dict[str, tuple] = {}     # main -> (listed paths, its files' mtimes, its chain)
         self.builder = builder
         self._build_lock = threading.Lock()
         self._running = None                    # the build in progress (stop_build)
@@ -223,10 +225,10 @@ class Project:
         self._scans[key] = (stamp, found)
         return found
 
-    def document_order(self, files: list[str] | None = None) -> list[str]:
+    def document_order(self, files: list[str] | None = None, stamps: dict | None = None) -> list[str]:
         """Project .tex files in the order the main file \\input's them (depth first).
-        `files`: self.list_files(), when the caller has it already."""
-        order = self.input_chain(self.config.main)
+        `files`: self.list_files(), when the caller has it already; `stamps`: see input_chain."""
+        order = self.input_chain(self.config.main, stamps)
         rest = [f for f in (self.list_files() if files is None else files) if f.endswith(".tex") and f not in order]
         return order + rest
 
@@ -265,7 +267,17 @@ class Project:
         keys = [{"key": key, "type": kind, "file": rel, "line": line}
                 for rel in files if rel.endswith(".bib") for key, kind, line in self.scan(rel, "bib") or []]
         return {"labels": labels, "bibkeys": keys, "outline": outline, "macros": macros,
-                "environments": list(envs), "env_titles": envs}
+                "environments": list(envs), "env_titles": envs, "katex_macros": self.katex_macros(files)}
+
+    def katex_macros(self, files: list[str]) -> dict[str, str]:
+        """The project's macros for the agent's replies (KaTeX): {"\\R": "\\mathbb{R}", …},
+        from its .sty files and then its .tex files in document order; a later
+        definition wins, as \\renewcommand does."""
+        out: dict[str, str] = {}
+        for rel in [f for f in files if f.endswith(".sty")] + self.document_order(files):
+            for name, body in (self.scan(rel) or {}).get("definitions", []):
+                out["\\" + name] = body
+        return out
 
     def resolve_tex_name(self, name: str) -> str | None:
         return build.project_file(self.root, name)
@@ -322,8 +334,19 @@ class Project:
                 continue
         return max(stale)[2] if stale else None
 
-    def input_chain(self, main: str) -> list[str]:
-        """`main` and the files it \\input's or \\include's, depth first."""
+    def input_chain(self, main: str, stamps: dict | None = None) -> list[str]:
+        """`main` and the files it \\input's or \\include's, depth first.
+
+        With `stamps` ({path: mtime} of the files listed now, as the tree has them), the last
+        chain of `main` is given again while the same files are listed and none of those in
+        it changed: what decides it is their \\input's and which names are files. Finding
+        each name's file (resolve, slow on Windows) took some 50 ms for 400 \\input's, on
+        every tree request of every open page. A chain with a file the tree does not list
+        (in a hidden folder, say) is worked out each time."""
+        listed = tuple(stamps) if stamps is not None else None
+        hit = self._chains.get(main)
+        if listed is not None and hit and hit[0] == listed and all(stamps.get(r) == m for r, m in hit[1]):
+            return list(hit[2])
         order: dict[str, None] = {}
 
         def visit(rel: str) -> None:
@@ -335,6 +358,8 @@ class Project:
                 if child:
                     visit(child)
         visit(main)
+        if listed is not None and all(r in stamps for r in order):
+            self._chains[main] = (listed, tuple((r, stamps[r]) for r in order), tuple(order))
         return list(order)
 
     def document_of(self, rel: str, cfg: Config) -> str:
@@ -479,6 +504,8 @@ class Project:
                 # page that did not see the turn start, or was reloaded during it).
                 return {"busy": True, "error": "the agent is editing the files; your edits are "
                                                "saved when its turn ends"}, 503
+            if not p.exists() and base_mtime is not None and base_mtime > 0 and not force:
+                return {"conflict": True, "gone": True, "error": "The file was deleted on disk; save under a new name."}, 409
             if p.exists() and base_mtime is not None and abs(mtime(p) - base_mtime) > 1e-6 \
                     and not force:
                 return {"conflict": True, "mtime": mtime(p)}, 409
@@ -511,6 +538,26 @@ class Project:
             self.files_lock.release()
         self.on_change()
         return {"ok": True, "sha256": hashlib.sha256(raw).hexdigest(), "mtime": mtime(p)}, 200
+
+    def texts(self, rels: list[str]) -> list[dict]:
+        """Editable files' text for the page's project search: {path, mtime, content} each
+        (line ends as /api/file gives them), or {path, mtime, skipped} for one larger than
+        MAX_TEXT or not UTF-8. A path that is no editable file of the project
+        (gone since the tree listed it, outside, excluded) is left out."""
+        out = []
+        for rel in rels[:MAX_FILES]:
+            try:
+                p = self.resolve(rel)
+                stamp = mtime(p)                 # before reading: a later change shows as newer
+                if p.stat().st_size > MAX_TEXT:
+                    out.append({"path": rel, "mtime": stamp, "skipped": "larger than 2 MB"})
+                    continue
+                out.append({"path": rel, "mtime": stamp, "content": p.read_text(encoding="utf-8")})
+            except UnicodeDecodeError:
+                out.append({"path": rel, "mtime": stamp, "skipped": "not UTF-8 text"})
+            except (Refused, OSError):
+                continue
+        return out
 
     def upload(self, name: str, data: bytes, folder: str = UPLOAD_DIR) -> str:
         """Save an upload in the project (attachments under prism-uploads/). Reuse identical

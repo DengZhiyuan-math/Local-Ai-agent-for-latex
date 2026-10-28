@@ -15,9 +15,18 @@ from tmpdirs import tmpdir  # noqa: E402
 
 def running(pid: int) -> bool:
     if os.name == "nt":
-        out = subprocess.run(["tasklist", "/FI", f"PID eq {pid}", "/NH", "/FO", "CSV"],
-                             capture_output=True, text=True, **proc.NO_WINDOW).stdout
-        return f'"{pid}"' in out
+        # Asked of Windows itself, not tasklist (which a restricted sandbox may not run, and
+        # whose failure read as "gone"): a process not yet ended is not signalled.
+        import ctypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.OpenProcess.restype = ctypes.c_void_p
+        h = k32.OpenProcess(0x00100000 | 0x1000, False, pid)   # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if not h:
+            return ctypes.get_last_error() == 5                # access denied: it is there
+        try:
+            return k32.WaitForSingleObject(ctypes.c_void_p(h), 0) == 0x102   # WAIT_TIMEOUT: still running
+        finally:
+            k32.CloseHandle(ctypes.c_void_p(h))
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
@@ -108,6 +117,63 @@ class Tree(unittest.TestCase):
         server.kill()                          # no finally, no atexit: as a crash
         server.wait(10)
         self.assertTrue(gone(child), "what the server started outlived it")
+
+
+class Run(unittest.TestCase):
+    """proc.run: subprocess.run whose time limit holds, also when a program the command
+    started keeps its output pipes open (git's https helper, the node behind a .cmd shim)."""
+
+    def holder(self, parent_waits: bool):
+        """A command that starts a program holding its stdout and stderr, then sleeps or exits."""
+        pidfile = tmpdir() / "holder.pid"
+        self.addCleanup(lambda: pidfile.exists() and pidfile.read_text() and kill_pid(int(pidfile.read_text())))
+        code = ("import subprocess, sys, time; print('started', flush=True); "
+                "p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"open({str(pidfile)!r}, 'w').write(str(p.pid))"
+                + ("; time.sleep(60)" if parent_waits else "; sys.exit(4)"))
+        return [sys.executable, "-c", code], pidfile
+
+    def test_the_time_limit_holds_and_ends_everything_the_command_started(self):
+        cmd, pidfile = self.holder(parent_waits=True)
+        t = time.monotonic()
+        with self.assertRaises(subprocess.TimeoutExpired):
+            proc.run(cmd, timeout=1.5)
+        self.assertLess(time.monotonic() - t, 1.5 + proc.RUN_GRACE + 3)
+        self.assertTrue(gone(int(pidfile.read_text())), "what the command started still runs")
+
+    def test_a_command_that_exited_is_done_although_what_it_left_holds_the_pipes(self):
+        cmd, pidfile = self.holder(parent_waits=False)
+        t = time.monotonic()
+        r = proc.run(cmd, timeout=30, text=True)
+        self.assertLess(time.monotonic() - t, 10, "it waited for the program the command left")
+        self.assertEqual((r.returncode, r.stdout.strip()), (4, "started"))
+        self.assertTrue(gone(int(pidfile.read_text())), "what the command left still runs")
+
+    def test_a_daemon_the_command_started_on_its_own_carries_on(self):
+        """git's fsmonitor daemon, gpg-agent: started apart from the command's pipes, they
+        outlive it under subprocess.run, and did not once the command's job handle closed."""
+        import gc
+        pidfile = tmpdir() / "daemon.pid"
+        self.addCleanup(lambda: pidfile.exists() and pidfile.read_text() and kill_pid(int(pidfile.read_text())))
+        apart = "creationflags=0x208" if os.name == "nt" else "start_new_session=True"   # DETACHED, NEW_GROUP
+        code = ("import subprocess, sys; d = subprocess.DEVNULL; "
+                f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], stdin=d, stdout=d, stderr=d, {apart}); "
+                f"open({str(pidfile)!r}, 'w').write(str(p.pid))")
+        self.assertEqual(proc.run([sys.executable, "-c", code], timeout=30).returncode, 0)
+        gc.collect()
+        time.sleep(1)
+        self.assertTrue(running(int(pidfile.read_text())), "the daemon was ended with the command")
+
+    def test_output_input_exit_code_and_check_are_subprocess_runs(self):
+        echo = [sys.executable, "-c", "import sys; d = sys.stdin.read(); print(d.upper()); "
+                                      "print('e', file=sys.stderr); sys.exit(2)"]
+        r = proc.run(echo, timeout=20, input="ok", text=True)
+        self.assertEqual((r.returncode, r.stdout.strip(), r.stderr.strip()), (2, "OK", "e"))
+        self.assertEqual(proc.run(echo, timeout=20).stdout.strip(), b"", "no input: stdin is empty")
+        with self.assertRaises(subprocess.CalledProcessError):
+            proc.run(echo, timeout=20, input="x", text=True, check=True)
+        with self.assertRaises(OSError):
+            proc.run(["prism-no-such-program"], timeout=5)
 
 
 if __name__ == "__main__":

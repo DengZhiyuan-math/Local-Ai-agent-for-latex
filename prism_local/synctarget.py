@@ -82,7 +82,8 @@ _CACHE: dict[tuple, tuple] = {}
 _CACHE_LOCK = threading.Lock()
 
 
-def _config_key(git_dir: Path) -> tuple:
+def config_key(git_dir: Path) -> tuple:
+    """What git reads of a repository's configuration (its own, its worktree's, HEAD, yours)."""
     common = git_dir
     try:                                  # a worktree keeps its config in the main repository
         common = (git_dir / (git_dir / "commondir").read_text(encoding="utf-8").strip()).resolve()
@@ -101,8 +102,8 @@ def _config_key(git_dir: Path) -> tuple:
 
 def cached(kind: str, git_dir: Path, compute: Callable[[], object]):
     """compute(), or its result from less than CACHE_TTL seconds ago while git_dir's
-    configuration (_config_key) is unchanged. A ValueError it raises is kept like a result."""
-    key, stamp = (kind, registry.norm(git_dir)), _config_key(git_dir)
+    configuration (config_key) is unchanged. A ValueError it raises is kept like a result."""
+    key, stamp = (kind, registry.norm(git_dir)), config_key(git_dir)
     with _CACHE_LOCK:
         hit = _CACHE.get(key)
     if hit and hit[0] == stamp and time.monotonic() - hit[1] < CACHE_TTL:
@@ -139,10 +140,18 @@ def _resolve(repo: Repository) -> dict:
     if not branch.startswith("refs/heads/"):
         raise ValueError("Detached HEAD: select a local branch before syncing")
     name = branch.removeprefix("refs/heads/")
+    # All of the configuration in one git (keys are git's: section and name in lower case).
+    listed = git("config", "--null", "--list").stdout
+    config: list[tuple[str, str | None]] = []
+    for e in listed.split("\0"):
+        if e:
+            key, nl, value = e.partition("\n")
+            config.append((key, value if nl else None))
 
     def values(key):
-        return git("config", "--get-all", key).stdout.strip().splitlines()
-    remotes = git("remote").stdout.splitlines()
+        return [v if v is not None else "" for k, v in config if k == key]
+    remotes = {k.split(".", 1)[1].rpartition(".")[0] for k, _ in config
+               if k.startswith("remote.") and k.count(".") >= 2}
     upstream = values(f"branch.{name}.remote")
     merges = values(f"branch.{name}.merge")
     if len(upstream) > 1 or len(merges) > 1:
@@ -151,12 +160,15 @@ def _resolve(repo: Repository) -> dict:
     if remote == "." or remote not in remotes:
         raise ValueError("A unique remote upstream or origin is required")
     branch_ref = merges[0] if merges else branch
-    if not branch_ref.startswith("refs/heads/") or git("check-ref-format", branch_ref).returncode:
+    if not branch_ref.startswith("refs/heads/") or (
+            branch_ref != branch and git("check-ref-format", branch_ref).returncode):
         raise ValueError("Sync requires one valid remote branch")
-    for key in (f"branch.{name}.pushRemote", "remote.pushDefault"):
+    for key, label in ((f"branch.{name}.pushremote", f"branch.{name}.pushRemote"),
+                       ("remote.pushdefault", "remote.pushDefault")):
         if any(v != remote for v in values(key)):
-            raise ValueError(f"{key} differs from the sync remote {remote}")
-    if git("config", "--bool", "--get", f"remote.{remote}.mirror").stdout.strip() == "true":
+            raise ValueError(f"{label} differs from the sync remote {remote}")
+    mirror = [v for k, v in config if k == f"remote.{remote}.mirror"]
+    if mirror and _true(mirror[-1]):
         raise ValueError("Mirror remotes cannot be used for editor sync")
     fetch = git("remote", "get-url", "--all", remote).stdout.strip().splitlines()
     push = git("remote", "get-url", "--push", "--all", remote).stdout.strip().splitlines()
@@ -166,11 +178,11 @@ def _resolve(repo: Repository) -> dict:
     if identity != repository_identity(push[0], repo.top) or (
             "://" in fetch[0] and not identity.startswith("github.com/") and fetch[0] != push[0]):
         raise ValueError("Fetch and push repositories differ: " + redact_url(push[0]))
-    config = git("config", "--null", "--get-regexp",
-                 r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$").stdout
+    relevant = re.compile(r"^(branch\..*\.(remote|merge|pushremote)|remote\..*\.(url|pushurl|fetch|push|mirror)"
+                          r"|remote\.pushdefault|url\..*\.(insteadof|pushinsteadof))$")
     # Only relevant selected-remote/branch configuration affects the binding. Other
     # remotes may be added by the author without changing this target.
-    entries = [e for e in config.split("\0") if e and (
+    entries = [e for e in listed.split("\0") if e and relevant.match(e.partition("\n")[0]) and (
         e.lower().startswith((f"branch.{name}.".lower(), f"remote.{remote}.".lower(),
                               "remote.pushdefault", "url.")))]
     fingerprint = hashlib.sha256(json.dumps([branch, sorted(entries)]).encode()).hexdigest()
@@ -178,6 +190,91 @@ def _resolve(repo: Repository) -> dict:
             "fetch_url": redact_url(fetch[0]), "push_url": redact_url(push[0]), "repository_identity": identity,
             "git_dir": registry.norm(repo.git_dir.resolve()),
             "configuration_fingerprint": fingerprint}
+
+
+# Why sync waits (validate's reasons, in git's words, kept for the details), as someone who
+# does not know git can act on it: by the start of each reason this module gives.
+_PLAIN = (
+    ("Sync target changed", "This project now points to a different repository or branch on GitHub than "
+                            "before. If that is what you want, choose “Sync with the new one” in this menu."),
+    ("Project repository changed", "This project's folder was changed while it was open. Close this "
+                                   "window and open the project again from Home."),
+    ("Detached HEAD", "This project shows an older saved version, not its latest one."),
+)
+
+
+def plain(reason: str | None) -> str | None:
+    """`reason` (why validate pauses sync) in plain words: what happened and what to do."""
+    if not reason:
+        return None
+    says = next((text for start, text in _PLAIN if reason.startswith(start)),
+                "This project's connection to GitHub was set up outside Prism in a way Prism does "
+                "not change by itself.")
+    return "Uploading to GitHub is paused; your edits are saved on this computer. " + says
+
+
+def repair(repo: Repository, bound: dict) -> list[str]:
+    """What sync needs of a repository Prism manages, put back as Prism set it up, so that
+    it syncs with `bound` again: on its branch when it was left at that branch's last
+    commit, the remote there (a GitHub one added back by its address), the branch's
+    upstream that remote's bound branch, and no push elsewhere (pushRemote, pushDefault,
+    a mirror remote) in the repository's own settings. Which repository it syncs with
+    (its addresses) is never changed: that is the binding's to say, and a change waits.
+    Nor is another branch left (that would change your files), or your own git settings.
+    Returns what it put back, in a few words each; empty: nothing it could."""
+    local, branch_ref = str(bound.get("local_branch") or ""), str(bound.get("branch_ref") or "")
+    remote, identity = str(bound.get("remote") or "origin"), str(bound.get("repository_identity") or "")
+    if not (local.startswith("refs/heads/") and branch_ref.startswith("refs/heads/")):
+        return []
+    name = local.removeprefix("refs/heads/")
+
+    def git(*args: str) -> subprocess.CompletedProcess:
+        return repo.git(*args, timeout=20)
+
+    def own(key: str) -> list[str]:
+        return git("config", "--local", "--get-all", key).stdout.splitlines()
+    done: list[str] = []
+    head = git("symbolic-ref", "-q", "HEAD").stdout.strip()
+    if not head:
+        tip = git("rev-parse", "-q", "--verify", local + "^{commit}").stdout.strip()
+        now = git("rev-parse", "-q", "--verify", "HEAD^{commit}").stdout.strip()
+        if not tip or not now or git("merge-base", "--is-ancestor", tip, now).returncode != 0:
+            return done                      # somewhere else in the history: yours to say
+        # At its branch's last commit, or on from it (autosave commits there): the branch
+        # moves on to it, and HEAD is the branch again. No file changes, no commit is lost.
+        if now != tip:
+            git("update-ref", local, now, tip)
+        git("symbolic-ref", "HEAD", local)
+        done.append(f"back on its branch {name}")
+    elif head != local:
+        return done
+    if remote not in git("remote").stdout.split():
+        if not identity.startswith("github.com/"):
+            return done
+        git("remote", "add", remote, f"https://{identity}.git")
+        done.append(f"its GitHub address {identity}")
+    for key, want in ((f"branch.{name}.remote", remote), (f"branch.{name}.merge", branch_ref)):
+        if own(key) != [want]:
+            git("config", "--local", "--replace-all", key, want)
+            done.append("which branch on GitHub it syncs with")
+    for key in (f"branch.{name}.pushremote", "remote.pushdefault", f"remote.{remote}.mirror"):
+        if own(key):
+            git("config", "--local", "--unset-all", key)
+            done.append("where it uploads to")
+    return list(dict.fromkeys(done))
+
+
+def _true(value: str | None) -> bool:
+    """A git boolean as `git config --bool` reads it (a key without "=" is true)."""
+    if value is None:
+        return True
+    v = value.strip().lower()
+    if v in ("true", "yes", "on"):
+        return True
+    try:
+        return int(v) != 0
+    except ValueError:
+        return False
 
 
 class RepoSettings:
@@ -205,17 +302,53 @@ class RepoSettings:
     def enabled(self) -> bool:
         return bool(self.read().get("sync", True))
 
+    @property
+    def managed(self) -> bool:
+        """A repository Prism set up (made it, or gave it its GitHub remote: publish.py),
+        whose remote and branches are Prism's to keep as sync needs them. Not one you set
+        up yourself (a terminal, another program): Prism does not change its settings."""
+        return bool(self.read().get("managed"))
+
     def bind(self, target: dict) -> None:
-        """Called only after the author confirmed `target`, or after creating a known repo."""
+        """Called after the author confirmed `target`, when Prism creates a repository (the
+        one it creates: publish.create_github_repo), and by validate for one not bound yet.
+        Only repository_identity, branch_ref and local_branch decide whether a target is
+        this one; validate fills in the rest."""
         self.update(sync_target=target)
+
+    repaired: list[str] = []         # what the last validate put back (repair)
+
+    def unbind(self) -> None:
+        """No target bound (a repository Prism set out to create was not created)."""
+        with registry.FileLock(self.file.with_name(self.file.name + ".lock"), timeout=10):
+            data = self.read()
+            data.pop("sync_target", None)
+            write_bytes(self.file, json.dumps(data).encode())
 
     def validate(self, fresh: bool = False) -> tuple[dict | None, str | None]:
         """(the target, None) when syncing may go on; else (the target or None, why not).
         No binding yet (a project from before bindings, or a fresh clone): the target passed
         every check of resolve, so it is bound now. The same repository and branch reached
         another way (ssh instead of https, an upstream set by `git push -u`) is rebound
-        quietly; another repository or branch waits for the author to confirm it."""
-        bound = self.read().get("sync_target")
+        quietly; another repository or branch waits for the author to confirm it. In a
+        repository Prism manages, what sync needs that went astray is put back first
+        (repair; `repaired` says what)."""
+        data = self.read()
+        bound = data.get("sync_target")
+        self.repaired: list[str] = []
+        target, why = self._check(bound, fresh)
+        if why and isinstance(bound, dict) and data.get("managed"):
+            # A repository Prism set up: what sync needs of it, gone astray (another
+            # program, a terminal), is put back, and it goes on.
+            self.repaired = self._repair(bound)
+            if self.repaired:
+                target, why = self._check(bound, True)
+        return target, why
+
+    def _repair(self, bound: dict) -> list[str]:
+        return repair(self.repo, bound)
+
+    def _check(self, bound, fresh: bool) -> tuple[dict | None, str | None]:
         target = None
         try:
             target = resolve(self.repo, fresh)

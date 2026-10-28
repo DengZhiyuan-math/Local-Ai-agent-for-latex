@@ -1,0 +1,10 @@
+{"event": "agent_start", "job": 1792172130114, "provider": "deepcode", "project_key": "prism-test-r6visd9a-6298542498", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-r6visd9a", "session_id": null}
+{"event": "agent_start", "job": 1792172130492, "provider": "deepcode", "project_key": "prism-test-a4lz_ose-ff9cf3d4f0", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-a4lz_ose", "session_id": null}
+{"event": "agent_start", "job": 1792172130493, "provider": "deepcode", "project_key": "prism-test-a4lz_ose-ff9cf3d4f0", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-a4lz_ose", "session_id": null}
+{"event": "agent_start", "job": 1792172133238, "provider": "deepcode", "project_key": "prism-test-2lu18y39-7776a14e17", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-2lu18y39", "session_id": null}
+{"event": "agent_start", "job": 1792172133239, "provider": "deepcode", "project_key": "prism-test-2lu18y39-7776a14e17", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-2lu18y39", "session_id": "1296ed99-b352-4da8-8efe-6f0b8c1f428b"}
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 3.832s
+
+OK

@@ -26,11 +26,11 @@ from pathlib import Path
 import registry
 import settings
 import sessionmeta
-from backends import (NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, agent_env, cli_process,
-                      executable, find_bin, kill_tree, start)
+from backends import (CliBackend, Job, agent_env, cli_process, executable, find_bin,
+                      kill_tree, start)
 from permissions import WebPermissions
-from usage import UsageCache
-from usage import control_query
+from usage import UsageCache, control_query
+from proc import run as run_bounded
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
@@ -158,9 +158,8 @@ def claude_account(exe: str | None, root: Path | None = None, max_age: float = 3
         info["error"] = "Claude Code CLI not found"
     else:
         try:
-            r = subprocess.run([exe, "auth", "status"], cwd=str(root) if root else None,
-                               capture_output=True, text=True, encoding="utf-8",
-                               errors="replace", timeout=20, **NO_WINDOW)
+            r = run_bounded([exe, "auth", "status"], cwd=str(root) if root else None,
+                            text=True, encoding="utf-8", errors="replace", timeout=20)
             m = re.search(r"\{.*\}", r.stdout, re.S)
             d = json.loads(m.group(0)) if m else {}
             info = {"logged_in": bool(d.get("loggedIn")), "email": d.get("email"),
@@ -483,7 +482,7 @@ class ClaudeCode(CliBackend):
         cmd = [self.bin(), "-p", "--output-format", "stream-json", "--verbose",
                "--include-partial-messages", "--input-format", "stream-json",
                "--permission-prompt-tool", "stdio", "--permission-mode", perm,
-               "--append-system-prompt", SYSTEM_APPEND]
+               "--append-system-prompt", self.system_text()]
         allowed = self.scope_rules(job.scope) if job.scope else []
         cmd += ["--strict-mcp-config"]
         if job.may_compile:
@@ -521,7 +520,7 @@ class ClaudeCode(CliBackend):
         initial = json.dumps({"type": "control_request", "request_id": init_id,
                               "request": {"subtype": "initialize", "hooks": {},
                                           "sdkMcpServers": []}}) + "\n"
-        with cli_process(job, cmd, initial, agent_env(), bufsize=1,
+        with cli_process(job, cmd, initial, agent_env(root=job.root), bufsize=1,
                          keep_stdin_open=True) as (proc, lines, errors):
             if proc is None:
                 return st
@@ -685,6 +684,8 @@ class ClaudeCode(CliBackend):
                              "out": u.get("output_tokens") or 0} if u else None,
                       duration=d.get("duration_ms"),
                       is_error=d.get("is_error"), subtype=d.get("subtype"),
+                      # Its own words for a failure (the subtype may say only "success").
+                      error=str(d.get("result") or "")[:2000] or None if d.get("is_error") else None,
                       denials=[p.get("tool_name") for p in d.get("permission_denials") or []],
                       # What each refused call was, e.g. the command: the panel names it.
                       denied=[{"tool": p.get("tool_name"),

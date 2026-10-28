@@ -1,0 +1,51 @@
+{
+ "secs": 35,
+ "status": "",
+ "count": "20 of 20 changes in 2 files",
+ "summary": "把公式中作为下标或求和变量的 i 换成 j（规则 1，17 处：w_i、x_i、w_{i}、x_{i}、\\sum_i、\\sum_{i=1}^n、\\sum_{i \\neq k}）。另外提出规则 2，把公式中单独出现、指同一指标的 i 也换成 j（3 处：main.tex 第 9、11 行的 iii，proof.tex 第 6 行的 i=ki = ki=k），否则正文写“index iii”而公式写 w_j，会前后不一致；如果只想改下标，可以不勾选规则 2。正文中的 i.e.、is、in、integral 以及 main.tex 第 21 行的注释都在公式外，没有改动。\\int_0^1 这类命令中的 i 也不会被匹配。\n",
+ "rules": [
+  {
+   "find": "(_\\{?)i(?![A-Za-z])",
+   "replace": "$1j",
+   "where": "math",
+   "caseSensitive": true,
+   "note": "下标与求和变量中的 i → j，共 17 处（main.tex 第 9、10、11、14、16 行；proof.tex 第 2、4 行）。不会匹配 \\int 等命令。",
+   "n": 17
+  },
+  {
+   "find": "(?<![A-Za-z\\\\_{])i(?![A-Za-z])",
+   "replace": "j",
+   "where": "math",
+   "caseSensitive": true,
+   "note": "公式中单独出现的指标 i（main.tex:9 的 $i$、main.tex:11 的 $i$、proof.tex:6 的 $i = k$），共 3 处。改它们是为了和下标保持一致；如果只改下标，请不勾选。",
+   "n": 3
+  }
+ ],
+ "edits": [],
+ "problems": [],
+ "changes": [
+  "main.tex:9  Let $x_1, \\dots, x_n$ be points and let $w_i \\geq 0$ be weights, one for each index $i$.  ==>  Let $x_1, \\dots, x_n$ be points and let $w_j \\geq 0$ be weights, one for each index $i$.",
+  "main.tex:9  Let $x_1, \\dots, x_n$ be points and let $w_i \\geq 0$ be weights, one for each index $i$.  ==>  Let $x_1, \\dots, x_n$ be points and let $w_i \\geq 0$ be weights, one for each index $j$.",
+  "main.tex:10  We write $\\bar{x} = \\sum_{i=1}^n w_i x_i$ for the average, i.e.\\ the barycenter.  ==>  We write $\\bar{x} = \\sum_{j=1}^n w_i x_i$ for the average, i.e.\\ the barycenter.",
+  "main.tex:10  We write $\\bar{x} = \\sum_{i=1}^n w_i x_i$ for the average, i.e.\\ the barycenter.  ==>  We write $\\bar{x} = \\sum_{i=1}^n w_j x_i$ for the average, i.e.\\ the barycenter.",
+  "main.tex:10  We write $\\bar{x} = \\sum_{i=1}^n w_i x_i$ for the average, i.e.\\ the barycenter.  ==>  We write $\\bar{x} = \\sum_{i=1}^n w_i x_j$ for the average, i.e.\\ the barycenter.",
+  "main.tex:11  For each $i$ in $\\{1, \\dots, n\\}$ the point $x_i$ is in the convex hull.  ==>  For each $j$ in $\\{1, \\dots, n\\}$ the point $x_i$ is in the convex hull.",
+  "main.tex:11  For each $i$ in $\\{1, \\dots, n\\}$ the point $x_i$ is in the convex hull.  ==>  For each $i$ in $\\{1, \\dots, n\\}$ the point $x_j$ is in the convex hull.",
+  "main.tex:14  If $\\sum_i w_i = 1$, then  ==>  If $\\sum_j w_i = 1$, then",
+  "main.tex:14  If $\\sum_i w_i = 1$, then  ==>  If $\\sum_i w_j = 1$, then",
+  "main.tex:16    \\bar{x} - x_k = \\sum_{i \\neq k} w_i (x_i - x_k).  ==>    \\bar{x} - x_k = \\sum_{j \\neq k} w_i (x_i - x_k).",
+  "main.tex:16    \\bar{x} - x_k = \\sum_{i \\neq k} w_i (x_i - x_k).  ==>    \\bar{x} - x_k = \\sum_{i \\neq k} w_j (x_i - x_k).",
+  "main.tex:16    \\bar{x} - x_k = \\sum_{i \\neq k} w_i (x_i - x_k).  ==>    \\bar{x} - x_k = \\sum_{i \\neq k} w_i (x_j - x_k).",
+  "sections/proof.tex:2  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_i w_i x_k$, hence  ==>  Since $\\sum_{j=1}^n w_i = 1$ we have $x_k = \\sum_i w_i x_k$, hence",
+  "sections/proof.tex:2  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_i w_i x_k$, hence  ==>  Since $\\sum_{i=1}^n w_j = 1$ we have $x_k = \\sum_i w_i x_k$, hence",
+  "sections/proof.tex:2  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_i w_i x_k$, hence  ==>  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_j w_i x_k$, hence",
+  "sections/proof.tex:2  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_i w_i x_k$, hence  ==>  Since $\\sum_{i=1}^n w_i = 1$ we have $x_k = \\sum_i w_j x_k$, hence",
+  "sections/proof.tex:4    \\bar{x} - x_k = \\sum_{i=1}^{n} w_{i} (x_{i} - x_k),  ==>    \\bar{x} - x_k = \\sum_{j=1}^{n} w_{i} (x_{i} - x_k),",
+  "sections/proof.tex:4    \\bar{x} - x_k = \\sum_{i=1}^{n} w_{i} (x_{i} - x_k),  ==>    \\bar{x} - x_k = \\sum_{i=1}^{n} w_{j} (x_{i} - x_k),",
+  "sections/proof.tex:4    \\bar{x} - x_k = \\sum_{i=1}^{n} w_{i} (x_{i} - x_k),  ==>    \\bar{x} - x_k = \\sum_{i=1}^{n} w_{i} (x_{j} - x_k),",
+  "sections/proof.tex:6  and the term with $i = k$ vanishes. This is the claim; it is integral to what follows,  ==>  and the term with $j = k$ vanishes. This is the claim; it is integral to what follows,"
+ ],
+ "reply": "我读了 `main.tex` 和 `sections/proof.tex`。项目里没有其他 tex 文件，文中也没有用到 j，改名不会和已有变量冲突。\n\n**规则 1（下标）**：`(_\\{?)i(?![A-Za-z])` → `$1j`，只在公式内生效，共 17 处匹配：\n- `main.tex` 第 9、10、11、14、16 行：`w_i`、`x_i`、`\\sum_{i=1}^n`、`\\sum_i`、`\\sum_{i \\neq k}`\n- `proof.tex` 第 2、4 行：`\\sum_{i=1}^n`、`\\sum_i`、`w_{i}`、`x_{i}`\n\n`\\int_0^1` 不会被匹配，因为下划线后面不是 i。\n\n**规则 2（单独出现的指标 i）**：共 3 处，都是同一个指标变量：\n- `main.tex:9` 的 \"index $i$\"\n- `main.tex:11` 的 \"For each $i$\"\n- `proof.tex:6` 的 \"$i = k$\"\n\n如果只改规则 1 而不改这几处，文中会出现 \"index $i$\" 却写 `w_j` 的不一致，所以建议一起改。如果你严格只想改下标和求和变量，可以不勾选规则 2。\n\n正文里的 \"i.e.\"、\"is\"、\"in\"、\"integral\" 都在公式外，不会被匹配。`main.tex:21` 的注释也不会被改。\n\n```prism-search\n{\"summary\": \"把公式中作为下标或求和变量的 i 换成 j（规则 1，17 处：w_i、x_i、w_{i}、x_{i}、\\\\sum_i、\\\\sum_{i=1}^n、\\\\sum_{i \\\\neq k}）。另外提出规则 2，把公式中单独出现、指同一指标的 i 也换成 j（3 处：main.tex 第 9、11 行的 $i$，proof.tex 第 6 行的 $i = k$），否则正文写“index $i$”而公式写 w_j，会前后不一致；如果只想改下标，可以不勾选规则 2。正文中的 i.e.、is、in、integral 以及 main.tex 第 21 行的注释都在公式外，没有改动。\\\\int_0^1 这类命令中的 i 也不会被匹配。\", \"rules\": [{\"find\": \"(_\\\\{?)i(?![A-Za-z])\", \"replace\": \"$1j\", \"where\": \"math\", \"caseSensitive\": true, \"note\": \"下标与求和变量中的 i → j，共 17 处（main.tex 第 9、10、11、14、16 行；proof.tex 第 2、4 行）。不会匹配 \\\\int 等命令。\"}, {\"find\": \"(?<![A-Za-z\\\\\\\\_{])i(?![A-Za-z])\", \"replace\": \"j\", \"where\": \"math\", \"caseSensitive\": true, \"note\": \"公式中单独出现的指标 i（main.tex:9 的 $i$、main.tex:11 的 $i$、proof.tex:6 的 $i = k$），共 3 处。改它们是为了和下标保持一致；如果只改下标，请不勾选。\"}], \"edits\": []}\n```",
+ "done": true,
+ "errors": []
+}

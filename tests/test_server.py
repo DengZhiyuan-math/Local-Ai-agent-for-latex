@@ -188,6 +188,22 @@ class Files(unittest.TestCase):
             _winapi.CreateJunction(str(root / "a"), str(root / "in"))
             self.assertEqual(server.PROJECT.list_both()[1], ["main.tex", "a/b.tex", "in/b.tex"])
 
+    def test_texts_for_search_are_the_editable_files_only(self):
+        """/api/texts gives the files the editor may open, as /api/file does; others are left
+        out, a file too large or not UTF-8 is named but not read."""
+        root = project({"sec/x.bib": "@book{k}", "fig.png": "", "build/out.tex": "x", ".hidden/h.tex": "h"})
+        (root / "main.tex").write_bytes(b"a\r\nb\n")
+        (root / "latin1.tex").write_bytes("caf\xe9".encode("latin-1"))
+        (root / "big.tex").write_bytes(b"x" * (projectmod.MAX_TEXT + 1))
+        got = server.PROJECT.texts(["main.tex", "sec/x.bib", "fig.png", "build/out.tex", ".hidden/h.tex",
+                                    "../main.tex", "gone.tex", "latin1.tex", "big.tex"])
+        by = {f["path"]: f for f in got}
+        self.assertEqual(list(by), ["main.tex", "sec/x.bib", "latin1.tex", "big.tex"])
+        self.assertEqual(by["main.tex"]["content"], "a\nb\n")
+        self.assertEqual(by["main.tex"]["mtime"], projectmod.mtime(root / "main.tex"))
+        self.assertEqual((by["latin1.tex"].get("content"), by["latin1.tex"]["skipped"]), (None, "not UTF-8 text"))
+        self.assertEqual((by["big.tex"].get("content"), by["big.tex"]["skipped"]), (None, "larger than 2 MB"))
+
     def test_no_save_while_the_agent_edits(self):
         """An Edit turn runs: the server holds every save, also from a page that did not see
         the turn start (another tab, a reload): its diff and Undo would take your text for
@@ -234,7 +250,7 @@ class Files(unittest.TestCase):
     def test_save_while_another_program_reads_the_file(self):
         root = project({"main.tex": "old\n"})
         reader = subprocess.Popen([sys.executable, "-c", "import sys,time; f=open(sys.argv[1]); "
-                                   "print('open', flush=True); time.sleep(4)", str(root / "main.tex")],
+                                   "print('open', flush=True); time.sleep(4); f.close()", str(root / "main.tex")],
                                   stdout=subprocess.PIPE, text=True)
         self.addCleanup(reader.stdout.close)
         self.addCleanup(reader.wait)
@@ -356,6 +372,25 @@ class GitState(unittest.TestCase):
         self.assertIn("a/main.tex", diff)
         self.assertNotIn("README", diff)
 
+    def test_the_tree_asks_git_only_when_something_changed(self):
+        """Every open page asks for the tree every two seconds: with no file and no ref
+        changed since, git's status is not asked again."""
+        import proc
+        root = project({"main.tex": "a\n"})
+        self.git(root, "init", "-q")
+        self.git(root, "add", "-A")
+        self.git(root, "commit", "-qm", "init")
+        listed = lambda: [("main.tex", server.mtime(root / "main.tex"))]     # noqa: E731
+        self.assertEqual(server.git_status(listed()), {})
+        with mock.patch.object(proc, "run", wraps=proc.run) as run:
+            self.assertEqual(server.git_status(listed()), {})
+        self.assertEqual(run.call_count, 0)
+        (root / "main.tex").write_text("b\n", encoding="utf-8")
+        os.utime(root / "main.tex", ns=(1, 1))                    # a new mtime, also on a coarse clock
+        self.assertEqual(server.git_status(listed()), {"main.tex": "M"}, "an edit is seen")
+        self.git(root, "commit", "-qam", "second")
+        self.assertEqual(server.git_status(listed()), {}, "a commit is seen")
+
     def test_diff_panel_says_what_it_shows(self):
         root = tmpdir()
         (root / "main.tex").write_text("a\n", encoding="utf-8")
@@ -403,6 +438,34 @@ class Symbols(unittest.TestCase):
         self.assertEqual({l["label"]: l["kind"] for l in s["labels"]},
                          {"sec:intro": "section", "lem:a": "lem"})
 
+    def test_macros_for_the_agents_replies(self):
+        project({"macros.sty": "\\newcommand{\\R}{\\mathbb{R}}\n\\DeclareMathOperator*{\\argmax}{arg\\,max}\n",
+                 "main.tex": r"""\documentclass{article}
+\usepackage{macros}
+\newcommand{\norm}[1]{\left\| #1 \right\|}
+\newcommand\abs[1]{%
+  \lvert #1 \rvert}
+\renewcommand{\R}{\mathbf{R}}
+\def\E{\mathbb{E}}
+\def\pair#1#2{(#1, #2)}
+\DeclareMathOperator{\Tr}{Tr}
+\DeclarePairedDelimiter{\ip}{\langle}{\rangle}
+\newcommand{\opt}[2][1]{#1 + #2}
+% \newcommand{\gone}{x}
+\newcommand{\broken}{\x
+\begin{document}\end{document}
+"""})
+        self.assertEqual(server.PROJECT.symbols()["katex_macros"], {
+            "\\R": "\\mathbf{R}",                         # the .tex file's \renewcommand wins
+            "\\argmax": "\\operatorname*{arg\\,max}",
+            "\\norm": "\\left\\| #1 \\right\\|",
+            "\\abs": "\\lvert #1 \\rvert",
+            "\\E": "\\mathbb{E}",
+            "\\pair": "(#1, #2)",
+            "\\Tr": "\\operatorname{Tr}",
+            "\\ip": "\\left\\langle #1 \\right\\rangle",
+        })
+
     def test_standard_names_without_newtheorem(self):
         project({"main.tex": "\\documentclass{article}\\begin{document}\\end{document}\n"})
         self.assertEqual(server.PROJECT.symbols()["env_titles"]["lemma"], "Lemma")
@@ -441,6 +504,33 @@ class Symbols(unittest.TestCase):
         self.assertEqual(server.PROJECT.document_order(), ["main.tex", "a.tex", "c.tex"])
         self.assertEqual(s["bibkeys"], [{"key": "knuth", "type": "book", "file": "refs.bib", "line": 1}])
 
+    def test_the_order_is_worked_out_again_only_when_its_files_or_the_list_changed(self):
+        """The tree asks for the order every two seconds: with the files listed and their
+        mtimes the same, no name is looked for again (each one a resolve, slow on Windows)."""
+        root = project({"main.tex": "\\input{a}\n\\input{later}\n", "a.tex": "x\n", "b.tex": "y\n"})
+        P = server.PROJECT
+
+        def order():
+            listed = P.list_files(editable_only=False)
+            return P.document_order(P.list_files(), {f: server.mtime(root / f) for f in listed})
+        self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+        with mock.patch.object(P, "resolve_tex_name", wraps=P.resolve_tex_name) as looked:
+            self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+            self.assertEqual(looked.call_count, 0, "nothing changed")
+            (root / "b.tex").write_text("z\n", encoding="utf-8")
+            os.utime(root / "b.tex", ns=(1, 1))
+            self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"])
+            self.assertEqual(looked.call_count, 0, "a file outside the chain changed")
+        (root / "a.tex").write_text("\\input{b}\n", encoding="utf-8")
+        os.utime(root / "a.tex", ns=(2, 2))
+        self.assertEqual(order(), ["main.tex", "a.tex", "b.tex"], "a file in it changed")
+        (root / "b.tex").write_text("", encoding="utf-8")
+        (root / "a.tex").write_text("x\n", encoding="utf-8")
+        os.utime(root / "a.tex", ns=(3, 3))
+        (root / "later.tex").write_text("", encoding="utf-8")
+        self.assertEqual(order(), ["main.tex", "a.tex", "later.tex", "b.tex"], "a file it names appeared")
+        self.assertEqual(P.document_order(), ["main.tex", "a.tex", "later.tex", "b.tex"], "without stamps: worked out")
+
 
 def copy_example(name="my paper") -> Path:
     """A copy of examples/minimal to work in."""
@@ -460,18 +550,61 @@ class Routes(unittest.TestCase):
         self.addCleanup(self.srv.shutdown)
         self.url = f"http://127.0.0.1:{self.srv.server_address[1]}"
 
-    def ask(self, path, body=None):
+    def ask(self, path, body=None, headers=None):
         import json
         import urllib.error
         import urllib.request
         req = urllib.request.Request(self.url + path, None if body is None else json.dumps(body).encode(),
-                                     {"Content-Type": "application/json", "X-Prism-Local": "1"})
+                                     {"Content-Type": "application/json", "X-Prism-Local": "1", **(headers or {})})
         try:
             with urllib.request.urlopen(req, timeout=10) as r:
                 return r.status, json.loads(r.read())
         except urllib.error.HTTPError as e:
             with e:
                 return e.code, json.loads(e.read())
+
+    def test_every_editor_request_is_bound_to_its_project(self):
+        root = project({"main.tex": "original\n"})
+        key = server.registry.project_key(server.PROJECT.root)
+        self.assertEqual(self.ask("/api/tree")[1]["project_key"], key)
+        for path, body in (("/api/tree", None), ("/api/file?path=main.tex", None),
+                           ("/api/file", {"path": "main.tex", "content": "wrong project"}),
+                           ("/api/config", {"main": "other.tex"})):
+            with self.subTest(path=path):
+                status, r = self.ask(path, body, {"X-Prism-Project": "another-project"})
+                self.assertEqual(status, 409)
+                self.assertTrue(r["other_project"])
+        self.assertEqual((server.PROJECT.root / "main.tex").read_text(), "original\n")
+        self.assertEqual(self.ask("/api/tree", headers={"X-Prism-Project": key})[0], 200)
+
+    def test_the_tree_names_the_documents_files(self):
+        """The tree lists every .tex file in document order, and apart the document's own
+        files (the main file and what it \\input's), which a search with the agent names to it."""
+        project({"main.tex": "\\documentclass{article}\\begin{document}\\input{sec/a}\\end{document}\n",
+                 "sec/a.tex": "A\n", "other.tex": "not in it\n"})
+        status, r = self.ask("/api/tree")
+        self.assertEqual(status, 200)
+        self.assertEqual(r["document"], ["main.tex", "sec/a.tex"])
+        self.assertEqual(r["order"], ["main.tex", "sec/a.tex", "other.tex"])
+
+    def test_a_pdf_or_asset_of_another_project_is_refused(self):
+        """A pop-out PDF or a figure opened in a new tab names its project too (the query,
+        where a page cannot add a header): another project on the port refuses them."""
+        root = project({"main.tex": "x\n", "figure.png": "png"})
+        key = server.registry.project_key(root)
+        server.PROJECT.config.pdf.parent.mkdir(parents=True, exist_ok=True)
+        server.PROJECT.config.pdf.write_bytes(b"%PDF-1.4 mine")
+        # The pop-out PDF's poll says whose PDF it is (a reloaded pop-out learns it there).
+        self.assertEqual(self.ask("/api/pdfstat")[1]["project_key"], key)
+        for path in ("/pdf", "/api/asset?path=figure.png"):
+            sep = "&" if "?" in path else "?"
+            with self.subTest(path=path):
+                status, r = self.ask(f"{path}{sep}project_key=another-project")
+                self.assertEqual(status, 409)
+                self.assertTrue(r["other_project"])
+                self.assertEqual(self.ask(path, headers={"X-Prism-Project": "another-project"})[0], 409)
+                with HTTP.open(f"{self.url}{path}{sep}project_key={key}", timeout=5) as response:
+                    self.assertIn(response.read(), (b"%PDF-1.4 mine", b"png"))
 
     def test_compile_active_document_and_follow_its_pdf(self):
         root = copy_example()
@@ -519,7 +652,8 @@ class Routes(unittest.TestCase):
         status, result = compile("broken.tex")
         self.assertEqual((status, result["exit"], result["main"], result["pdf_mtime"]),
                          (200, 1, "broken.tex", None))
-        self.assertEqual(request(url, "/api/pdfstat")[1], {"main": "broken.tex", "mtime": None})
+        self.assertEqual(request(url, "/api/pdfstat")[1], {"main": "broken.tex", "mtime": None,
+                                                           "project_key": server.registry.project_key(root)})
         self.assertEqual(request(url, "/pdf")[0], 404)
         for bad in ("../outside.tex", "/tmp/outside.tex", "build/main.tex", 123):
             self.assertEqual(compile(bad)[0], 400, bad)
@@ -699,7 +833,7 @@ class UploadsToGitHub(unittest.TestCase):
         rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
-        self.assertIn("no remote", server.UPLOAD_SYNC[rel]["message"])
+        self.assertIn("not on GitHub yet", server.UPLOAD_SYNC[rel]["message"])
         self.assertEqual(self.git(root, "show", "--name-only", "--format=", "HEAD"), "prism-uploads/a.txt")
 
     def test_never_in_a_surrounding_repository(self):
@@ -718,6 +852,105 @@ class UploadsToGitHub(unittest.TestCase):
         rel = server.PROJECT.upload("a.txt", b"a")
         server.sync_upload(rel)
         self.assertEqual(server.UPLOAD_SYNC[rel]["state"], "local")
+
+
+@unittest.skipUnless(shutil.which("git"), "needs git")
+class UploadsTakenBack(unittest.TestCase):
+    """A chip removed from the message box takes its upload back (/api/upload/cancel): the
+    file goes, unless a message sent it, it was there before, or it changed since."""
+
+    setUp = Routes.setUp
+    ask = Routes.ask
+    git = UploadsToGitHub.git
+    repo = UploadsToGitHub.repo
+
+    def upload(self, upload_id, name, data):
+        import base64
+        return self.ask("/api/upload", {"name": name, "data": base64.b64encode(data).decode(),
+                                        "destination": "attachment", "upload_id": upload_id})
+
+    def synced(self, rel):
+        for _ in range(200):
+            if server.UPLOAD_SYNC.get(rel, {}).get("state") != "syncing":
+                return server.UPLOAD_SYNC.get(rel)
+            time.sleep(0.05)
+        self.fail("the upload's commit did not end")
+
+    def pushed_project(self):
+        root = project({"main.tex": "x\n"})
+        self.repo(root)
+        bare = tmpdir()
+        self.git(bare, "init", "-q", "--bare")
+        self.git(root, "remote", "add", "origin", str(bare))
+        server.GITSYNC.bind_target()
+        return root, bare
+
+    def test_a_committed_upload_taken_back_is_deleted_by_the_next_commit(self):
+        root, bare = self.pushed_project()
+        code, r = self.upload("page-1", "notes.txt", b"notes")
+        self.assertEqual((code, r["path"]), (200, "prism-uploads/notes.txt"))
+        self.assertEqual(self.synced(r["path"])["state"], "synced")
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-1"}),
+                         (200, {"path": "prism-uploads/notes.txt", "deleted": True}))
+        self.assertFalse((root / "prism-uploads" / "notes.txt").exists())
+        server.GITSYNC.commit_all("Autosave")       # the deletion, as any other change
+        self.assertEqual(self.git(root, "show", "--name-status", "--format=", "HEAD"),
+                         "D\tprism-uploads/notes.txt")
+        self.assertEqual(self.git(root, "rev-list", "--count", "HEAD"), "3", "history kept as it was")
+
+    def test_an_upload_taken_back_before_its_commit_is_never_committed(self):
+        root, bare = self.pushed_project()
+        with mock.patch.object(server, "sync_upload") as later:
+            code, r = self.upload("page-2", "draft.txt", b"draft")
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-2"})[1]["deleted"], True)
+        server.sync_upload(*later.call_args.args)
+        self.assertFalse((root / "prism-uploads" / "draft.txt").exists())
+        self.assertEqual(self.git(root, "rev-list", "--count", "HEAD"), "1")
+        self.assertEqual(self.git(bare, "branch", "--list"), "", "nothing pushed")
+
+    def test_an_upload_taken_back_before_it_arrives_is_not_written(self):
+        root = project({"main.tex": "x\n"})
+        self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-3"}),
+                         (200, {"path": None, "deleted": False}))
+        self.assertEqual(self.upload("page-3", "late.txt", b"late")[0], 409)
+        self.assertFalse((root / "prism-uploads" / "late.txt").exists())
+
+    def test_a_file_a_message_sent_is_never_deleted(self):
+        root = project({"main.tex": "x\n"})
+        key = server.registry.project_key(root)
+        with mock.patch.object(server, "sync_upload"):
+            rel = self.upload("page-4", "sent.txt", b"sent")[1]["path"]
+            with mock.patch.object(server.AGENT, "start", return_value={"job": 1}):
+                self.assertEqual(self.ask("/api/agent", {"prompt": "read it", "project_key": key,
+                                                         "attachments": [rel]})[0], 200)
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-4"})[0], 409)
+            self.assertTrue((root / rel).exists())
+            # The same file added again (the sent one, reused) and taken back: it stays too.
+            self.assertEqual(self.upload("page-5", "sent.txt", b"sent")[1]["path"], rel)
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-5"})[0], 409)
+            self.assertTrue((root / rel).exists())
+
+    def test_a_message_cannot_send_a_file_taken_back(self):
+        root = project({"main.tex": "x\n"})
+        key = server.registry.project_key(root)
+        with mock.patch.object(server, "sync_upload"):
+            rel = self.upload("page-6", "gone.txt", b"gone")[1]["path"]
+            self.ask("/api/upload/cancel", {"upload_id": "page-6"})
+            with mock.patch.object(server.AGENT, "start", return_value={"job": 1}) as start:
+                self.assertEqual(self.ask("/api/agent", {"prompt": "read it", "project_key": key,
+                                                         "attachments": [rel]})[0], 409)
+            start.assert_not_called()
+
+    def test_a_file_there_before_or_changed_since_stays(self):
+        root = project({"main.tex": "x\n", "prism-uploads/old.txt": "old"})
+        with mock.patch.object(server, "sync_upload"):
+            self.assertEqual(self.upload("page-7", "old.txt", b"old")[1]["path"], "prism-uploads/old.txt")
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-7"})[1]["deleted"], False)
+            self.assertEqual((root / "prism-uploads" / "old.txt").read_text(), "old")
+            rel = self.upload("page-8", "edited.txt", b"before")[1]["path"]
+            (root / rel).write_text("edited since", encoding="utf-8")
+            self.assertEqual(self.ask("/api/upload/cancel", {"upload_id": "page-8"})[1]["deleted"], False)
+            self.assertEqual((root / rel).read_text(), "edited since")
 
 
 class PlainText(unittest.TestCase):

@@ -37,11 +37,13 @@ const Turn = (() => {
     let msg = null;                 // {id, text} of the reply being streamed
     let msgs = 0, streamed = false, pending = false;
     let status = "working…";
+    let lastEvent = now();
     const names = new Map();        // tool id -> name
     const live = new Map();         // tool id -> {name, path, lines}
     const turn = { session: null, changed: [], feed, end, thinking };
     Object.defineProperty(turn, "status", {
-      get: () => (think ? `thinking… ${thinking()}s` : status),
+      get: () => think ? `thinking… ${thinking()}s` : status
+        + (now() - lastEvent >= 5000 ? ` (last event ${Math.floor((now() - lastEvent) / 1000)}s ago)` : ""),
     });
 
     function thinking() {
@@ -65,6 +67,7 @@ const Turn = (() => {
     const newMessage = (text) => (msg = { id: ++msgs, text });
 
     function feed(events) {
+      if (events.length) lastEvent = now();
       const out = [];
       for (const e of events) {
         if (e.t !== "delta") flush(out);
@@ -154,7 +157,37 @@ const Turn = (() => {
     });
   }
 
-  return { create, needsCompile };
+  const pollFailed = (status) => status === 0 || status === 408 || status === 429 || status >= 500 ? "retry" : "lost";
+  const pollDelay = (attempts) => Math.min(30000, 1000 * 2 ** Math.min(attempts, 5));
+  function result(e) {
+    const outcome = e.outcome || (e.is_error || (e.exit != null && e.exit !== 0) ? "failed" : "ok");
+    const error = outcome !== "failed" ? null : "outcome" in e ? e.error || null
+      : e.error || `${e.subtype || "exit " + e.exit}${e.stderr ? "\n" + e.stderr : ""}`;
+    return { outcome, error };
+  }
+  // The editor goes along with the agent's steps while you have not turned to something else
+  // since the turn began (`touched`: typed, or moved the focus out of the editor) and have
+  // not opened another file.
+  const mayFollow = ({ started, current, touched, hidden }) => started === current && !touched && !hidden;
+  // Final-file positions, never an indexOf(new_string): one Edit may replace many
+  // occurrences, and later steps may move or undo earlier edits. Older servers have
+  // only the readable diff; current snapshots also carry complete, untruncated ranges.
+  function changedLines(change) {
+    if (Array.isArray(change.lines)) return change.lines;
+    const ranges = [];
+    let at = null;
+    for (const line of (change.diff || "").split("\n")) {
+      const h = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (h) at = Number(h[1]) - 1;
+      else if (at !== null && line[0] === "+") {
+        if (ranges.length && ranges[ranges.length - 1][1] === at) ranges[ranges.length - 1][1] = at + 1;
+        else ranges.push([at, at + 1]);
+        at++;
+      } else if (at !== null && line[0] === " ") at++;
+    }
+    return ranges;
+  }
+  return { create, needsCompile, pollFailed, pollDelay, result, mayFollow, changedLines };
 })();
 
 if (typeof module !== "undefined") module.exports = Turn;

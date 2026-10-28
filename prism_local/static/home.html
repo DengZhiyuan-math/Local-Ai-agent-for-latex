@@ -12,6 +12,7 @@
   <div class="brand"><span class="logo">∂</span> Prism <span class="sub">Projects</span></div>
   <div class="actions right">
     <button id="btn-restart" class="primary" data-icon="refresh" hidden title="prism-local was updated. This page still runs the old version: restart it to use the new one (open editors offer their own restart)">Update: restart</button>
+    <button id="btn-clone" title="Open one of your projects on GitHub on this computer (one you made on another computer)">From GitHub…</button>
     <button id="btn-add" title="Add an existing LaTeX folder on disk to this list">Add existing…</button>
     <button id="btn-new" class="primary" title="Create a new LaTeX project from a template">+ New project</button>
     <button id="btn-settings" class="icon" data-icon="settings" title="Settings" aria-label="Settings"></button>
@@ -125,6 +126,10 @@
         <button type="button" data-browse="default_parent">Browse…</button></span></label>
     <label class="check"><input type="checkbox" name="git_init"> Initialize a git repository for new projects</label>
     <fieldset class="gh-set">
+      <legend>Programs</legend>
+      <div id="tools-status"></div>
+    </fieldset>
+    <fieldset class="gh-set">
       <legend>Claude account</legend>
       <div id="claude-status" class="gh-status"></div>
       <label class="field"><span>Claude Code profile folder <i>(CLAUDE_CONFIG_DIR; empty: as prism-local was started, usually ~/.claude)</i></span>
@@ -142,12 +147,25 @@
     <fieldset class="gh-set">
       <legend>GitHub</legend>
       <div id="gh-status" class="gh-status"></div>
+      <div id="gh-warning" class="gh-status err" hidden></div>
       <label class="check"><input type="checkbox" name="github_repo"> Create a private GitHub repository for each new project</label>
       <label class="field"><span>Owner <i>(optional: an organization; empty for your own account)</i></span>
         <input name="github_owner" spellcheck="false" autocomplete="off"></label>
       <p class="hint">Every project gets a repository of its own, separate from the prism-local repository.
         It is created with the GitHub CLI (<code>gh</code>), using the account it is logged in to.</p>
     </fieldset>
+    <fieldset class="gh-set">
+      <legend>Snippets in the editor</legend>
+      <label class="check"><input type="checkbox" name="snippets"> Expand snippets <i class="hint">(mk → $ $, @a → \alpha, beq Tab → equation)</i></label>
+      <label class="check"><input type="checkbox" name="snippets_fraction"> Auto-fraction <i class="hint">(in math, x/ becomes \frac{x}{})</i></label>
+      <label class="check"><input type="checkbox" name="snippets_matrix"> Tab puts &amp; and Enter ends the row with \\ <i class="hint">(in align, matrix, cases …)</i></label>
+      <div id="snip-status" class="gh-status"></div>
+      <span class="row"><button type="button" id="snip-edit">Edit my snippets…</button>
+        <button type="button" id="snip-list">List all snippets…</button></span>
+      <p class="hint">One file for every project: <code id="snip-path"></code>. An editor already open
+        takes a change when you go back to it.</p>
+    </fieldset>
+    <p class="hint" id="update-status" hidden></p>
     <div class="dlg-error" hidden></div>
     <div class="dlg-actions">
       <button type="button" data-close>Cancel</button>
@@ -156,6 +174,29 @@
   </form>
 </dialog>
 
+<dialog id="dlg-snippets" class="wide">
+  <form method="dialog" id="form-snippets">
+    <h3 id="snip-title">My snippets</h3>
+    <textarea name="content" id="snip-text" spellcheck="false" autocomplete="off" wrap="off"></textarea>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions">
+      <button type="button" data-close>Close</button>
+      <button type="submit" class="primary" id="snip-save">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dlg-clone" class="wide">
+  <form method="dialog" id="form-clone">
+    <h3>Open from GitHub</h3>
+    <p class="hint">Choose a repository or paste a GitHub repository link. The one you choose is copied to this computer, into the
+      default location in Settings, and synced from then on; one already here is just shown.</p>
+    <input name="filter" type="search" placeholder="Search repositories or paste a GitHub link" aria-label="Search repositories or paste a GitHub link" autocomplete="off" spellcheck="false">
+    <div id="clone-list" class="clone-list" role="listbox" aria-label="Your repositories on GitHub"></div>
+    <div class="dlg-error" hidden></div>
+    <div class="dlg-actions"><button type="button" data-close>Cancel</button></div>
+  </form>
+</dialog>
 <dialog id="dlg-add">
   <form method="dialog" id="form-add">
     <h3>Add existing folder</h3>
@@ -296,6 +337,7 @@
 <script src="/static/vendor/pdf.js"></script>
 <script src="/static/util.js"></script>
 <script src="/static/homeview.js"></script>
+<script src="/static/snippets.js"></script>
 <script src="/static/common.js"></script>
 <script src="/static/home.js"></script>
 </body>

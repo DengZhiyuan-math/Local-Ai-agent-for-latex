@@ -36,19 +36,25 @@ Events a backend emits through ``job.emit`` (the panel understands exactly these
     {"t": "rate", "rate": dict}                 Claude usage limits
     {"t": "permission", "request_id": str, ...} Web tool waiting for user approval
     {"t": "permission_resolved", ...}           approval/denial sent to the same CLI
-    {"t": "error", "message": str}
+    {"t": "error", "message": str}              (none after Stop: "done" says it stopped)
 
 `run` returns a dict with any of: session_id, exit (0 = success), is_error, subtype,
-cost (USD, only when billed per token), billing ("subscription" or "api"), duration
-(ms), usage ({"in": tokens, "out": tokens}), denials (tool
-names refused), stderr.
+error (what went wrong, in the backend's words), cost (USD, only when billed per token),
+billing ("subscription" or "api"), duration (ms), usage ({"in": tokens, "out": tokens}),
+denials (tool names refused), stderr. How the turn ended is decided from it once, by the
+manager (agent.outcome), not by each backend: "done" carries outcome ("ok", "stopped",
+"failed") and, for a failure no error event has told yet, error.
 """
 from __future__ import annotations
 
+import codecs
+import collections
+import io
 import json
 import os
 import queue
 import shutil
+import socket
 import subprocess
 import threading
 import time
@@ -65,7 +71,9 @@ FILE_TOOL_RULE = """\
   Write), not shell commands such as cat, sed, python or rm.
 """
 
-SYSTEM_APPEND = """\
+# The editor's instructions, around the line on file tools that each backend words for its
+# own tools (Backend.file_tool_rule; Backend.system_text puts them together).
+SYSTEM_BEFORE_TOOLS = """\
 You are being driven from prism-local, a local LaTeX web editor, not the
 terminal. The author sees your text in a chat panel next to the LaTeX source
 and the compiled PDF.
@@ -80,7 +88,9 @@ and the compiled PDF.
   \\end{equation} (or equation*, align, align*, gather, multline), never the
   shortcuts \\[ ... \\] or $$ ... $$. Use \\begin{...} environments rather than
   shortcuts elsewhere too.
-""" + FILE_TOOL_RULE + """\
+"""
+
+SYSTEM_AFTER_TOOLS = """\
 - To compile, use the compile tool when you have it: it runs the editor's own
   build (the author's Compile button) and returns the errors with file:line.
   It builds the document you edited, a standalone .tex as well as the main file.
@@ -95,15 +105,26 @@ and the compiled PDF.
 - Do not claim an argument is correct, or a step proved, unless you checked it.
 """
 
+SYSTEM_APPEND = SYSTEM_BEFORE_TOOLS + FILE_TOOL_RULE + SYSTEM_AFTER_TOOLS   # Claude Code's
 
-def agent_env(base: dict | None = None) -> dict:
-    """Remove inherited GitHub credentials and block normal git transports.
+
+def agent_env(base: dict | None = None, root: Path | None = None) -> dict:
+    """Remove inherited GitHub credentials and block normal git transports. A project
+    `root` inside some other repository (prism-local's examples, say), which it does not
+    sync with: the agent's git stops at the project, and does not find that repository
+    (its remotes, its history) above it.
 
     This is a supplemental guard. A child can override environment variables;
     filesystem and network permissions must come from the backend runtime.
     """
     from gitenv import git_env
     env = git_env(base)
+    if root is not None:
+        import repoview
+        root = Path(root).resolve()
+        if repoview.place(root).kind == "nested":
+            # git looks for a repository in the project and its folders, not above it.
+            env["GIT_CEILING_DIRECTORIES"] = str(root.parent)
     env["GIT_ALLOW_PROTOCOL"] = "prism-local-agents-do-not-reach-remotes"
     env["GIT_TERMINAL_PROMPT"] = "0"
     for k in ("GH_TOKEN", "GITHUB_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_ENTERPRISE_TOKEN"):
@@ -119,6 +140,78 @@ def find_bin(env: str, name: str, extra: tuple[str, ...] = ()) -> str | None:
     """A CLI from the environment variable `env`, else PATH, else a few usual places."""
     return os.environ.get(env) or shutil.which(name) \
         or next((p for p in extra if Path(p).exists()), None)
+
+
+FILE_TOOLS = ("read", "write", "edit", "str_replace", "create", "view", "open")
+
+
+def file_place(name: str, args: dict) -> tuple[str | None, tuple[int, int] | None]:
+    """Which file a tool call of a backend's own vocabulary (read_file, edit_file,
+    write_file, str_replace_editor …) works on, and for a read of part of it which lines,
+    from its arguments: (path as given, (first, last) from 1), for Job.tool."""
+    low = str(name or "").lower()
+    path = args.get("path") or args.get("file_path") or args.get("filename")
+    if not path or not isinstance(path, str) or not any(w in low for w in FILE_TOOLS):
+        return None, None
+    lines = None
+    try:
+        if "read" in low or "view" in low:
+            first = args.get("offset") or args.get("start_line") or args.get("line")
+            count = args.get("limit")
+            last = args.get("end_line")
+            if first or count or last:
+                first = max(1, int(first or 1))
+                last = int(last) if last else first + max(1, int(count or 2000)) - 1
+                lines = (first, max(first, last))
+    except (TypeError, ValueError):
+        lines = None
+    return path, lines
+
+
+class Tail:
+    """The end of what a CLI wrote on stderr (all a turn ever shows of it), kept from the
+    thread that reads it: not the whole of it, which a chatty CLI makes megabytes of."""
+
+    def __init__(self, limit: int = 8000):
+        self.limit = max(0, limit)
+        self.parts, self.size, self.lock = collections.deque(), 0, threading.Lock()
+
+    def add(self, text: str) -> None:
+        if not text or not self.limit:
+            return
+        with self.lock:
+            text = text[-self.limit:]
+            self.parts.append(text)
+            self.size += len(text)
+            while self.parts and self.size > self.limit:
+                first = self.parts.popleft()
+                excess = self.size - self.limit
+                if len(first) > excess:
+                    self.parts.appendleft(first[excess:])
+                    self.size = self.limit
+                else:
+                    self.size -= len(first)
+
+    def __iter__(self):
+        with self.lock:
+            return iter(list(self.parts))
+
+
+def shut_down(resp) -> None:
+    """End an HTTP response another thread is reading (an API turn's stream, on Stop).
+    Closing it would wait for the lock that reader holds until the next chunk comes, and
+    then pull the stream from under it. Shutting its socket down ends the read at once on
+    Linux and macOS; on Windows only at the next data, which is why the API backend reads
+    in a thread of its own (backend_openai._stream) that the turn need not wait for."""
+    try:
+        resp.fp.raw._sock.shutdown(socket.SHUT_RDWR)
+        return
+    except (AttributeError, OSError):
+        pass
+    try:
+        resp.close()
+    except Exception:  # noqa: BLE001 — closing from another thread may race
+        pass
 
 
 def executable(path: str | None) -> bool:
@@ -159,8 +252,14 @@ class Job:
         self.snapshot_issues: set[str] = set()
         self.metadata_before: set[str] = set()   # .git, .codex… present when it started
         self.attachments: list[str] = []
+        self.errors_shown = 0                    # error events the page has had (emit)
 
     def emit(self, ev: dict) -> None:
+        if ev.get("t") == "error":
+            if self.cancel.is_set():
+                return                  # what stopping it broke: "done" says it was stopped
+            if not ev.get("notice"):    # a notice the turn went on after tells nothing of its end
+                self.errors_shown += 1
         with self.cond:
             self.events.append(ev)
             self.cond.notify_all()
@@ -170,12 +269,36 @@ class Job:
         """Whether the turn has the editor's compile tool: an Edit turn, with the editor's server."""
         return self.mode == "edit" and bool(self.server_url)
 
-    def tool(self, tid, name, summary="", **place) -> None:
+    def tool(self, tid, name, summary="", path=None, lines=None) -> None:
         """A tool the agent called (the event's form is kept here, whatever shape the
-        backend's own output had): its id, its name, a summary of its input, and where it
-        works when that is known (`place`: "path", "line")."""
-        self.emit({"t": "tool", "id": "" if tid is None else str(tid), "name": str(name or "tool"),
-                   "summary": str(summary or "")[:200], **place})
+        backend's own output had): its id, its name, a summary of its input, and, for a
+        file tool, the file (`path`, as the backend has it: absolute or relative to the
+        project; made project-relative here, and left out when it is outside) and for a
+        read of part of it the lines (`lines`: first and last, from 1). The editor shows
+        the agent there (turn.js: its marks), whichever backend runs."""
+        ev = {"t": "tool", "id": "" if tid is None else str(tid), "name": str(name or "tool"),
+              "summary": str(summary or "")[:200]}
+        rel = self.relative(path) if path else None
+        if rel:
+            ev["path"] = rel
+            if lines:
+                try:
+                    first, last = (int(x) for x in lines)
+                    if 1 <= first <= last:
+                        ev["lines"] = [first, last]
+                except (TypeError, ValueError):
+                    pass
+        self.emit(ev)
+
+    def relative(self, path) -> str | None:
+        """A path the agent gave, relative to the project; None when it is outside."""
+        try:
+            p = Path(str(path))
+            p = p if p.is_absolute() else self.root / p
+            rel = p.resolve().relative_to(Path(self.root).resolve()).as_posix()
+        except (ValueError, OSError, RuntimeError):
+            return None
+        return rel if rel not in ("", ".") else None
 
     def tool_result(self, tid, error, preview="") -> None:
         """How the tool call `tid` ended: whether it failed, the start of its output."""
@@ -184,8 +307,22 @@ class Job:
 
     def wait_events(self, after: int, timeout: float) -> tuple[list[dict], bool]:
         with self.cond:
-            if len(self.events) <= after and not self.done:
-                self.cond.wait(timeout)
+            deadline = time.monotonic() + max(0, timeout)
+            while len(self.events) <= after and not self.done:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.cond.wait(remaining)
+            # A short fixed window combines nearby tokens without postponing a batch
+            # indefinitely. Completed turns and non-waiting polls return immediately, and
+            # so does a poll that has the done event (the last; the job is marked done a
+            # moment after it).
+            batch_until = min(deadline, time.monotonic() + .04)
+            while len(self.events) > after and not self.done and self.events[-1].get("t") != "done":
+                remaining = batch_until - time.monotonic()
+                if remaining <= 0:
+                    break
+                self.cond.wait(remaining)
             return self.events[after:], self.done
 
 
@@ -208,6 +345,7 @@ class Backend:
     usage_limits = False              # reports subscription usage limits (/api/agent/usage)
     input_types = ("text",)
     rate: dict | None = None          # the usage limits last seen (usage_limits)
+    file_tool_rule = FILE_TOOL_RULE   # the instructions' line on file tools, for its own tools
 
     def __init__(self, pid: str, spec: dict | None = None):
         spec = spec or {}
@@ -250,6 +388,10 @@ class Backend:
         ids = list(dict.fromkeys([*self.models, *([self.default_model] if self.default_model else [])]))
         return {"models": [{"id": m, "label": m, "efforts": self.model_efforts_for(m)} for m in ids],
                 "source": "configuration", "default_model": self.default_model}
+
+    def system_text(self) -> str:
+        """The editor's instructions to the agent, with this backend's line on file tools."""
+        return SYSTEM_BEFORE_TOOLS + self.file_tool_rule + SYSTEM_AFTER_TOOLS
 
     def check(self, model: str | None, effort: str | None) -> str | None:
         efforts = self.model_efforts_for(model)
@@ -298,10 +440,7 @@ class Backend:
         if job.proc and job.proc.poll() is None:
             kill_tree(job.proc)
         if job.http is not None:
-            try:
-                job.http.close()
-            except Exception:  # noqa: BLE001 — closing from another thread may race
-                pass
+            shut_down(job.http)
 
     def commands(self, root: Path, refresh: bool = False) -> dict:
         return {"skills": [], "commands": [], "terminal_only": []}
@@ -341,7 +480,7 @@ class CliBackend(Backend):
     def run(self, job: Job) -> dict:
         cmd, stdin = self.command(job)
         st: dict = {}
-        with cli_process(job, cmd, stdin, agent_env(), bufsize=1) as (proc, lines, stderr_lines):
+        with cli_process(job, cmd, stdin, agent_env(root=job.root), bufsize=1) as (proc, lines, stderr_lines):
             if proc is None:
                 return st                        # stopped before it started
             for line in lines:
@@ -363,7 +502,7 @@ OUTPUT_GRACE = 5      # seconds a CLI's output may stay open after it exited
 
 @contextmanager
 def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *,
-                keep_stdin_open: bool = False, **popen):
+                on_idle=None, keep_stdin_open: bool = False, **popen):
     """A turn's CLI, its input `stdin` (the prompt goes through stdin so it can never be
     parsed as a flag). Yields (process, its output lines, its stderr lines so far); (None,
     [], []) when Stop was pressed before it started, so it never starts. Stop pressed while
@@ -375,18 +514,25 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *,
 
     The output ends when the CLI's does, or OUTPUT_GRACE after the CLI exited (at once
     after Stop): a command it started (a background shell) may hold the output open for
-    good, and the turn must not wait for it."""
+    good, and the turn must not wait for it. An optional short on_idle callback can read
+    progress from a CLI that saves its events elsewhere instead of printing them."""
     if job.cancel.is_set():
         yield None, [], []
         return
-    err: list[str] = []
+    err = Tail()
     out: queue.Queue = queue.Queue()
     proc = start(cmd, cwd=job.root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                  stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", env=env, **popen)
     job.proc = proc
     def drain_err():
+        # What has arrived, as it arrives: the text file's read(n) waits for n characters
+        # or the end, and a program the CLI left may hold the end off for good.
+        text = io.IncrementalNewlineDecoder(codecs.getincrementaldecoder("utf-8")("replace"), translate=True)
         try:
-            err.extend(proc.stderr)
+            fd = proc.stderr.fileno()
+            while chunk := os.read(fd, 4096):
+                err.add(text.decode(chunk))
+            err.add(text.decode(b"", final=True))
         except (OSError, ValueError):
             pass
         finally:
@@ -410,6 +556,8 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *,
             try:
                 line = out.get(timeout=0.2)
             except queue.Empty:
+                if on_idle is not None and not job.cancel.is_set():
+                    on_idle()
                 if proc.poll() is None:
                     continue
                 exited = exited or time.monotonic()

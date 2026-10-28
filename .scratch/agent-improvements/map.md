@@ -11,7 +11,7 @@ Label: wayfinder:map
 - 单一集成决策票贯穿本次会话；按 Web 权限 → 额度 → 模型配置 → label 导航推进。
 - 使用 grilling 和 domain-modeling 确认边界；需求已明确，代码能回答的问题先检查代码。使用测试驱动的回归验证。
 - 复用现有后端、服务、UI 与 symbols 扫描；保留已有未提交修改。
-- 使用本地 Markdown tracker，不创建远程 issue、不发布、不安装 App。
+- 使用本地 Markdown tracker。用户后续已授权提交并创建 PR；不创建远程 issue、不部署、不安装 App。
 
 ## Decisions so far
 

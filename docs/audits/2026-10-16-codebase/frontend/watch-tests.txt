@@ -1,0 +1,6 @@
+19:05:24 refused GET /api/agent/events: ValueError: could not convert string to float: 'soon'
+........
+----------------------------------------------------------------------
+Ran 8 tests in 3.868s
+
+OK

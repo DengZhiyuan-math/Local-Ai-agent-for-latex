@@ -25,6 +25,11 @@
   window (default): a new Chrome/Edge window of its own; the pop-out PDF opens as a tab in it.
   app: an app window without tabs or address bar; the pop-out PDF opens in its own window.
   default: a tab in the default browser's current window.
+
+.PARAMETER Python
+  The python.exe (or pythonw.exe) the shortcut should use: pythonw.exe in the same folder
+  runs the launcher. install.ps1 passes the Python it found or installed. Left out, the
+  Python of the py launcher is used, else pythonw.exe on PATH.
 #>
 param(
     [string]$Project,
@@ -32,7 +37,8 @@ param(
     [string]$Name,
     [ValidateSet("window", "app", "default")][string]$Browser = "window",
     [switch]$NoDesktop,
-    [string]$Folder          # create the shortcut only in this folder
+    [string]$Folder,         # create the shortcut only in this folder
+    [string]$Python          # use the pythonw.exe next to this Python
 )
 $ErrorActionPreference = "Stop"
 
@@ -51,8 +57,13 @@ if (-not (Test-Path -LiteralPath $launcher)) { throw "Launcher not found: $launc
 
 # pythonw.exe of a real Python install (not the Microsoft Store alias).
 $pythonw = $null
+if ($Python) {
+    $cand = Join-Path ([IO.Path]::GetDirectoryName($Python)) "pythonw.exe"
+    if (-not (Test-Path -LiteralPath $cand)) { throw "pythonw.exe not found next to $Python." }
+    $pythonw = $cand
+}
 $py = Get-Command py.exe -ErrorAction SilentlyContinue
-if ($py) {
+if (-not $pythonw -and $py) {
     $exe = & $py.Source -3 -c "import sys; print(sys.executable)" 2>$null
     if ($exe) { $cand = Join-Path (Split-Path $exe) "pythonw.exe"; if (Test-Path $cand) { $pythonw = $cand } }
 }

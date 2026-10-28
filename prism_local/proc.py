@@ -5,6 +5,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 import weakref
 
 # When the server runs without a console (started by the launcher), every console
@@ -47,6 +48,57 @@ def start(cmd, **popen) -> subprocess.Popen:
     return proc
 
 
+# After a time limit, how long run() still waits for what holds the output pipes (a
+# program the command started that outlived the kill) before it gives that output up.
+RUN_GRACE = 2.0
+
+
+def run(cmd, *, timeout: float, input=None, check: bool = False, **popen) -> subprocess.CompletedProcess:
+    """subprocess.run(cmd, capture_output=True, timeout=timeout) whose time limit holds.
+
+    subprocess.run kills only the program at its limit and then waits, with no limit, for
+    the pipes to close; a program it started (git's https helper or ssh, the node behind
+    an npm .cmd shim on Windows) keeps them open, so a hung network call would hang its
+    caller, and every lock it holds, for good. Here the program runs as start() runs it,
+    and at the limit its whole tree is ended; RUN_GRACE seconds later whatever output is
+    still pending is given up. Raises subprocess.TimeoutExpired then, OSError when the
+    program cannot start, and subprocess.CalledProcessError on failure with check=True.
+    A program that exited but left a program of its own holding the pipes is done: what it
+    left is ended (end_group) and its own result returned. What it started apart from its
+    pipes (git's fsmonitor daemon, gpg-agent) carries on, as under subprocess.run (release).
+    Without `input`, stdin is empty (popen may say otherwise); popen is Popen's (text,
+    encoding, cwd, env …)."""
+    popen.setdefault("stdout", subprocess.PIPE)
+    popen.setdefault("stderr", subprocess.PIPE)
+    popen["stdin"] = subprocess.PIPE if input is not None else popen.get("stdin", subprocess.DEVNULL)
+    proc = start(cmd, **popen)
+    deadline, given_up_at, pending = time.monotonic() + timeout, None, input
+    exited_at = None
+    while True:
+        try:
+            out, err = proc.communicate(pending, timeout=0.25)
+            break
+        except subprocess.TimeoutExpired:
+            pending = None                  # given once: communicate keeps what is left of it
+        now = time.monotonic()
+        if given_up_at is None and proc.poll() is not None:
+            exited_at = exited_at or now
+            if now - exited_at >= 0.5:      # it is done; what it left holds the pipes
+                end_group(proc)
+        if given_up_at is None and now >= deadline:
+            kill_tree(proc)
+            given_up_at = now + RUN_GRACE
+        elif given_up_at is not None and now >= given_up_at:
+            kill_tree(proc)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+    if given_up_at is not None:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err)
+    release(proc)
+    if check and proc.returncode:
+        raise subprocess.CalledProcessError(proc.returncode, cmd, out, err)
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
 def kill_tree(proc: subprocess.Popen) -> None:
     """Stop a process and its children. On Windows a CLI may be a .cmd shim around node,
     and MiKTeX's pdflatex.exe runs the real engine as a child process.
@@ -84,6 +136,20 @@ def end_group(proc: subprocess.Popen) -> None:
         os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
         pass
+
+
+def release(proc: subprocess.Popen) -> None:
+    """After `proc` (started by start()) has exited: what it left running carries on (on
+    Windows its job no longer ends them when its handle closes). Only for short commands
+    (run): what an agent CLI or a build leaves is ended with it."""
+    holder = getattr(proc, "_prism_job", None)
+    with _jobs:
+        job = holder[0] if holder else None
+        if not job:
+            return
+        holder[0] = None
+    _set_limits(job, JOB_OBJECT_LIMIT_BREAKAWAY_OK)
+    _win()[0].CloseHandle(job)
 
 
 def _reap(proc: subprocess.Popen) -> None:
@@ -136,8 +202,7 @@ def _win():
     return _api
 
 
-def _win_job():
-    """A new job whose processes end when its last handle closes; None if none can be made."""
+def _set_limits(job, flags: int) -> bool:
     import ctypes
 
     class Basic(ctypes.Structure):
@@ -151,6 +216,14 @@ def _win_job():
         _fields_ = [("BasicLimitInformation", Basic), ("IoInfo", ctypes.c_uint64 * 6),
                     ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
                     ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
+    info = Extended()
+    info.BasicLimitInformation.LimitFlags = flags
+    return bool(_win()[0].SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
+                                                  ctypes.byref(info), ctypes.sizeof(info)))
+
+
+def _win_job():
+    """A new job whose processes end when its last handle closes; None if none can be made."""
     try:
         k32, _ = _win()
         job = k32.CreateJobObjectW(None, None)
@@ -158,10 +231,7 @@ def _win_job():
         return None
     if not job:
         return None
-    info = Extended()
-    info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK
-    if not k32.SetInformationJobObject(job, JOB_OBJECT_EXTENDED_LIMIT_INFORMATION,
-                                       ctypes.byref(info), ctypes.sizeof(info)):
+    if not _set_limits(job, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE | JOB_OBJECT_LIMIT_BREAKAWAY_OK):
         k32.CloseHandle(job)
         return None
     return job

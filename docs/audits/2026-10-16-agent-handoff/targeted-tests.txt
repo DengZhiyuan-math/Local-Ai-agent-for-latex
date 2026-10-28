@@ -1,0 +1,13 @@
+{"event": "agent_start", "job": 1792169242892, "provider": "big", "project_key": "tmppugqc0eq-a7d9bcdf5e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmppugqc0eq", "session_id": null}
+{"event": "agent_start", "job": 1792169242893, "provider": "big", "project_key": "tmppugqc0eq-a7d9bcdf5e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmppugqc0eq", "session_id": null}
+{"event": "agent_start", "job": 1792169242894, "provider": "big", "project_key": "tmppugqc0eq-a7d9bcdf5e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmppugqc0eq", "session_id": null}
+{"event": "agent_start", "job": 1792169242895, "provider": "big", "project_key": "tmppugqc0eq-a7d9bcdf5e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmppugqc0eq", "session_id": null}
+{"event": "git_target", "project_key": "prism-test-v9zp9wng-ec669decc1", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-v9zp9wng", "git_top": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-v9zp9wng", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-uf2au_5f", "push_url": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-uf2au_5f", "repository_identity": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-uf2au_5f", "configuration_fingerprint": "7d6ee0386ac3987c61835dd17ad14c585ed3a781249de29b65a8ccdd94d451a0"}, "stage": "validation", "blocked_reason": null}
+{"event": "agent_start", "job": 1792169249510, "provider": "api", "project_key": "tmplrb0ualo-c514fc0472", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmplrb0ualo", "session_id": null}
+{"event": "agent_start", "job": 1792169250044, "provider": "api", "project_key": "tmpfxo72f02-c00146c04e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpfxo72f02", "session_id": null}
+{"event": "agent_start", "job": 1792169250045, "provider": "api", "project_key": "tmpfxo72f02-c00146c04e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpfxo72f02", "session_id": "dce49b4aaf704a3d96c366c2adbf5a8d"}
+.......
+----------------------------------------------------------------------
+Ran 7 tests in 7.868s
+
+OK

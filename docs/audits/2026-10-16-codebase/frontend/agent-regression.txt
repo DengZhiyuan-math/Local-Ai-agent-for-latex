@@ -1,0 +1,67 @@
+{"event": "agent_start", "job": 1792172145853, "provider": "slow", "project_key": "tmp74y_p0pi-c956573f11", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp74y_p0pi", "session_id": null}
+{"event": "agent_start", "job": 1792172146055, "provider": "busy", "project_key": "tmpzijwgck1-c218dfdd80", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpzijwgck1", "session_id": null}
+{"event": "agent_start", "job": 1792172146761, "provider": "wild", "project_key": "tmpkpuymr6x-ebf712b73d", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpkpuymr6x", "session_id": null}
+{"event": "agent_start", "job": 1792172146966, "provider": "wild", "project_key": "tmpkpuymr6x-ebf712b73d", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpkpuymr6x", "session_id": null}
+{"event": "agent_start", "job": 1792172147193, "provider": "claude", "project_key": "prism-local-fc9c0ca67a", "cwd": "D:\\DynNum\\prism-local", "session_id": null}
+{"event": "agent_start", "job": 1792172147465, "provider": "claude", "project_key": "prism-local-fc9c0ca67a", "cwd": "D:\\DynNum\\prism-local", "session_id": null}
+{"event": "agent_start", "job": 1792172147728, "provider": "claude", "project_key": "prism-local-fc9c0ca67a", "cwd": "D:\\DynNum\\prism-local", "session_id": null}
+{"event": "agent_start", "job": 1792172148002, "provider": "deepcode", "project_key": "prism-test-9fj8uuxz-059a0cfde9", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-9fj8uuxz", "session_id": null}
+{"event": "agent_start", "job": 1792172148357, "provider": "deepcode", "project_key": "prism-test-hl4pm95v-69ae8cb8c1", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-hl4pm95v", "session_id": null}
+{"event": "agent_start", "job": 1792172148358, "provider": "deepcode", "project_key": "prism-test-hl4pm95v-69ae8cb8c1", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-hl4pm95v", "session_id": null}
+{"event": "agent_start", "job": 1792172151133, "provider": "deepcode", "project_key": "prism-test-ukvxtr_p-d7ef12b924", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-ukvxtr_p", "session_id": null}
+{"event": "agent_start", "job": 1792172151134, "provider": "deepcode", "project_key": "prism-test-ukvxtr_p-d7ef12b924", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-ukvxtr_p", "session_id": "e1437db6-7b86-4015-9f4e-375e2746c1e4"}
+{"event": "agent_start", "job": 1792172151839, "provider": "ds", "project_key": "tmpq12fw1ly-293e2124b6", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpq12fw1ly", "session_id": null}
+{"event": "agent_start", "job": 1792172152374, "provider": "ds", "project_key": "tmpc0obo050-86a65e06aa", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpc0obo050", "session_id": null}
+{"event": "agent_start", "job": 1792172152900, "provider": "ds", "project_key": "tmpvqj26lut-c3ef14c881", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpvqj26lut", "session_id": null}
+{"event": "agent_start", "job": 1792172153413, "provider": "ds", "project_key": "tmpi26mk0t6-71e34bb229", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpi26mk0t6", "session_id": null}
+{"event": "agent_start", "job": 1792172153621, "provider": "ds", "project_key": "tmpi26mk0t6-71e34bb229", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpi26mk0t6", "session_id": null}
+{"event": "agent_start", "job": 1792172154434, "provider": "ds", "project_key": "tmpq0r887j_-c6d753f992", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpq0r887j_", "session_id": null}
+{"event": "agent_start", "job": 1792172154856, "provider": "ds", "project_key": "tmpq0r887j_-c6d753f992", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpq0r887j_", "session_id": "6e1bc0f982464f3e9138cbc4bde558cb"}
+{"event": "agent_start", "job": 1792172155457, "provider": "ds", "project_key": "tmpcloslfyo-1a15051185", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpcloslfyo", "session_id": null}
+{"event": "agent_start", "job": 1792172155669, "provider": "ds", "project_key": "tmpcloslfyo-1a15051185", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpcloslfyo", "session_id": "1b00318d15164c0db2a2a48b0294f420"}
+{"event": "agent_start", "job": 1792172156478, "provider": "plant", "project_key": "tmptrggsh9p-81d629b7ca", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmptrggsh9p", "session_id": null}
+{"event": "agent_start", "job": 1792172156685, "provider": "quiet", "project_key": "tmptrggsh9p-81d629b7ca", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmptrggsh9p", "session_id": null}
+{"event": "agent_start", "job": 1792172156892, "provider": "wild", "project_key": "tmptel4nnf3-bcd3341fa2", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmptel4nnf3", "session_id": null}
+{"event": "agent_start", "job": 1792172162892, "provider": "told", "project_key": "prism-test-_hwa0111-5e5aa50db0", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-_hwa0111", "session_id": null}
+{"event": "agent_start", "job": 1792172163094, "provider": "api", "project_key": "prism-test-cvzunv6v-05fcee2fc2", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-cvzunv6v", "session_id": null}
+{"event": "agent_start", "job": 1792172163808, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163809, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163810, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163811, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163812, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163813, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163814, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163815, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163816, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163817, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172163818, "provider": "write", "project_key": "tmpmmo0ub9w-062f0bf603", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpmmo0ub9w", "session_id": null}
+{"event": "agent_start", "job": 1792172166069, "provider": "edit", "project_key": "tmpjl_l9yzp-89107dc7c0", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpjl_l9yzp", "session_id": null}
+{"event": "agent_start", "job": 1792172166272, "provider": "edit", "project_key": "tmp2nbqg4si-7be0eaf801", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp2nbqg4si", "session_id": null}
+{"event": "agent_start", "job": 1792172166477, "provider": "fake", "project_key": "prism-test-a82pxu1m-8343293f6e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-a82pxu1m", "session_id": null}
+{"event": "agent_start", "job": 1792172168192, "provider": "fake", "project_key": "prism-test-_3pwozu4-695def05be", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-_3pwozu4", "session_id": null}
+{"event": "agent_start", "job": 1792172168436, "provider": "fake", "project_key": "prism-test-e4511luw-0f197bea06", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\prism-test-e4511luw", "session_id": null}
+{"event": "agent_start", "job": 1792172168671, "provider": "big", "project_key": "tmp6ok6fz_m-08c1176ace", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp6ok6fz_m", "session_id": null}
+{"event": "agent_start", "job": 1792172168672, "provider": "big", "project_key": "tmp6ok6fz_m-08c1176ace", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp6ok6fz_m", "session_id": null}
+{"event": "agent_start", "job": 1792172168673, "provider": "big", "project_key": "tmp6ok6fz_m-08c1176ace", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp6ok6fz_m", "session_id": null}
+{"event": "agent_start", "job": 1792172168674, "provider": "big", "project_key": "tmp6ok6fz_m-08c1176ace", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp6ok6fz_m", "session_id": null}
+{"event": "agent_start", "job": 1792172169488, "provider": "edit", "project_key": "tmp2xunicm6-873cd993b4", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp2xunicm6", "session_id": null}
+{"event": "agent_start", "job": 1792172169489, "provider": "edit", "project_key": "tmp2xunicm6-873cd993b4", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp2xunicm6", "session_id": null}
+{"event": "agent_start", "job": 1792172171842, "provider": "edit", "project_key": "tmphkntw240-9222825dd0", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmphkntw240", "session_id": null}
+{"event": "agent_start", "job": 1792172172053, "provider": "edit", "project_key": "tmpgdzet5ns-2fe12fd17c", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpgdzet5ns", "session_id": null}
+{"event": "agent_start", "job": 1792172172460, "provider": "edit", "project_key": "tmpcns_oysd-8ed8fd813e", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpcns_oysd", "session_id": null}
+{"event": "agent_start", "job": 1792172172664, "provider": "ask", "project_key": "tmplqk2vb8r-ae86a652b1", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmplqk2vb8r", "session_id": null}
+{"event": "agent_start", "job": 1792172172877, "provider": "edit", "project_key": "tmpn9wjxucd-2c49d6d7ed", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpn9wjxucd", "session_id": null}
+{"event": "agent_start", "job": 1792172173103, "provider": "replace", "project_key": "tmpvh040jkv-574daa2bc7", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpvh040jkv", "session_id": null}
+{"event": "agent_start", "job": 1792172173307, "provider": "wild", "project_key": "tmpjv45cnvz-1647d1ccfe", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpjv45cnvz", "session_id": null}
+{"event": "agent_start", "job": 1792172173308, "provider": "wild", "project_key": "tmpjv45cnvz-1647d1ccfe", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpjv45cnvz", "session_id": null}
+{"event": "agent_start", "job": 1792172173755, "provider": "replace", "project_key": "project-6a37148896", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpw0nieh5e\\project", "session_id": null}
+{"event": "agent_start", "job": 1792172174012, "provider": "cli", "project_key": "tmprbnjbyjw-bae158bc94", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmprbnjbyjw", "session_id": null}
+{"event": "agent_start", "job": 1792172174013, "provider": "cli", "project_key": "tmprbnjbyjw-bae158bc94", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmprbnjbyjw", "session_id": null}
+{"event": "agent_start", "job": 1792172174494, "provider": "api", "project_key": "tmp8l5yxlr9-4b55bc4f98", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmp8l5yxlr9", "session_id": null}
+{"event": "agent_start", "job": 1792172175071, "provider": "api", "project_key": "tmpwfi4r735-85c8cd7a91", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpwfi4r735", "session_id": null}
+{"event": "agent_start", "job": 1792172175072, "provider": "api", "project_key": "tmpwfi4r735-85c8cd7a91", "cwd": "C:\\Users\\dengz\\AppData\\Local\\Temp\\tmpwfi4r735", "session_id": "aceb6ee3b6ab46faa11cdf668b8ab1c4"}
+.................................................................................................
+----------------------------------------------------------------------
+Ran 97 tests in 35.842s
+
+OK

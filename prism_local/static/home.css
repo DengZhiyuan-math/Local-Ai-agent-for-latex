@@ -211,6 +211,31 @@ span.crumb { display: inline-flex; align-items: center; color: var(--muted); }
   box-shadow: 0 6px 20px rgba(0, 0, 0, .25); white-space: pre-wrap;
 }
 #toast.err { background: var(--err); color: #fff; }
+#state-damaged { margin: 8px 16px; padding: 10px 12px; border: 1px solid var(--err); border-left-width: 4px; border-radius: 6px; color: var(--err); }
+#state-damaged button { margin-left: 8px; }
+
+/* ---------- getting started (git, the GitHub CLI, the login) */
+#setup { margin: 10px 16px; padding: 12px 16px; border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: 6px; }
+#setup h2 { font-size: 15px; margin: 0 0 4px; }
+#setup p { margin: 0 0 8px; color: var(--muted); }
+#setup ol { list-style: none; margin: 0; padding: 0; }
+#setup li { display: flex; align-items: center; gap: 10px; padding: 6px 0; flex-wrap: wrap; }
+#setup li.done { color: var(--muted); }
+#setup li.setup-optional { color: var(--muted); }          /* optional: not a step you must do */
+#setup .setup-mark { width: 1.2em; text-align: center; }
+#setup .setup-what { flex: 1 1 260px; }
+#setup .setup-do { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+#setup .setup-code { font-size: 18px; letter-spacing: 2px; padding: 2px 8px; border: 1px solid currentColor; border-radius: 4px; user-select: all; }
+#setup .setup-err, #tools-status .setup-err { color: var(--err); }
+#setup details pre, #tools-status details pre { white-space: pre-wrap; max-width: 640px; font-size: 11px; }
+#tools-status > div { margin-bottom: 4px; }
+#tools-status button { margin-left: 4px; }
+#setup .setup-note, #tools-status .setup-note { color: var(--muted); }
+
+/* ---------- open from GitHub */
+.clone-list { max-height: 50vh; overflow: auto; margin: 8px 0; display: flex; flex-direction: column; gap: 2px; }
+.clone-list .clone-it { text-align: left; display: flex; gap: 8px; align-items: baseline; }
+.clone-list .clone-it small { color: var(--muted); }
 
 /* ---------- empty states */
 .empty-note { color: var(--muted); padding: 40px 0; text-align: center; }
@@ -285,6 +310,11 @@ dialog textarea:focus, dialog select:focus { outline: none; border-color: var(--
 .swatch input:checked + span { box-shadow: 0 0 0 2px var(--panel), 0 0 0 4px var(--tag); }
 .swatch input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 4px; }
 dialog.wide { width: min(760px, calc(100vw - 32px)); }
+/* Settings grew past a laptop screen: it scrolls inside, the buttons with it. */
+#dlg-settings { max-height: calc(100vh - 32px); overflow: auto; }
+#dlg-settings .check .hint { font-style: normal; }
+#snip-text { font-family: var(--mono); font-size: 12.5px; line-height: 1.45; tab-size: 2; white-space: pre;
+  height: min(520px, calc(100vh - 220px)); resize: none; }
 .sync-plan { max-height: 40vh; overflow: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
 .sync-plan:empty { display: none; }
 .sync-head { font-size: 12px; color: var(--muted); font-weight: 600; margin-bottom: 6px; }

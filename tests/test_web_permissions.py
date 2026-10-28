@@ -147,7 +147,7 @@ class GrantBoundaries(unittest.TestCase):
 
     def test_failed_persistent_save_keeps_prompt_pending_without_granting(self):
         thread = self.start()
-        with mock.patch("permissions.registry.write_json", side_effect=OSError("disk full")):
+        with mock.patch("permissions.registry.write_state", side_effect=OSError("disk full")):
             self.assertIn("error", self.broker.resolve(self.job, "req", "allow", "persistent"))
         self.assertTrue(thread.is_alive())
         self.assertEqual(self.broker.resolve(self.job, "req", "allow", "once"), {"ok": True})

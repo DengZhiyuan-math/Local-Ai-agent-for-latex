@@ -3,11 +3,13 @@ import json
 import os
 import subprocess
 import sys
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 import github
 
 
@@ -18,12 +20,12 @@ def result(code=0, stdout="", stderr=""):
 class GitHubCLI(unittest.TestCase):
     def setUp(self):
         self.gh = github.GhCli()
-        patch = mock.patch.object(github.shutil, "which", return_value="fixture-gh")
+        patch = mock.patch.object(github.tools, "find", return_value="fixture-gh")
         patch.start()
         self.addCleanup(patch.stop)
 
     def test_login_is_cached_and_can_be_refreshed(self):
-        with mock.patch.object(github.subprocess, "run", side_effect=[
+        with mock.patch.object(github.proc, "run", side_effect=[
                 result(stderr="Logged in to github.com account owner (keyring)"),
                 result(1, stderr="not logged in")]) as run:
             self.assertEqual(self.gh.status()["account"], "owner")
@@ -34,7 +36,7 @@ class GitHubCLI(unittest.TestCase):
 
     def test_login_cache_expires(self):
         with mock.patch.object(github.time, "time", return_value=100) as clock, \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(stdout="Logged in to github.com as owner"),
                     result(stdout="Logged in to github.com as other")]) as run:
             self.assertEqual(self.gh.status()["account"], "owner")
@@ -43,10 +45,11 @@ class GitHubCLI(unittest.TestCase):
             self.assertEqual(run.call_count, 2)
 
     def test_missing_cli_is_reported_without_starting_a_process(self):
-        with mock.patch.object(github.shutil, "which", return_value=None), \
-                mock.patch.object(github.subprocess, "run") as run:
-            self.assertIn("not found", self.gh.status()["error"])
-            self.assertIn("not found", self.gh.create(Path("."), "owner/paper"))
+        with mock.patch.object(github.tools, "find", return_value=None), \
+                mock.patch.object(github.proc, "run") as run:
+            self.assertIn("not installed", self.gh.status()["error"])
+            self.assertIn("Home page", self.gh.status()["error"], "where to install it, not a command")
+            self.assertIn("not installed", self.gh.create(Path("."), "owner/paper"))
         run.assert_not_called()
 
     def test_create_uses_the_project_and_sanitizes_inherited_git_selectors(self):
@@ -54,7 +57,7 @@ class GitHubCLI(unittest.TestCase):
                 mock.patch.dict(os.environ, {"GIT_DIR": "foreign", "GIT_WORK_TREE": "foreign",
                     "GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "remote.origin.url",
                     "GIT_CONFIG_VALUE_0": "foreign"}), \
-                mock.patch.object(github.subprocess, "run", return_value=result()) as run:
+                mock.patch.object(github.proc, "run", return_value=result()) as run:
             root = Path("paper")
             self.assertIsNone(self.gh.create(root, "owner/paper"))
         args, options = run.call_args
@@ -67,14 +70,14 @@ class GitHubCLI(unittest.TestCase):
 
     def test_create_reports_cli_failure_and_timeout(self):
         with mock.patch.object(self.gh, "status", return_value={"gh": "fixture-gh"}), \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(1, stderr="no network"), subprocess.TimeoutExpired("gh", 180)]):
             self.assertEqual(self.gh.create(Path("."), "owner/paper"), "no network")
             self.assertIn("timed out", self.gh.create(Path("."), "owner/paper"))
 
     def test_branch_protection_and_unavailable_plan(self):
         with mock.patch.object(self.gh, "status", return_value={"gh": "fixture-gh"}), \
-                mock.patch.object(github.subprocess, "run", side_effect=[
+                mock.patch.object(github.proc, "run", side_effect=[
                     result(), result(1, stderr="Upgrade to GitHub Pro")]) as run:
             self.assertTrue(self.gh.protect("owner/paper", "main").startswith("on:"))
             args, options = run.call_args
@@ -85,9 +88,147 @@ class GitHubCLI(unittest.TestCase):
             self.assertIn("free plan", self.gh.protect("owner/paper", "main"))
 
     def test_auth_and_protection_process_errors_are_reported(self):
-        with mock.patch.object(github.subprocess, "run", side_effect=OSError("fixture cannot start gh")):
+        with mock.patch.object(github.proc, "run", side_effect=OSError("fixture cannot start gh")):
             self.assertIn("cannot start gh", self.gh.status()["error"])
             self.assertIn("cannot start gh", self.gh.protect("owner/paper", "main"))
+
+
+FAKE_GH = r'''
+import os, sys, time
+from pathlib import Path
+here = Path(os.environ["FAKE_GH_DIR"])
+args = sys.argv[1:]
+if args[:2] == ["auth", "login"]:
+    (here / "login-args").write_text(" ".join(args))
+    print("! First copy your one-time code: AB12-CD34", flush=True)
+    print("Open this URL to continue in your web browser: https://github.com/login/device", flush=True)
+    while not (here / "approve").exists() and not (here / "deny").exists():
+        time.sleep(0.05)
+    if (here / "deny").exists():
+        print("X Authentication failed", flush=True)
+        sys.exit(1)
+    (here / "logged-in").write_text("me")
+    print("Logged in as me", flush=True)
+elif args[:2] == ["auth", "setup-git"]:
+    with open(here / "setup-git-calls", "a") as f:
+        f.write("x")
+    fails = here / "setup-git-fails"            # how many more times it fails
+    if fails.exists() and int(fails.read_text() or 0) > 0:
+        fails.write_text(str(int(fails.read_text()) - 1))
+        print("failed to set up git credential helper", file=sys.stderr)
+        sys.exit(1)
+    (here / "setup-git").write_text(" ".join(args))
+elif args[:2] == ["auth", "status"]:
+    if (here / "logged-in").exists():
+        print("github.com\n  Logged in to github.com account me (keyring)")
+    else:
+        print("You are not logged into any GitHub hosts.", file=sys.stderr)
+        sys.exit(1)
+'''
+
+
+class LoggingIn(unittest.TestCase):
+    """Logging in from the Home page: gh's device flow, its code on the page, git set up."""
+
+    def setUp(self):
+        from tmpdirs import tmpdir
+        self.dir = tmpdir()
+        script = self.dir / "fake_gh.py"
+        script.write_text(FAKE_GH, encoding="utf-8")
+        if os.name == "nt":
+            exe = self.dir / "gh.cmd"
+            exe.write_text(f'@"{sys.executable}" "{script}" %*\n', encoding="utf-8")
+        else:
+            exe = self.dir / "gh"
+            exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+            exe.chmod(0o755)
+        for patch in (mock.patch.dict(os.environ, {"FAKE_GH_DIR": str(self.dir)}),
+                      mock.patch.object(github.tools, "find", return_value=str(exe))):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.gh = github.GhCli()
+
+    def until(self, state, wait=15):
+        end = time.monotonic() + wait
+        while time.monotonic() < end:
+            st = self.gh.login_state()
+            if st["state"] == state:
+                return st
+            time.sleep(0.05)
+        self.fail(f"not {state}: {self.gh.login_state()}")
+
+    def test_the_code_is_shown_and_git_set_up_once_authorized(self):
+        self.assertFalse(self.gh.status(refresh=True)["logged_in"])
+        self.gh.login()
+        st = self.until("waiting")
+        self.assertEqual((st["code"], st["url"]), ("AB12-CD34", "https://github.com/login/device"))
+        self.assertIn("--web", (self.dir / "login-args").read_text())
+        self.assertEqual(self.gh.login()["state"], "waiting", "a second click does not start another")
+        (self.dir / "approve").write_text("")
+        st = self.until("done")
+        self.assertIn("setup-git", (self.dir / "setup-git").read_text(), "git pushes with this login")
+        self.assertIsNone(st["warning"])
+        self.assertEqual(self.gh.status()["account"], "me", "the status is asked again")
+
+    def test_git_not_set_up_is_tried_again_and_then_said_in_plain_words(self):
+        (self.dir / "approve").write_text("")
+        (self.dir / "setup-git-fails").write_text("1")       # a passing hiccup: the second try works
+        self.gh.login()
+        st = self.until("done")
+        self.assertEqual((self.dir / "setup-git-calls").read_text(), "xx")
+        self.assertIsNone(st["warning"])
+        self.assertNotIn("credential helper", st["details"] or "")
+        (self.dir / "setup-git-calls").unlink()
+        (self.dir / "setup-git").unlink()
+        (self.dir / "setup-git-fails").write_text("2")       # fails both times
+        self.gh.login()
+        st = self.until("done")
+        self.assertEqual((self.dir / "setup-git-calls").read_text(), "xx", "tried once more, not more")
+        self.assertFalse((self.dir / "setup-git").exists())
+        self.assertIn("logged in to GitHub", st["warning"])
+        self.assertIn("log in once more", st["warning"])
+        for jargon in ("git ", "setup-git", "credential", "gh "):
+            self.assertNotIn(jargon, st["warning"])
+        self.assertIn("credential helper", st["details"], "gh's own words, under Details")
+        self.assertIsNone(st["error"])
+        self.assertEqual(self.gh.status()["account"], "me")
+
+    def test_a_cancel_while_starting_ends_the_login(self):
+        """Cancel clicked before gh has said its code: not lost once gh has started."""
+        start = github.proc.start
+
+        def cancelled_meanwhile(*a, **k):
+            self.gh.cancel_login()
+            return start(*a, **k)
+
+        self.gh.cancel_login()                                # an old cancel does not end a new login
+        with mock.patch.object(github.proc, "start", side_effect=cancelled_meanwhile):
+            st = self.gh.login()
+            self.assertIsNone(st["warning"])
+            self.assertEqual(self.until("failed")["error"], "Logging in to GitHub was cancelled.")
+        self.assertFalse((self.dir / "logged-in").exists())
+        self.gh.cancel_login()
+        self.gh.login()
+        self.until("waiting")
+        (self.dir / "approve").write_text("")
+        self.until("done")
+
+    def test_refused_cancelled_and_too_slow_say_so(self):
+        self.gh.login()
+        self.until("waiting")
+        (self.dir / "deny").write_text("")
+        st = self.until("failed")
+        self.assertEqual(st["error"], "Logging in to GitHub did not work. Try again.")
+        self.assertIn("Authentication failed", st["details"])
+        (self.dir / "deny").unlink()
+        self.gh.login()
+        self.until("waiting")
+        self.gh.cancel_login()
+        self.assertEqual(self.until("failed")["error"], "Logging in to GitHub was cancelled.")
+        with mock.patch.object(github.GhCli, "LOGIN_TIME", 1):
+            self.gh.login()
+            self.assertIn("was not confirmed", self.until("failed")["error"])
+        self.assertFalse((self.dir / "setup-git").exists())
 
 
 if __name__ == "__main__":

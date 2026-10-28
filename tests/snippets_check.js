@@ -203,6 +203,15 @@ check("fraction terms", () => {
   assert.strictEqual(S.fractionTerm("a + "), null);
   assert.strictEqual(S.fractionTerm("\\sum"), null);
 });
+check("distributed snippets load, compile and expand on a new installation", () => {
+  const fs = require("fs"), path = require("path");
+  const u = S.load(fs.readFileSync(path.join(__dirname, "../prism_local/shared-snippets.js"), "utf8"));
+  const rules = S.compile(u.list, 1);
+  assert.strictEqual(rules.length, u.list.length, "every distributed rule compiles");
+  const match = S.match(rules, "mk", "t", true);
+  assert.ok(match, "the distributed math shortcut is available without a local file");
+  assert.strictEqual(match.text, "$$0$");
+});
 check("your snippets file", () => {
   assert.deepStrictEqual(S.load("[{trigger: 'a', replacement: 'b', options: 'mA'}]").list.length, 1);
   assert.strictEqual(S.load("export default [{trigger: 'a', replacement: 'b'}];").defaults, true);

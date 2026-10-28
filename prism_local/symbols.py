@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import re
 
-from texutil import group, plain_text
+from texutil import group, plain_text, strip_comments
 
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
@@ -55,7 +55,55 @@ def _scan_tex(text: str) -> dict:
             events.append(("macro", n, m.group(1), None))
         for m in LABEL_RE.finditer(line):
             events.append(("label", n, m.group(1), None))
-    return {"inputs": inputs, "theorems": theorems, "events": events}
+    return {"inputs": inputs, "theorems": theorems, "events": events, "definitions": macro_definitions(text)}
+
+
+DEFINE_RE = re.compile(r"\\(newcommand|renewcommand|providecommand|DeclareRobustCommand|DeclareMathOperator"
+                       r"|DeclarePairedDelimiter|def|gdef)(?![A-Za-z])(\*?)")
+NAME_RE = re.compile(r"\s*(?:\{\s*\\([A-Za-z]+)\s*\}|\\([A-Za-z]+))")
+MAX_BODY = 2000
+
+
+def macro_definitions(text: str) -> list[tuple[str, str]]:
+    """The macros a .tex or .sty file defines, as KaTeX takes them: (name, body), the
+    arguments #1 … in the body. \\newcommand and its kin, \\def, \\DeclareMathOperator,
+    \\DeclarePairedDelimiter; a macro with an optional argument is left out (KaTeX
+    cannot take one), and so is a body that does not close."""
+    text = strip_comments(text)
+    out = []
+    for m in DEFINE_RE.finditer(text):
+        kind, star = m.group(1), m.group(2)
+        n = NAME_RE.match(text, m.end())
+        if not n:
+            continue
+        name, i = n.group(1) or n.group(2), n.end()
+        while i < len(text) and text[i] in " \t\n":
+            i += 1
+        if kind in ("def", "gdef"):              # \def\name#1#2{…}
+            p = re.match(r"(?:#\d)*", text[i:])
+            i += p.end()
+        else:
+            a = re.match(r"\[\s*(\d)\s*\]\s*", text[i:])
+            if a:
+                i += a.end()
+            if text.startswith("[", i):          # an optional argument with a default
+                continue
+        g = group(text, i)
+        if not g or len(g[0]) > MAX_BODY:
+            continue
+        body = g[0].strip()
+        if kind == "DeclareMathOperator":
+            body = "\\operatorname" + star + "{" + body + "}"
+        elif kind == "DeclarePairedDelimiter":
+            j = g[1]
+            while j < len(text) and text[j] in " \t\n":
+                j += 1
+            g2 = group(text, j)
+            if not g2:
+                continue
+            body = "\\left" + body + " #1 \\right" + g2[0].strip()
+        out.append((name, body))
+    return out
 
 
 def _scan_bib(text: str) -> list[tuple]:

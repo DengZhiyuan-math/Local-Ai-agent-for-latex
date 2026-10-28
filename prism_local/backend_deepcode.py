@@ -8,8 +8,8 @@ documentation lists for agents. Each chat turn runs it non-interactively in the 
 with the message on stdin: Deep Code appends piped stdin to the prompt, and stdin keeps a
 long message with newlines, quotes or % intact, which an argument through Windows' npm
 ``deepcode.cmd`` shim would not. It prints only the final reply, at the end; afterwards
-prism-local reads the session Deep Code saved (~/.deepcode/projects/<project code>/) for
-the session id, to continue the conversation, and for the tools it used.
+prism-local follows the session Deep Code saves (~/.deepcode/projects/<project code>/)
+for live tool progress and the session id used to continue the conversation.
 
 Settings are Deep Code's own (~/.deepcode/settings.json: model, base URL, API key,
 permissions). prism-local only adds DEEPCODE_API_KEY from DEEPSEEK_API_KEY when Deep Code
@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 from contextlib import contextmanager
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, Backend, Job, agent_env, cli_process, executable, find_bin
+from backends import Backend, Job, agent_env, cli_process, executable, file_place, find_bin
 from fsutil import project_path, write_bytes
 from gitenv import selects_repository
 import mcp_compile
@@ -70,6 +70,27 @@ def node_entry(bin_path: str) -> list[str]:
                 node = shutil.which("node") or str(p.parent / "node.exe")
                 return [node, str(cli)]
     return [bin_path]
+
+
+# Ask's no-write rule is the permission categories the turn's settings deny (write-in-cwd,
+# delete-in-cwd, mcp: turn_settings); the first version they were checked on, with the
+# real CLI, is 0.4.3 (docs/audits/2026-10-08-*). One that does not know them would let an
+# Ask turn write, leaving only the restore after the turn.
+MIN_VERSION = (0, 4, 3)
+
+
+def installed_version(bin_path: str) -> tuple[int, int, int] | None:
+    """Deep Code's version, from the package.json of the npm package its command starts;
+    None when that cannot be told (a stand-in, a build of its own)."""
+    entry = node_entry(bin_path)
+    if len(entry) != 2 or Path(entry[1]).name != "cli.js":
+        return None
+    try:
+        data = json.loads((Path(entry[1]).parent / "package.json").read_text(encoding="utf-8"))
+        m = re.match(r"(\d+)\.(\d+)\.(\d+)", str(data.get("version", ""))) if data.get("name") == PACKAGE else None
+    except (OSError, ValueError, AttributeError):
+        return None
+    return tuple(int(x) for x in m.groups()) if m else None
 
 
 def project_code(root: Path) -> str:
@@ -125,6 +146,15 @@ def user_settings() -> dict:
     return read_settings(Path.home() / ".deepcode" / "settings.json")
 
 
+def injected_git(source: Path, settings: dict) -> str | None:
+    """Why the settings read from `source` may not be used: their env sets Git's
+    repository variables (GIT_DIR …), which would point the agent at another repository."""
+    env = settings.get("env") or {}
+    bad = sorted(k for k in env if selects_repository(k)) if isinstance(env, dict) else []
+    return (f"Deep Code settings {source} inject Git repository variables: {', '.join(bad)}. "
+            "Remove these variables before starting a turn.") if bad else None
+
+
 def overlay_record(path: Path) -> Path:
     """Where a turn notes what it put in place of a project's Deep Code settings."""
     name = hashlib.sha256(str(path).encode()).hexdigest()[:20] + ".json"
@@ -161,6 +191,50 @@ def heal_overlay(path: Path) -> None:
         pass
 
 
+class SessionLog:
+    """A session's file as Deep Code writes it during a turn, read as it grows: each read
+    parses only the lines added since the one before. A line still being written waits
+    for its end. A file that is shorter than what was read, or whose start or last read
+    part changed (Deep Code rewrote it), is read again from the start."""
+
+    CHECK = 4096          # bytes compared at the start and before the end of what was read
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.messages: list[dict] = []
+        self.offset = 0
+        self.head = self.tail = b""
+
+    def read(self) -> list[dict]:
+        """The whole messages in the file so far ([] when it cannot be read)."""
+        try:
+            with self.path.open("rb") as f:
+                if self.offset:
+                    size = os.fstat(f.fileno()).st_size
+                    f.seek(self.offset - len(self.tail))
+                    tail = f.read(len(self.tail))
+                    f.seek(0)
+                    if size < self.offset or tail != self.tail or f.read(len(self.head)) != self.head:
+                        self.messages, self.offset, self.head, self.tail = [], 0, b"", b""
+                f.seek(self.offset)
+                data = f.read()
+        except OSError:
+            return []
+        end = data.rfind(b"\n") + 1
+        for line in data[:end].splitlines():
+            try:
+                m = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(m, dict):
+                self.messages.append(m)
+        if not self.offset:
+            self.head = data[:min(end, self.CHECK)]
+        self.offset += end
+        self.tail = (self.tail + data[max(0, end - self.CHECK):end])[-self.CHECK:]
+        return self.messages
+
+
 class DeepCode(Backend):
     kind = "deepcode"
     label = "Deep Code (DeepSeek)"
@@ -168,6 +242,7 @@ class DeepCode(Backend):
     efforts = ("low", "high", "max")
     enforces_scope = False
     read_only_ask = False           # category checks are not an OS sandbox; also restore writes
+    file_tool_rule = DEEPCODE_FILE_TOOL_RULE
 
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
@@ -192,6 +267,12 @@ class DeepCode(Backend):
         if not executable(binary) and not (binary and Path(binary).suffix == ".py" and Path(binary).is_file()):
             return (f"Deep Code not found. Install it (npm install -g {PACKAGE}) or set "
                     "DEEPCODE_BIN=/path/to/deepcode.")
+        version = installed_version(binary)
+        if version is not None and version < MIN_VERSION:
+            need = ".".join(map(str, MIN_VERSION))
+            return (f"This Deep Code ({'.'.join(map(str, version))}) is older than {need}, the first "
+                    f"version Prism can keep from changing files in Ask mode. Update it: "
+                    f"npm install -g {PACKAGE}")
         return None
 
     def preflight(self, root: Path) -> str | None:
@@ -199,11 +280,28 @@ class DeepCode(Backend):
             project = project_path(root, ".deepcode/settings.json")
         except (ValueError, OSError):
             return "Deep Code settings must be inside this project"
+        # What the turn would find wrong only once it had started (turn_settings), said here,
+        # with the file: nothing is started for a turn that cannot run.
+        try:
+            if project.is_symlink():
+                return (f"Deep Code settings {project} must be a regular file of this project, "
+                        "not a link. Replace the link with the file.")
+            if project.is_file() and not isinstance(json.loads(project.read_bytes() or b"{}"), dict):
+                return f"Deep Code settings {project} must hold a JSON object ({{ … }}). Fix the file, or remove it."
+        except ValueError as e:
+            return f"Deep Code settings {project} are not valid JSON ({e}). Fix the file, or remove it."
+        except OSError as e:
+            return f"Deep Code settings {project} cannot be read: {e}"
+        inherited = user_settings().get("mcpServers") or {}
+        if inherited:
+            names = ", ".join(sorted(map(str, inherited))) if isinstance(inherited, dict) else "some"
+            return (f"Deep Code would bring the MCP servers of {Path.home() / '.deepcode' / 'settings.json'} "
+                    f"({names}) into this turn, which the editor cannot restrict. Remove them there, "
+                    "or start Deep Code with a profile that has none.")
         for source in (Path.home() / ".deepcode/settings.json", project):
-            env = read_settings(source).get("env") or {}
-            bad = sorted(k for k in env if selects_repository(k)) if isinstance(env, dict) else []
+            bad = injected_git(source, read_settings(source))
             if bad:
-                return f"Deep Code settings {source} inject Git repository variables: {', '.join(bad)}. Remove these variables before starting a turn."
+                return bad
         if not self.has_key(root):
             return ("Deep Code has no DeepSeek API key: set DEEPSEEK_API_KEY, or API_KEY in "
                     "~/.deepcode/settings.json or .deepcode/settings.json.")
@@ -228,7 +326,7 @@ class DeepCode(Backend):
         return {**super().info(), "bin": self.bin()}
 
     def env(self, job: Job) -> dict:
-        env = agent_env()
+        env = agent_env(root=job.root)
         settings_env = user_settings().get("env") or {}
         if not env.get("DEEPCODE_API_KEY") and env.get("DEEPSEEK_API_KEY") and \
                 not (isinstance(settings_env, dict) and settings_env.get("API_KEY")):
@@ -245,9 +343,8 @@ class DeepCode(Backend):
         text = job.prompt
         if job.mode != "edit":
             text = f"{text}\n\n{ASK_NOTE}"
-        rules = SYSTEM_APPEND.replace(FILE_TOOL_RULE, DEEPCODE_FILE_TOOL_RULE)
         return (f"[Instructions from the editor]\nThese instructions replace earlier editor instructions.\n"
-                f"{rules}\n[Message]\n{text}")
+                f"{self.system_text()}\n[Message]\n{text}")
 
     @contextmanager
     def turn_settings(self, job: Job):
@@ -263,6 +360,11 @@ class DeepCode(Backend):
         settings = json.loads(original) if original is not None else {}
         if not isinstance(settings, dict):
             raise ValueError("Deep Code settings must hold a JSON object")
+        # AgentManager.start ran preflight, but the file may have changed since (a sync, the
+        # author): the copy this turn passes on is checked again.
+        bad = injected_git(path, settings)
+        if bad:
+            raise ValueError(bad)
         deny = ["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
         if job.mode != "edit":
             deny += ["write-in-cwd", "delete-in-cwd", "mcp"]
@@ -308,9 +410,8 @@ class DeepCode(Backend):
                 pass
 
     def run(self, job: Job) -> dict:
-        bad = self.preflight(job.root) or (self.check_session(job.root, job.session_id) if job.session_id else None)
-        if bad:
-            raise ValueError(bad)
+        # AgentManager.start has run preflight and check_session; turn_settings checks
+        # again what may have changed since (the settings it passes on).
         with self.turn_settings(job):
             return self._run_cli(job)
 
@@ -322,7 +423,39 @@ class DeepCode(Backend):
         start = time.time()
         job.emit({"t": "thinking_start"})       # it prints nothing until the reply
         out_lines: list[str] = []
-        with cli_process(job, cmd, self.message(job), self.env(job)) as (proc, lines, err_lines):
+        seen, results = set(), set()
+        live_sid, stamp, checked = job.session_id, None, 0.0
+        logs: dict[str, SessionLog] = {}
+
+        def log(sid: str) -> SessionLog:
+            return logs.setdefault(sid, SessionLog(sessions_dir(job.root) / f"{sid}.jsonl"))
+        # A resumed session holds the earlier turns: only what follows them is this turn's
+        # (its new message may be only halfway written when the file is first looked at).
+        earlier = len(log(job.session_id).read()) if job.session_id else 0
+
+        def progress():
+            nonlocal live_sid, stamp, checked
+            now = time.monotonic()
+            if now - checked < .5:
+                return
+            checked = now
+            candidate = live_sid or latest_session(job.root, start)
+            if not candidate:
+                return
+            try:
+                stat = (sessions_dir(job.root) / f"{candidate}.jsonl").stat()
+                current = (stat.st_mtime_ns, stat.st_size)
+                if current == stamp or stat.st_mtime_ns < int(start * 1e9):
+                    return
+                if self.check_session(job.root, candidate):
+                    return
+                live_sid = candidate
+                self._replay_tools(job, live_sid, earlier, seen=seen, results=results, log=log(live_sid))
+                stamp = current
+            except (OSError, UnicodeError, ValueError):
+                pass                            # a session may be halfway through a write
+
+        with cli_process(job, cmd, self.message(job), self.env(job), on_idle=progress) as (proc, lines, err_lines):
             if proc is None:
                 return {"billing": "api"}       # stopped before it started
             for line in lines:
@@ -336,7 +469,7 @@ class DeepCode(Backend):
                 raise ValueError(bad)
             st["session_id"] = sid
             job.emit({"t": "init", "session_id": sid, "model": job.model})
-            self._replay_tools(job, sid, start)
+            self._replay_tools(job, sid, earlier, seen=seen, results=results, log=log(sid))
         reply = "".join(out_lines).strip()
         if reply:
             job.emit({"t": "message_start"})
@@ -349,31 +482,27 @@ class DeepCode(Backend):
                 job.emit({"t": "error", "message": msg})
         return st
 
-    def _replay_tools(self, job: Job, sid: str, since: float) -> None:
-        """The tools this turn used, from the session Deep Code saved (it prints none)."""
-        try:
-            lines = (sessions_dir(job.root) / f"{sid}.jsonl").read_text(encoding="utf-8").splitlines()
-        except OSError:
-            return
-        msgs = []
-        for line in lines:
-            try:
-                m = json.loads(line)
-            except ValueError:
-                continue
-            if isinstance(m, dict):
-                msgs.append(m)
-        # This turn's part: after the last user message that carries our prompt.
-        start = max((i for i, m in enumerate(msgs) if m.get("role") == "user"), default=-1)
-        seen = set()
-        for m in msgs[start + 1:]:
+    def _replay_tools(self, job: Job, sid: str, earlier: int = 0, *, seen=None, results=None,
+                      log: SessionLog | None = None) -> None:
+        """The tools this turn used, from the session Deep Code saved (it prints none).
+        `earlier`: how many messages the session held before this turn; `log`: the
+        session's file as read so far this turn."""
+        msgs = (log or SessionLog(sessions_dir(job.root) / f"{sid}.jsonl")).read()
+        if len(msgs) < earlier:              # rewritten shorter: its last user message decides
+            earlier = 0
+        # This turn's part: after its user message, the last one after the earlier turns.
+        start = max((i for i, m in enumerate(msgs) if i >= earlier and m.get("role") == "user"),
+                    default=earlier - 1)
+        seen = set() if seen is None else seen
+        results = set() if results is None else results
+        for offset, m in enumerate(msgs[start + 1:]):
             params = m.get("messageParams") or {}
             calls = m.get("tool_calls") or params.get("tool_calls") or []
             # Native Deep Code session records store the function on the tool message.
             if m.get("role") == "tool" and (m.get("meta") or {}).get("function"):
                 calls = [{"id": params.get("tool_call_id"), "function": m["meta"]["function"]}]
-            for call in calls:
-                cid = str(call.get("id") or len(job.events))
+            for call_index, call in enumerate(calls):
+                cid = str(call.get("id") or f"deepcode-{start}-{offset}-{call_index}")
                 if cid in seen:
                     continue
                 seen.add(cid)
@@ -383,16 +512,22 @@ class DeepCode(Backend):
                     args = json.loads(fn.get("arguments") or "{}")
                 except (TypeError, ValueError):
                     args = {}
-                summary = ""
+                summary, path, lines = "", None, None
                 if isinstance(args, dict):
                     summary = str(args.get("path") or args.get("file_path") or args.get("command")
                                   or args.get("pattern") or args.get("query") or "")
-                job.tool(cid, name, summary)
+                    path, lines = file_place(name, args)
+                job.tool(cid, name, summary, path=path, lines=lines)
             if m.get("role") == "tool":
+                rid = str(m.get("tool_call_id") or params.get("tool_call_id")
+                          or f"deepcode-result-{start}-{offset}")
+                if rid in results:
+                    continue
+                results.add(rid)
                 content = m.get("content")
                 try:
                     result = json.loads(content or "{}")
                 except (TypeError, ValueError):
                     result = {}
                 failed = isinstance(result, dict) and (result.get("ok") is False or bool(result.get("error")))
-                job.tool_result(m.get("tool_call_id") or params.get("tool_call_id") or "", failed, content)
+                job.tool_result(rid, failed, content)

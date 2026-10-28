@@ -14,9 +14,9 @@ const Q = Client.create(api);
 // What each function is called with here: every one of them, so a new one needs a line.
 const ARGS = {
   tree: [], config: [], symbols: [], pdfstat: [], home: [], restart: [], renameProject: ["Paper"],
-  snippets: [], saveSnippets: ["x"],
-  file: ["sec/a b.tex"], saveFile: [{ path: "a.tex", content: "x", base_mtime: 1, force: false }],
-  upload: [{ name: "p.png", data: "", destination: "" }], uploadSync: [["a.png", "b.png"]], diff: ["a.tex"],
+  snippets: [],
+  file: ["sec/a b.tex"], texts: [["a.tex", "b.tex"]], saveFile: [{ path: "a.tex", content: "x", base_mtime: 1, force: false }],
+  upload: [{ name: "p.png", data: "", destination: "" }], uploadSync: [["a.png", "b.png"]], uploadCancel: ["u1"], diff: ["a.tex"],
   build: [{ mode: "latexmk", clean: false, active: "a.tex" }], buildStop: [],
   forward: ["a.tex", 3], inverse: [1, 10.5, 20.25],
   sync: ["pull"], recheck: [], github: [], publishInfo: [], publish: [{ name: "p", leave_out: [] }],

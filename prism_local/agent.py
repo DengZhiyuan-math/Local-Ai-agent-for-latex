@@ -11,6 +11,7 @@ from __future__ import annotations
 import itertools
 import json
 import re
+import subprocess
 import threading
 import time
 from dataclasses import dataclass
@@ -22,12 +23,14 @@ from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_bac
 from fsutil import metadata_paths, project_path
 import registry
 import settings
+from errors import say
 import snapshot
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
 MODEL_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}")
 MAX_TURNS = 50          # past turns Undo can still take back
+MAX_UNDO_BYTES = 300 * 1024 * 1024   # and what they may hold in all (the oldest go first)
 RECENT_JOBS = 8         # finished turns whose events a page may still be reading
 UNDO_WAIT = 10          # seconds an Undo waits for git to finish with the files (a slow hook) before saying so
 
@@ -38,6 +41,27 @@ class Undoable:
     root: Path
     before: dict[str, snapshot.FileState | None]
     after: dict[str, snapshot.FileState | None]
+
+    @property
+    def size(self) -> int:
+        return sum(len(s.data or b"") for side in (self.before, self.after) for s in side.values() if s)
+
+
+def outcome(job: Job, res: dict) -> tuple[str, str | None]:
+    """How a turn ended, decided here for every backend: "stopped" when you pressed Stop
+    (what that broke is no error), "failed" when the backend says so (an exit other than
+    0, is_error), else "ok"; and for "failed" what to say about it, unless an error event
+    has said it during the turn already (it is said once)."""
+    if job.cancel.is_set():
+        return "stopped", None
+    code = res.get("exit")
+    if not res.get("is_error") and code in (None, 0):
+        return "ok", None
+    if job.errors_shown:
+        return "failed", None
+    what = str(res.get("error") or res.get("subtype") or (f"exit {code}" if code not in (None, 0) else "it failed"))
+    tail = str(res.get("stderr") or "").strip()
+    return "failed", what + ("\n" + tail if tail and tail not in what else "")
 
 
 class AgentManager:
@@ -55,7 +79,9 @@ class AgentManager:
         self.backends, self.default, self.config_error = backends or load_backends()
         self.jobs: dict[int, Job] = {}
         self.turns: dict[int, Undoable] = {}
-        self.ids = itertools.count(1)
+        # Turn numbers go on growing across restarts (milliseconds since 1970): a page asking
+        # for turn N's events after the server restarted must not get another turn N's.
+        self.ids = itertools.count(int(time.time() * 1000))
         self.lock = threading.Lock()
         self.active: Job | None = None
         self.server_url: str | None = None    # the editor server, for the compile tool
@@ -85,9 +111,10 @@ class AgentManager:
                 "project_key": registry.project_key(root), "root": str(root),
                 "providers": [b.info() for b in self.backends.values()], "active": active}
 
-    def _snapshot(self, job: Job) -> dict:
-        """The project's files now (snapshot.take); what could not be looked at is noted."""
-        files, issues = snapshot.take(job.root, self.output_fn())
+    def _snapshot(self, job: Job, since: dict | None = None) -> dict:
+        """The project's files now (snapshot.take); what could not be looked at is noted.
+        `since`: the turn's start, whose unchanged files are not read again."""
+        files, issues = snapshot.take(job.root, self.output_fn(), since=since)
         job.snapshot_issues |= issues
         return files
 
@@ -113,7 +140,7 @@ class AgentManager:
     def start(self, prompt: str, session_id: str | None, mode: str,
               model: str | None = None, effort: str | None = None,
               scope: list[str] | None = None, provider: str | None = None,
-              attachments: list[str] | None = None) -> dict:
+              attachments: list[str] | None = None, active_file: str | None = None) -> dict:
         """Run one turn. `scope` (project-relative files) limits which files the agent may
         change in edit mode; None lets it change any file and create new ones."""
         backend = self.backend(provider)
@@ -126,6 +153,13 @@ class AgentManager:
         if model and not MODEL_RE.fullmatch(model):
             return {"error": f"Not a model name: {model}"}
         root = self.root_fn().resolve()
+        if active_file:
+            try:
+                active_file = project_path(root, active_file).relative_to(root).as_posix()
+                if not (root / active_file).is_file():
+                    return {"error": "The active file no longer exists. Open a file and try again."}
+            except (ValueError, OSError, RuntimeError) as e:
+                return {"error": f"Invalid active file: {e}"}
         bad = backend.check(model, effort) or backend.check_attachments(root, attachments or []) \
             or backend.preflight(root) or (backend.check_session(root, session_id) if session_id else None)
         if bad:
@@ -161,6 +195,16 @@ class AgentManager:
         # (Appended, not prepended: a /command must stay first.)
         if note:
             prompt = f"{prompt}\n\n[Scope for this turn] {note}"
+        if mode == "edit":
+            target = (f"Default edit target: {json.dumps(active_file, ensure_ascii=False)}. "
+                      "Make the requested edits in this file unless the user explicitly names other files. "
+                      "Do not switch to the compile main file just because it is the main file. "
+                      if active_file else
+                      "No active file was supplied. If the user has not identified the edit target "
+                      "and it is unclear, ask which file to edit before making changes. ")
+            prompt += ("\n\n[Edit target for this turn] " + target
+                       + "Explicit file requests and the scope for this turn take priority over this default. "
+                       "Targets from earlier turns no longer apply.")
         job.provider, job.prompt, job.session_id = backend.id, prompt, session_id
         job.mode, job.model, job.effort = mode if mode in ("edit", "ask") else "ask", model, effort
         job.root, job.files = self.root_fn().resolve(), self.files_fn
@@ -175,8 +219,15 @@ class AgentManager:
         except Exception:  # noqa: BLE001 — a failed commit must not stop the turn
             pass
         try:
-            job.before = self._snapshot(job)
-            job.metadata_before = self._metadata(job)
+            # Not while an Undo writes the files (it saw no turn, and its writes are not this
+            # turn's); a hold that cannot be had in time does not stop the turn.
+            held = self.writes.acquire(timeout=UNDO_WAIT)
+            try:
+                job.before = self._snapshot(job)
+                job.metadata_before = self._metadata(job)
+            finally:
+                if held:
+                    self.writes.release()
             threading.Thread(target=self._run, args=(job, backend), daemon=True).start()
         except Exception as e:  # noqa: BLE001 — a turn that cannot start must not stay "running"
             with job.cond:
@@ -190,23 +241,33 @@ class AgentManager:
         try:
             res = backend.run(job) or {}
         except Exception as e:  # noqa: BLE001 — report anything to the UI
-            job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
+            # A ValueError or an OSError is the backend saying what is wrong ("The API session
+            # does not belong to this project"), or a timeout: its words; anything else is a
+            # bug, named by its type.
+            said = say(e) if isinstance(e, (ValueError, OSError, subprocess.TimeoutExpired)) \
+                else f"{type(e).__name__}: {e}"
+            job.emit({"t": "error", "message": said})
             res = {"is_error": True}
         try:
             self._finish(job, backend, res, t0)
         except Exception as e:  # noqa: BLE001 — the turn ends whatever happens
             job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
+            self._refresh_rate(job, backend)
             job.emit({"t": "done", "turn": job.id, "provider": job.provider, "changed": [],
+                      "outcome": "stopped" if job.cancel.is_set() else "failed", "error": None,
                       "is_error": True, "session_id": res.get("session_id") or job.session_id})
         finally:
-            if backend.usage_limits:
-                try:
-                    job.emit({"t": "rate", **self.probe_rate(backend.id, force=True)})
-                except Exception as e:  # usage failure must not leave the turn running
-                    job.emit({"t": "rate", "rate": None, "stale": True, "error": str(e)})
             with job.cond:
                 job.done = True
                 job.cond.notify_all()
+
+    def _refresh_rate(self, job: Job, backend: Backend) -> None:
+        if backend.usage_limits:
+            try:
+                result = self.probe_rate(backend.id, force=True)
+            except Exception as e:  # usage failure must not leave the turn running
+                result = {"rate": None, "stale": True, "error": str(e)}
+            job.emit({"t": "rate", **result})
 
     def _finish(self, job: Job, backend: Backend, res: dict, t0: float) -> None:
         """After the backend: what the turn changed, reverted where it may not, reported."""
@@ -216,7 +277,7 @@ class AgentManager:
         # merge holds them too); a hold that cannot be had in time does not stop the turn.
         held = self.writes.acquire(timeout=UNDO_WAIT)
         try:
-            job.after = self._snapshot(job)
+            job.after = self._snapshot(job, since=job.before)
             with self.lock:
                 job.sealed = True
                 snapshot.rebase(job.before, job.rebased, job.rebased_folders)
@@ -229,7 +290,7 @@ class AgentManager:
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = snapshot.restore(job.root, job.before, job.after, out_of_scope)
-                job.after = self._snapshot(job)
+                job.after = self._snapshot(job, since=job.after)
         finally:
             if held:
                 self.writes.release()
@@ -244,12 +305,15 @@ class AgentManager:
         job.after = {r: job.after.get(r) for r in keep}
         with self.lock:
             self.turns[job.id] = Undoable(job.root, job.before, job.after)
-            while len(self.turns) > MAX_TURNS:
+            while len(self.turns) > MAX_TURNS or (
+                    len(self.turns) > 1 and sum(t.size for t in self.turns.values()) > MAX_UNDO_BYTES):
                 self.turns.pop(next(iter(self.turns)))
             done = [j for j in self.jobs if j != job.id and self.jobs[j].done]
             for old in done[:max(0, len(done) - RECENT_JOBS)]:
                 self.jobs.pop(old)
+        result, error = outcome(job, res)
         ev = {"t": "done", "turn": job.id, "provider": job.provider, "changed": changed,
+              "outcome": result, "error": error,
               "exit": res.get("exit"), "scope": job.scope,
               "snapshot_issues": sorted(job.snapshot_issues),
               "undo_unavailable": [c["path"] for c in changed if not c["undoable"]],
@@ -266,6 +330,7 @@ class AgentManager:
                 self.on_changed([c["path"] for c in changed], job.prompt)
             except Exception:  # noqa: BLE001
                 pass
+        self._refresh_rate(job, backend)
         job.emit(ev)
 
     # ------------------------------------------------------------ backend extras
@@ -395,10 +460,16 @@ class AgentManager:
         past = self.turns.get(turn)
         if not past:
             return {"error": "unknown turn"}
+        # Not while a turn runs: what Undo writes would be taken for that turn's own change
+        # (its diff, its Undo, and a backend that cannot keep to its scope would revert it).
+        if self.busy():
+            return {"busy": True, "error": "The agent is working: undo the earlier turn once this one has ended"}
         rels = snapshot.changed_paths(past.before, past.after)
         if not self.writes.acquire(timeout=UNDO_WAIT):
             return {"busy": True, "error": "git is busy with the files; try Undo again in a moment"}
         try:
+            if self.busy():                  # a turn began while Undo waited for the files
+                return {"busy": True, "error": "The agent is working: undo the earlier turn once this one has ended"}
             restored = snapshot.restore(past.root, past.before, past.after, rels)
         finally:
             self.writes.release()

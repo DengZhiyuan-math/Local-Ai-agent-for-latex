@@ -4,8 +4,10 @@ No real CLI or API is started: CLI backends are checked through the command they
 would run and the events they make from sample output, and the OpenAI-compatible
 backend runs against a fake chat-completions server on 127.0.0.1.
 """
+import itertools
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import threading
@@ -47,6 +49,37 @@ def job_for(**kw):
     for k, v in kw.items():
         setattr(j, k, v)
     return j
+
+
+class CountedReads:
+    """A file whose reads add up, in `total`, how much they returned."""
+
+    def __init__(self, stream, total: list):
+        self.stream, self.total = stream, total
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stream.close()
+
+    def __getattr__(self, name):
+        return getattr(self.stream, name)
+
+    def __iter__(self):
+        for line in self.stream:
+            self.total.append(len(line))
+            yield line
+
+    def read(self, *args):
+        data = self.stream.read(*args)
+        self.total.append(len(data))
+        return data
+
+    def readline(self, *args):
+        data = self.stream.readline(*args)
+        self.total.append(len(data))
+        return data
 
 
 def no_account_lock(test):
@@ -417,6 +450,25 @@ class DeepCodeBackend(unittest.TestCase):
     def call(self):
         return json.loads((self.home / "call.json").read_text(encoding="utf-8"))
 
+    def test_settings_a_turn_could_not_run_with_are_refused_before_it_starts(self):
+        """Not a bare JSONDecodeError once the turn has started: the file, and what to do."""
+        settings = self.root / ".deepcode" / "settings.json"
+        settings.parent.mkdir()
+        for text, said in (('{"env": ', "are not valid JSON"), ("[1, 2]", "must hold a JSON object")):
+            settings.write_text(text, encoding="utf-8")
+            r = self.m.start("go", None, "edit")
+            self.assertNotIn("job", r)
+            self.assertIn(str(settings), r["error"])
+            self.assertIn(said, r["error"])
+        settings.unlink()
+        user = self.home / ".deepcode" / "settings.json"
+        user.parent.mkdir()
+        user.write_text(json.dumps({"mcpServers": {"search": {"command": "x"}}}), encoding="utf-8")
+        r = self.m.start("go", None, "edit")
+        self.assertIn("MCP servers", r["error"])
+        self.assertIn("search", r["error"])
+        self.assertFalse((self.home / "call.json").exists(), "no turn was started")
+
     def test_project_code_is_deep_codes(self):
         from backend_deepcode import project_code
         # Values from Deep Code's own getProjectCode (cli.js 0.4.3), run in node.
@@ -434,7 +486,8 @@ class DeepCodeBackend(unittest.TestCase):
         evs = self.m.jobs[done["turn"]].events
         sid = next(e["session_id"] for e in evs if e["t"] == "init")
         self.assertEqual(done["session_id"], sid)
-        self.assertIn({"t": "tool", "id": "call_1", "name": "write_file", "summary": "main.tex"}, evs)
+        self.assertIn({"t": "tool", "id": "call_1", "name": "write_file", "summary": "main.tex",
+                       "path": "main.tex"}, evs)
         self.assertIn({"t": "text", "text": "Changed main.tex."}, evs)
         self.assertEqual([c["path"] for c in done["changed"]], ["main.tex"])
         c = self.call()
@@ -451,6 +504,117 @@ class DeepCodeBackend(unittest.TestCase):
         self.assertEqual((c["model"], c["effort"]), ("deepseek-v4-pro", "max"))
         self.assertEqual(done["session_id"], sid)
 
+    def test_tools_are_shown_before_the_cli_finishes_without_duplicates(self):
+        # A just-finished chat is still in the session index while the new CLI starts.
+        wait_done(self.m.jobs[self.m.start("previous chat", None, "ask")["job"]])
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release),
+                                          "PRISM_TEST_DEEPCODE_DELAY": ".8"}):
+            job = self.m.jobs[self.m.start("look at the paper", None, "ask")["job"]]
+            try:
+                deadline = time.monotonic() + 3
+                while not any(e["t"] == "tool" for e in job.events) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertFalse(job.done)
+                self.assertTrue(any(e["t"] == "tool" for e in job.events), "tools arrive while the CLI is still running")
+                time.sleep(.7)                   # another session probe must not repeat them
+                self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool_result"]), 1)
+
+    def test_a_resumed_chat_does_not_show_the_previous_turns_tools_as_its_own(self):
+        """While the new message was only halfway in the session file, the last whole user
+        message was the previous turn's, and its tools were shown as this turn's."""
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release),
+                                          "PRISM_TEST_DEEPCODE_PARTIAL": "1"}):
+            job = self.m.jobs[self.m.start("second", sid, "ask")["job"]]
+            try:
+                time.sleep(1.5)                  # several session probes
+                self.assertFalse(job.done)
+                self.assertEqual([e for e in job.events if e["t"] == "tool"], [])
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1, "its own tool is shown once")
+
+    def test_a_long_session_is_read_once_then_only_what_is_appended(self):
+        """Each probe while the session file changed, and the end of the turn, read and
+        parsed the whole file again: a long chat was read three times a turn and more."""
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        from backend_deepcode import sessions_dir
+        session = sessions_dir(self.root) / f"{sid}.jsonl"
+        with open(session, "a", encoding="utf-8") as f:
+            for i in range(2000):
+                f.write(json.dumps({"role": "assistant", "content": f"reply {i} " + "x" * 400}) + "\n")
+        size = session.stat().st_size
+        read: list[int] = []
+        real_open = Path.open
+
+        def counting(path, *args, **kw):
+            stream = real_open(path, *args, **kw)
+            return CountedReads(stream, read) if Path(path).name == session.name else stream
+        release = self.root / "release-cli"
+        with mock.patch.dict(os.environ, {"PRISM_TEST_DEEPCODE_RELEASE": str(release)}), \
+                mock.patch.object(Path, "open", counting):
+            job = self.m.jobs[self.m.start("second", sid, "ask")["job"]]
+            try:
+                deadline = time.monotonic() + 3
+                while not any(e["t"] == "tool" for e in job.events) and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertFalse(job.done, "a probe saw the tool while the CLI ran")
+            finally:
+                release.write_text("go")
+                wait_done(job)
+        self.assertEqual(len([e for e in job.events if e["t"] == "tool"]), 1)
+        self.assertLess(sum(read), size + 100_000, "the earlier turns are read once")
+
+    def test_a_turn_checks_its_request_once(self):
+        """AgentManager.start checks the settings and the session; run checked them again."""
+        from backend_deepcode import DeepCode
+        sid = wait_done(self.m.jobs[self.m.start("first", None, "ask")["job"]])["session_id"]
+        real = DeepCode.preflight
+        with mock.patch.object(DeepCode, "preflight", autospec=True, side_effect=real) as preflight:
+            done = wait_done(self.m.jobs[self.m.start("second", sid, "ask")["job"]])
+        self.assertEqual(done["outcome"], "ok")
+        self.assertEqual(preflight.call_count, 1)
+
+    def test_settings_changed_after_the_check_cannot_bring_in_a_repository(self):
+        """What start checked may have changed when the turn writes its settings overlay:
+        that copy is checked again."""
+        from backend_deepcode import DeepCode
+        settings = self.root / ".deepcode" / "settings.json"
+        settings.parent.mkdir()
+        settings.write_text(json.dumps({"env": {"GIT_DIR": "elsewhere"}}), encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "GIT_DIR"):
+            with DeepCode("deepcode").turn_settings(job_for(root=self.root, mode="edit")):
+                pass
+        self.assertEqual(json.loads(settings.read_text(encoding="utf-8")), {"env": {"GIT_DIR": "elsewhere"}})
+
+    def test_a_session_file_rewritten_is_read_again_from_the_start(self):
+        from backend_deepcode import SessionLog
+        path = self.home / "session.jsonl"
+
+        def line(n):
+            return json.dumps({"role": "user", "content": n}) + "\n"
+        path.write_text(line(1) + line(2) + '{"role": "assist', encoding="utf-8")
+        log = SessionLog(path)
+        self.assertEqual([m["content"] for m in log.read()], [1, 2], "a half-written line waits")
+        with open(path, "a", encoding="utf-8") as f:
+            f.write('ant", "content": 3}\n')
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 3])
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 3], "nothing new, nothing repeated")
+        path.write_text(line(1) + line(2) + line(6) + line(4), encoding="utf-8")
+        self.assertEqual([m["content"] for m in log.read()], [1, 2, 6, 4], "changed before where it was read")
+        path.write_text(line(9), encoding="utf-8")
+        self.assertEqual([m["content"] for m in log.read()], [9], "shorter")
+        path.unlink()
+        self.assertEqual(log.read(), [])
+
     def test_ask_is_read_only(self):
         done = wait_done(self.m.jobs[self.m.start("EDIT nothing, just explain", None, "ask")["job"]])
         self.assertEqual(done["reverted"], ["main.tex"])
@@ -463,6 +627,33 @@ class DeepCodeBackend(unittest.TestCase):
         from unittest import mock
         with mock.patch("backend_deepcode.deepcode_bin", return_value=None):
             self.assertIn("npm install -g @vegamo/deepcode-cli", DeepCode("deepcode").unavailable())
+
+    def test_a_version_too_old_for_ask_mode_is_refused(self):
+        """Ask's no-write rule is permission categories Deep Code 0.4.3 knows: an older one
+        is refused, saying how to update; one whose version cannot be told is let run."""
+        from backend_deepcode import DeepCode
+        with tempfile.TemporaryDirectory() as d:
+            npm = Path(d)
+            pkg = npm / "node_modules" / "@vegamo" / "deepcode-cli"
+            pkg.mkdir(parents=True)
+            (pkg / "cli.js").write_text("", encoding="utf-8")
+            shim = npm / "deepcode.cmd"
+            shim.write_text("@echo off\n", encoding="utf-8")
+            shim.chmod(0o755)
+            spec = {"bin": str(shim)}
+            for version, refused in (("0.4.2", True), ("0.4.3", False), ("0.10.0", False),
+                                     ("1.0.0-beta.1", False), ("unknown", False)):
+                with self.subTest(version=version):
+                    (pkg / "package.json").write_text(json.dumps({"name": "@vegamo/deepcode-cli", "version": version}),
+                                                      encoding="utf-8")
+                    said = DeepCode("deepcode", spec).unavailable()
+                    if refused:
+                        self.assertIn("older than 0.4.3", said)
+                        self.assertIn("npm install -g @vegamo/deepcode-cli", said)
+                    else:
+                        self.assertIsNone(said)
+            (pkg / "package.json").unlink()
+            self.assertIsNone(DeepCode("deepcode", spec).unavailable(), "cannot be told: let run")
 
 
 class ActiveTurn(unittest.TestCase):
@@ -590,7 +781,83 @@ class RevertOutsideScope(unittest.TestCase):
             self.assertEqual(wait_done(m.jobs[m.start("go", None, "ask")["job"]])["new_metadata"], [])
 
 
+class EventBatches(unittest.TestCase):
+    def test_a_waiting_page_receives_the_next_small_batch_together(self):
+        job = job_for()
+        job.events = [{"t": "delta", "text": "first"}]
+        waits = []
+
+        class Arriving:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                waits.append(timeout)
+                job.events.append({"t": "delta", "text": "second"})
+                job.done = True
+
+        job.cond = Arriving()
+        events, done = job.wait_events(0, 1)
+        self.assertEqual([e["text"] for e in events], ["first", "second"])
+        self.assertTrue(done)
+        self.assertGreater(waits[0], 0)
+        self.assertLessEqual(waits[0], .040001)  # monotonic clock subtraction rounds at sub-microsecond scale
+        waits.clear()
+        job.done = False                                  # a running turn with events ready
+        events, done = job.wait_events(0, 0)
+        self.assertEqual((len(events), done, waits), (2, False, []), "a hidden page's non-waiting poll is immediate")
+
+    def test_the_done_event_is_not_held_back_for_a_batch(self):
+        """The done event comes a moment before the turn's thread marks the job done: a
+        poll that had it still waited out the batch window."""
+        job = job_for()
+        waits = []
+
+        class Arriving:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                waits.append(timeout)
+                if not job.events:
+                    job.events.append({"t": "done", "turn": 1})
+
+        job.cond = Arriving()
+        events, done = job.wait_events(0, 5)
+        self.assertEqual(([e["t"] for e in events], done), (["done"], False))
+        self.assertEqual(len(waits), 1, "returned as soon as the done event came")
+        waits.clear()
+        job.events = [{"t": "delta", "text": "last words"}, {"t": "done", "turn": 1}]
+        events, _ = job.wait_events(0, 5)
+        self.assertEqual((len(events), waits), (2, []), "a done event already there is not waited on")
+
+    def test_a_wakeup_with_nothing_new_does_not_end_the_wait(self):
+        job = job_for()
+        job.events = [{"t": "delta", "text": "seen"}]
+        wakeups = []
+
+        class Spurious:
+            def __enter__(self): return self
+            def __exit__(self, *args): pass
+            def wait(self, timeout):
+                wakeups.append(timeout)
+                if len(wakeups) == 3:
+                    job.events.append({"t": "delta", "text": "new"})
+
+        job.cond = Spurious()
+        events, _ = job.wait_events(1, 5)
+        self.assertEqual([e["text"] for e in events], ["new"])
+        self.assertGreaterEqual(len(wakeups), 3)
+
+
 class Snapshots(unittest.TestCase):
+    def test_stderr_tail_keeps_the_exact_end_of_an_oversized_chunk(self):
+        tail = backends.Tail(limit=100)
+        tail.add("old\n")
+        tail.add("x" * 10000 + "last error")
+        self.assertEqual("".join(tail), "x" * 90 + "last error")
+        tail.add("\nnext")
+        self.assertEqual("".join(tail), "x" * 85 + "last error\nnext")
+        self.assertEqual(tail.size, 100)
+
     def test_undo_puts_back_the_exact_bytes(self):
         with tempfile.TemporaryDirectory() as d:
             root = Path(d)
@@ -610,6 +877,103 @@ class Snapshots(unittest.TestCase):
                              "only the changed files stay in memory")
             self.assertEqual(m.undo(done["turn"])["restored"], ["a.tex"])
             self.assertEqual((root / "a.tex").read_bytes(), b"one\r\ntwo\r\n")
+
+    def test_memory_a_turn_keeps_is_bounded(self):
+        """A CLI's stderr is kept to its end; Undo's history to MAX_UNDO_BYTES; and turn
+        numbers grow across restarts, so a page never reads another turn's events."""
+        tail = backends.Tail(limit=100)
+        for i in range(10000):
+            tail.add(f"line {i}\n")
+        text = "".join(tail)
+        self.assertLess(len(text), 200)
+        self.assertTrue(text.endswith("line 9999\n"))
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+
+            written = itertools.count()
+
+            class Big(backends.Backend):
+                def run(self, job):
+                    (job.root / f"t{next(written)}.dat").write_bytes(b"x" * 1000)
+                    return {"exit": 0}
+
+            m = manager(root, lambda: [], big=Big("big"))
+            with mock.patch.object(agent, "MAX_UNDO_BYTES", 2500):
+                turns = [wait_done(m.jobs[m.start(f"t{i}", None, "edit")["job"]])["turn"] for i in range(4)]
+            self.assertEqual(list(m.turns), turns[-2:], "the oldest went once the history passed its size")
+            later = manager(root, lambda: [], big=Big("big"))
+            self.assertGreater(next(later.ids), turns[-1], "a restarted server numbers on")
+
+    def test_no_undo_while_another_turn_runs(self):
+        """What Undo wrote would be the running turn's change (its diff, its Undo)."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+            release = threading.Event()
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    if job.prompt.startswith("first"):
+                        (job.root / "a.tex").write_bytes(b"ONE\n")
+                    else:
+                        release.wait(10)
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            first = wait_done(m.jobs[m.start("first", None, "edit")["job"]])
+            second = m.jobs[m.start("second", None, "edit")["job"]]
+            r = m.undo(first["turn"])
+            self.assertTrue(r.get("busy"))
+            self.assertIn("once this one has ended", r["error"])
+            self.assertEqual((root / "a.tex").read_bytes(), b"ONE\n", "nothing was undone")
+            release.set()
+            self.assertEqual(wait_done(second)["changed"], [], "the second turn changed nothing")
+            self.assertEqual(m.undo(first["turn"])["restored"], ["a.tex"], "after it, Undo works")
+
+    def test_a_turn_that_starts_while_undo_waits_for_the_files_does_not_take_its_writes(self):
+        """Undo looked at busy() before it waited (up to UNDO_WAIT) for the files: a turn
+        begun meanwhile counted what Undo then wrote as its own change."""
+        with tempfile.TemporaryDirectory() as d:
+            root = Path(d)
+            (root / "a.tex").write_bytes(b"one\n")
+            release = threading.Event()
+
+            class Edit(backends.Backend):
+                def run(self, job):
+                    if job.prompt.startswith("first"):
+                        (job.root / "a.tex").write_bytes(b"ONE\n")
+                    else:
+                        release.wait(10)
+                    return {"exit": 0}
+
+            m = manager(root, lambda: ["a.tex"], edit=Edit("edit"))
+            first = wait_done(m.jobs[m.start("first", None, "edit")["job"]])
+            m.writes, held, done_holding = threading.RLock(), threading.Event(), threading.Event()
+
+            def git_holding():
+                with m.writes:
+                    held.set()
+                    done_holding.wait(10)
+
+            holder = threading.Thread(target=git_holding)
+            holder.start()
+            held.wait(5)
+            undone, started = {}, {}
+            undo = threading.Thread(target=lambda: undone.update(m.undo(first["turn"])))
+            undo.start()
+            time.sleep(0.3)                                # Undo waits for the files
+            second = threading.Thread(target=lambda: started.update(m.start("second", None, "edit")))
+            second.start()
+            end = time.time() + 5
+            while not m.busy() and time.time() < end:
+                time.sleep(0.02)
+            done_holding.set()
+            for t in (holder, undo, second):
+                t.join(15)
+            self.assertTrue(undone.get("busy"), undone)
+            self.assertEqual((root / "a.tex").read_bytes(), b"ONE\n", "nothing was undone")
+            release.set()
+            self.assertEqual(wait_done(m.jobs[started["job"]])["changed"], [])
 
     def test_a_past_turn_keeps_only_what_undo_needs(self):
         """A turn's events (a written file streams its whole text) are kept while a page
@@ -811,6 +1175,61 @@ class Snapshots(unittest.TestCase):
         self.assertIsNone(job.proc)
         self.assertFalse((d / "started.txt").exists())
 
+    def turn_of(self, backend, d, stop_after=None, timeout=20):
+        """A whole turn of `backend` through the manager: its done event and its events."""
+        m = manager(d, lambda: [], **{backend.id: backend})
+        jid = m.start("go", None, "ask")["job"]
+        if stop_after is not None:
+            threading.Timer(stop_after, m.stop, (jid,)).start()
+        done = wait_done(m.jobs[jid], timeout)
+        return done, m.jobs[jid].events
+
+    def test_how_a_turn_ended_is_decided_once_for_every_backend(self):
+        """Stop is "stopped", with no error for what stopping broke; a failure is said
+        once, with what the CLI printed; a turn that went well is "ok"."""
+        stoppable, d = self.cli("import sys, time\nprint('{}', flush=True)\ntime.sleep(30)\n")
+        done, events = self.turn_of(stoppable, d, stop_after=1.5)
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in events if e["t"] == "error"])
+
+        failing, d = self.cli("import sys\nsys.stderr.write('error: not logged in\\n')\nsys.exit(3)\n")
+        done, events = self.turn_of(failing, d)
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("exit 3", done["error"])
+        self.assertIn("not logged in", done["error"])
+
+        fine, d = self.cli("print('{}')\n")
+        self.assertEqual(self.turn_of(fine, d)[0]["outcome"], "ok")
+
+    def test_a_failure_an_error_event_told_is_not_told_again(self):
+        class Told(backends.Backend):
+            def run(self, job):
+                job.emit({"t": "error", "message": "Codex: turn failed"})
+                return {"is_error": True, "subtype": "turn failed", "stderr": "the same, again"}
+
+        done, events = self.turn_of(Told("told"), tmpdir())
+        self.assertEqual((done["outcome"], done["error"]), ("failed", None))
+        self.assertEqual([e["message"] for e in events if e["t"] == "error"], ["Codex: turn failed"])
+
+        class Warned(backends.Backend):              # a notice the turn went on after (Codex's error item)
+            def run(self, job):
+                job.emit({"t": "error", "message": "Reconnecting… 1/5", "notice": True})
+                return {"exit": 1, "stderr": "fatal: not logged in"}
+
+        done, _ = self.turn_of(Warned("warned"), tmpdir())
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("fatal: not logged in", done["error"] or "", "the failure is told after a notice")
+
+        class BrokenByStop(backends.Backend):       # the API's reader, its response closed under it
+            def run(self, job):
+                job.cancel.wait(10)
+                job.emit({"t": "error", "message": "AttributeError: 'NoneType' object has no attribute 'peek'"})
+                return {"is_error": True, "subtype": "API error"}
+
+        done, events = self.turn_of(BrokenByStop("api"), tmpdir(), stop_after=0.5)
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in events if e["t"] == "error"])
+
     def test_a_cli_that_exits_at_once_says_why(self):
         """The CLI exits before reading its input (a bad flag, no login): writing the prompt
         to it fails, and what it printed on stderr is what the author needs."""
@@ -819,6 +1238,44 @@ class Snapshots(unittest.TestCase):
         st = backend.run(job)
         self.assertEqual(st["exit"], 3)
         self.assertIn("not logged in", st["stderr"])
+
+    def test_stderr_without_newlines_is_drained_in_bounded_chunks(self):
+        backend, d = self.cli("import sys\nsys.stderr.write('x' * 100000 + 'last error')\nsys.exit(3)\n")
+        lengths = []
+        add = backends.Tail.add
+
+        def record(tail, text):
+            lengths.append(len(text))
+            add(tail, text)
+
+        with mock.patch.object(backends.Tail, "add", record):
+            st = backend.run(job_for(root=d, prompt="go"))
+        self.assertEqual(st["exit"], 3)
+        self.assertTrue(st["stderr"].endswith("last error"))
+        self.assertTrue(lengths)
+        self.assertLessEqual(max(lengths), 8000)
+
+    def test_stderr_is_kept_although_a_program_the_cli_left_holds_it_open(self):
+        """read(4096) waited for 4096 characters or the end: with stderr held open by a
+        program that left the CLI's job, its last words never reached the error card."""
+        pidfile = tmpdir() / "holder.pid"
+
+        def cleanup():
+            if pidfile.exists() and pidfile.read_text():
+                pid = int(pidfile.read_text())
+                if os.name == "nt":
+                    subprocess.run(["taskkill", "/F", "/PID", str(pid)], capture_output=True)
+                else:
+                    os.kill(pid, 9)
+        self.addCleanup(cleanup)
+        apart = "creationflags=0x01000000" if os.name == "nt" else "start_new_session=True"   # breakaway
+        backend, d = self.cli(
+            "import subprocess, sys\nsys.stderr.write('fatal: not logged in'); sys.stderr.flush()\n"
+            f"p = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(30)'], stdout=subprocess.DEVNULL, stderr=sys.stderr, {apart})\n"
+            f"open({str(pidfile)!r}, 'w').write(str(p.pid))\nsys.exit(3)\n")
+        st = backend.run(job_for(root=d, prompt="go"))
+        self.assertEqual(st["exit"], 3)
+        self.assertIn("fatal: not logged in", st["stderr"])
 
     def test_tool_events_have_one_form_whatever_the_cli_printed(self):
         """A CLI's output of a shape not expected (a result that is text, not an object; a
@@ -835,6 +1292,27 @@ class Snapshots(unittest.TestCase):
         self.assertEqual([e["id"] for e in tools], ["1", "2", "3", "4"])
         self.assertTrue(all(isinstance(e["preview"], str) and len(e["preview"]) <= 300 for e in results))
         self.assertEqual([e["error"] for e in results], [False, False, False, True])
+
+    def test_codex_reasoning_is_shown_as_thinking(self):
+        """Long reasoning showed only a static "working…": it is the thinking box now."""
+        job, st, codex = job_for(root=Path(".")), {}, Codex("codex")
+        codex.handle({"type": "item.started", "item": {"type": "reasoning", "id": "r1"}}, job, st)
+        codex.handle({"type": "item.completed", "item": {"type": "reasoning", "id": "r1",
+                                                          "text": "First, read main.tex."}}, job, st)
+        codex.handle({"type": "item.completed", "item": {"type": "reasoning", "id": "r2",
+                                                          "text": "Then the proof."}}, job, st)
+        self.assertEqual([(e["t"], e.get("text")) for e in job.events],
+                         [("thinking_start", None), ("thinking", "First, read main.tex."),
+                          ("thinking_start", None), ("thinking", "Then the proof.")])
+
+    def test_a_codex_error_item_is_a_notice_not_how_the_turn_ended(self):
+        job, st, codex = job_for(root=Path(".")), {}, Codex("codex")
+        codex.handle({"type": "item.completed", "item": {"type": "error", "id": "e1",
+                                                          "message": "Reconnecting… 1/5"}}, job, st)
+        self.assertEqual([(e["t"], e["message"]) for e in job.events], [("error", "Reconnecting… 1/5")])
+        self.assertEqual(job.errors_shown, 0)
+        self.assertEqual(agent.outcome(job, {"exit": 1, "stderr": "fatal: stream closed"}),
+                         ("failed", "exit 1\nfatal: stream closed"))
 
     def test_undo_while_git_holds_the_files_says_busy(self):
         """git holding the files long (a repository's slow hook): Undo says so after a moment,
@@ -896,17 +1374,25 @@ class FakeAPI(ThreadingHTTPServer):
                 body = json.loads(h.rfile.read(int(h.headers["Content-Length"])))
                 self.requests.append({"body": body, "auth": h.headers.get("Authorization")})
                 chunks = self.script.pop(0)
-                if isinstance(chunks, int):
-                    h.send_response(chunks)
+                if isinstance(chunks, (int, tuple)):          # a status, or (status, message)
+                    code, message = chunks if isinstance(chunks, tuple) else (chunks, "bad key")
+                    h.send_response(code)
                     h.end_headers()
-                    h.wfile.write(b'{"error": {"message": "bad key"}}')
+                    h.wfile.write(json.dumps({"error": {"message": message}}).encode())
                     return
                 h.send_response(200)
                 h.send_header("Content-Type", "text/event-stream")
                 h.end_headers()
-                for c in chunks:
-                    h.wfile.write(f"data: {json.dumps(c)}\n\n".encode())
-                h.wfile.write(b"data: [DONE]\n\n")
+                try:
+                    for c in chunks:
+                        if isinstance(c, (int, float)):          # a pause in the stream
+                            time.sleep(c)
+                            continue
+                        h.wfile.write(f"data: {json.dumps(c)}\n\n".encode())
+                        h.wfile.flush()
+                    h.wfile.write(b"data: [DONE]\n\n")
+                except OSError:                                   # the client went (Stop)
+                    pass
 
         super().__init__(("127.0.0.1", 0), H)
         threading.Thread(target=self.serve_forever, daemon=True).start()
@@ -979,6 +1465,15 @@ class OpenAICompatible(unittest.TestCase):
         self.assertEqual(msgs[-1]["content"][:6], "thanks")
         self.assertEqual(len(msgs), 8)   # system, user, 2×(assistant, tool), assistant, user
 
+    def test_a_resumed_turn_checks_its_session_once(self):
+        """AgentManager.start checks the session; run checked it again."""
+        done, _, _, be = self.run_turn([[{"choices": [{"delta": {"content": "hi"}}]}]])
+        with mock.patch.object(be, "check_session", wraps=be.check_session) as check:
+            done, _, _, _ = self.run_turn([[{"choices": [{"delta": {"content": "ok"}}]}]],
+                                          prompt="again", session=done["session_id"], backend=be)
+        self.assertEqual(done["outcome"], "ok")
+        self.assertEqual(check.call_count, 1)
+
     def test_scope_and_ask_mode_block_writes(self):
         done, events, _, _ = self.run_turn(
             [call_chunks("c1", "write_file", {"path": "other.tex", "content": "y\n"}),
@@ -1002,6 +1497,78 @@ class OpenAICompatible(unittest.TestCase):
         self.assertTrue(done["is_error"])
         self.assertIn("HTTP 401", done["stderr"])
         self.assertEqual(be.sessions, {}, "a failed request leaves no half conversation")
+
+    def test_stop_ends_a_streaming_turn_at_once_and_keeps_the_conversation(self):
+        """Closing the response under its reader waited for the next chunk and then raised
+        in it; the conversation, never saved, was gone for the next message."""
+        api = FakeAPI([[{"choices": [{"delta": {"content": "Part "}}]}, 20,
+                        {"choices": [{"delta": {"content": "never"}}]}]])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        be = OpenAICompat("ds", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                 "api_key_env": "PRISM_TEST_KEY", "models": ["deepseek-chat"]})
+        m = manager(self.root, lambda: ["main.tex", "other.tex"], ds=be)
+        job = m.jobs[m.start("write a lot", None, "ask")["job"]]
+        end = time.time() + 10
+        while not any(e["t"] == "delta" for e in job.events) and time.time() < end:
+            time.sleep(0.05)
+        t0 = time.time()
+        m.stop(job.id)
+        done = wait_done(job, 15)
+        self.assertLess(time.time() - t0, 3, "Stop waited for the stream")
+        self.assertEqual((done["outcome"], done["error"]), ("stopped", None))
+        self.assertFalse([e for e in job.events if e["t"] == "error"])
+        self.assertIn(done["session_id"], be.sessions, "the conversation is kept")
+        done2, _, api2, _ = self.run_turn([[{"choices": [{"delta": {"content": "again"}}]}]],
+                                          prompt="go on", session=done["session_id"], backend=be)
+        self.assertEqual(done2["outcome"], "ok")
+        self.assertIn("write a lot", json.dumps(api2.requests[0]["body"]["messages"]))
+
+    def test_stop_while_a_reply_streams_runs_none_of_its_tools(self):
+        """A stopped stream handed its tool calls back as a finished reply, and they ran:
+        a file was written after Stop."""
+        args = json.dumps({"path": "other.tex", "content": "after stop\n"})
+        api = FakeAPI([[{"choices": [{"delta": {"tool_calls": [{"index": 0, "id": "c1", "function":
+                                                               {"name": "write_file", "arguments": args}}]}}]},
+                        {"choices": [{"delta": {"content": "Writing it."}}]}, 20]])
+        self.addCleanup(api.server_close)
+        self.addCleanup(api.shutdown)
+        be = OpenAICompat("ds", {"base_url": f"http://127.0.0.1:{api.server_port}",
+                                 "api_key_env": "PRISM_TEST_KEY", "models": ["deepseek-chat"]})
+        m = manager(self.root, lambda: ["main.tex", "other.tex"], ds=be)
+        m.writable_fn = lambda rel: None
+        job = m.jobs[m.start("rewrite other", None, "edit")["job"]]
+        end = time.time() + 10
+        while not any(e["t"] == "delta" for e in job.events) and time.time() < end:
+            time.sleep(0.05)
+        m.stop(job.id)
+        done = wait_done(job, 15)
+        self.assertEqual(done["outcome"], "stopped")
+        self.assertEqual((self.root / "other.tex").read_text(encoding="utf-8"), "x\n")
+        self.assertEqual(done["changed"], [])
+        self.assertFalse([e for e in job.events if e["t"] == "tool"])
+        # What it said is kept; the next message continues without a call left unanswered.
+        done2, _, api2, _ = self.run_turn([[{"choices": [{"delta": {"content": "ok"}}]}]],
+                                          prompt="go on", session=done["session_id"], backend=be)
+        self.assertEqual(done2["outcome"], "ok")
+        msgs = api2.requests[0]["body"]["messages"]
+        self.assertEqual(msgs[-2], {"role": "assistant", "content": "Writing it."})
+
+    def test_a_tool_that_raises_is_an_error_for_the_model_not_the_end_of_the_turn(self):
+        (self.root / "latin1.tex").write_bytes("caf\xe9\n".encode("latin-1"))   # not UTF-8
+        done, events, _, _ = self.run_turn([
+            call_chunks("c1", "read_file", {"path": "main.tex", "offset": "not a number"}),
+            call_chunks("c2", "edit_file", {"path": "latin1.tex", "old_string": "caf", "new_string": "x"}),
+            [{"choices": [{"delta": {"content": "Could not."}}]}]])
+        self.assertEqual(done["outcome"], "ok")
+        results = [e for e in events if e["t"] == "tool_result"]
+        self.assertEqual([r["error"] for r in results], [True, True])
+        self.assertIn("ValueError", results[0]["preview"])
+
+    def test_a_conversation_too_long_says_so(self):
+        done, _, _, _ = self.run_turn([(400, "This model's maximum context length is 65536 tokens.")])
+        self.assertEqual(done["outcome"], "failed")
+        self.assertIn("too long for the model: start a new chat", done["error"])
 
     def test_missing_key(self):
         os.environ.pop("PRISM_TEST_KEY", None)
@@ -1100,7 +1667,7 @@ class ClaudeRemembers(unittest.TestCase):
     def test_the_login_is_asked_again_when_a_login_file_changes(self):
         from unittest import mock
         status = subprocess_done('{"loggedIn": true, "email": "me@uni.example"}')
-        with mock.patch.object(backend_claude.subprocess, "run", return_value=status) as run:
+        with mock.patch.object(backend_claude, "run_bounded", return_value=status) as run:
             for _ in range(2):
                 self.assertEqual(self.claude.account(self.root)["account"]["email"], "me@uni.example")
             self.assertEqual(run.call_count, 1)
