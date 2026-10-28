@@ -34,6 +34,8 @@ Events a backend emits through ``job.emit`` (the panel understands exactly these
     {"t": "build", "result": dict}              a build the agent ran (agent.py, not backends)
     {"t": "context", "used": int, "window": int|None}   how full the context window is
     {"t": "rate", "rate": dict}                 Claude usage limits
+    {"t": "permission", "request_id": str, ...} Web tool waiting for user approval
+    {"t": "permission_resolved", ...}           approval/denial sent to the same CLI
     {"t": "error", "message": str}              (none after Stop: "done" says it stopped)
 
 `run` returns a dict with any of: session_id, exit (0 = success), is_error, subtype,
@@ -352,6 +354,13 @@ class Backend:
         if spec.get("models") is not None:
             self.models = [str(m) for m in spec["models"]]
         self.default_model = spec.get("default_model", self.default_model)
+        self.model_efforts = spec.get("model_efforts") or {}
+        if not isinstance(self.model_efforts, dict) or any(
+                not isinstance(k, str) or not isinstance(v, list) or
+                any(not isinstance(e, str) for e in v) for k, v in self.model_efforts.items()):
+            raise ValueError("model_efforts must map model ids to lists of effort levels")
+        self._discovered_models: list[dict] = []
+        self._catalog_default_model: str | None = None
         if spec.get("efforts") is not None:
             self.efforts = tuple(str(e) for e in spec["efforts"])
         if spec.get("input_types") is not None:
@@ -364,14 +373,32 @@ class Backend:
         """None when the backend can run, else why not (shown to the author)."""
         return None
 
+    def model_efforts_for(self, model: str | None) -> list[str]:
+        model = model or self.default_model or self._catalog_default_model
+        if model in self.model_efforts:
+            return list(self.model_efforts[model])
+        found = next((m for m in self._discovered_models if m["id"] == model), None)
+        if found is not None:
+            return list(found["efforts"])
+        # A discovered list gives no evidence for a custom model's effort support.
+        return [] if self._discovered_models and model else list(self.efforts)
+
+    def model_catalog(self, root: Path, refresh: bool = False) -> dict:
+        """Picker entries. Overrides discover without running an inference turn."""
+        ids = list(dict.fromkeys([*self.models, *([self.default_model] if self.default_model else [])]))
+        return {"models": [{"id": m, "label": m, "efforts": self.model_efforts_for(m)} for m in ids],
+                "source": "configuration", "default_model": self.default_model}
+
     def system_text(self) -> str:
         """The editor's instructions to the agent, with this backend's line on file tools."""
         return SYSTEM_BEFORE_TOOLS + self.file_tool_rule + SYSTEM_AFTER_TOOLS
 
     def check(self, model: str | None, effort: str | None) -> str | None:
-        if effort and effort not in self.efforts:
-            return (f"{self.label} has no effort setting." if not self.efforts else
-                    f"Effort for {self.label} must be one of: {', '.join(self.efforts)}")
+        efforts = self.model_efforts_for(model)
+        if effort and effort not in efforts:
+            target = f"{self.label} / {model}" if model else self.label
+            return (f"{target} has no effort setting." if not efforts else
+                    f"Effort for {target} must be one of: {', '.join(efforts)}")
         return None
 
     def preflight(self, root: Path) -> str | None:
@@ -428,7 +455,7 @@ class Backend:
         return {"id": self.id, "kind": self.kind, "label": self.label,
                 "available": why is None, "reason": why,
                 "models": list(self.models), "default_model": self.default_model,
-                "efforts": list(self.efforts), "skills": self.skills,
+                "efforts": list(self.efforts), "model_efforts": dict(self.model_efforts), "skills": self.skills,
                 "usage_limits": self.usage_limits, "enforces_scope": self.enforces_scope,
                 "read_only_ask": self.read_only_ask, "input_types": list(self.input_types)}
 
@@ -474,7 +501,8 @@ OUTPUT_GRACE = 5      # seconds a CLI's output may stay open after it exited
 
 
 @contextmanager
-def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *, on_idle=None, **popen):
+def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *,
+                on_idle=None, keep_stdin_open: bool = False, **popen):
     """A turn's CLI, its input `stdin` (the prompt goes through stdin so it can never be
     parsed as a flag). Yields (process, its output lines, its stderr lines so far); (None,
     [], []) when Stop was pressed before it started, so it never starts. Stop pressed while
@@ -546,7 +574,9 @@ def cli_process(job: Job, cmd: list[str], stdin: str, env: dict, *, on_idle=None
         reader.start()
         try:
             proc.stdin.write(stdin)
-            proc.stdin.close()
+            proc.stdin.flush()
+            if not keep_stdin_open:
+                proc.stdin.close()
         except (OSError, ValueError):
             pass                                 # it has exited: its stderr says why
         yield proc, lines(), err
@@ -582,8 +612,7 @@ PRESETS: dict[str, dict] = {
                  "api_key_env": "DEEPSEEK_API_KEY",
                  "models": ["deepseek-chat", "deepseek-reasoner"]},
     "openai": {"type": "openai", "label": "OpenAI API", "base_url": "https://api.openai.com/v1",
-               "api_key_env": "OPENAI_API_KEY", "models": [],
-               "efforts": ["minimal", "low", "medium", "high"]},
+               "api_key_env": "OPENAI_API_KEY", "models": []},
     "openrouter": {"type": "openai", "label": "OpenRouter",
                    "base_url": "https://openrouter.ai/api/v1",
                    "api_key_env": "OPENROUTER_API_KEY", "models": []},

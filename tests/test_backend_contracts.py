@@ -437,7 +437,11 @@ class OneErrorPerFailure(unittest.TestCase):
     def test_claude_code(self):
         from backend_claude import ClaudeCode
         said = self.told(self.cli(ClaudeCode, (
-            "import json, sys\nsys.stdin.read()\n"
+            "import json, sys\n"
+            "init = json.loads(sys.stdin.readline())\n"
+            "print(json.dumps({'type': 'control_response', 'response': {'subtype': 'success', "
+            "'request_id': init['request_id'], 'response': {}}}), flush=True)\n"
+            "user = json.loads(sys.stdin.readline())\nassert user['type'] == 'user'\n"
             "print(json.dumps({'type': 'system', 'subtype': 'init', 'session_id': 's'}))\n"
             "print(json.dumps({'type': 'result', 'subtype': 'error_during_execution', 'is_error': True, "
             "'result': 'API Error: 529 overloaded', 'session_id': 's'}))\n"

@@ -544,9 +544,22 @@ Each message runs Claude Code headlessly in your project:
 
 ```
 claude -p --output-format stream-json --verbose --include-partial-messages \
+       --input-format stream-json --permission-prompt-tool stdio \
        --permission-mode <acceptEdits|plan> [--resume <session>] [--model <m>] [--effort <e>] \
        --append-system-prompt <…>
 ```
+
+**Model and thinking.** The conversation header lists available models and the selected
+model's thinking effort levels. Claude and Codex read their CLI metadata; API providers
+query `/models`. Refresh the list with **↻**. Changing model or effort keeps the same
+conversation, and every subsequent request uses that choice. The server saves choices
+in the user settings as defaults for later sessions. The controls are disabled during a turn.
+If an API's model list omits effort capabilities, configure `model_efforts` below.
+
+**LaTeX references.** Click labels such as `\ref{eq:main}`, `\cref{thm:one,lem:two}`,
+or a known label name in an Agent reply to open its source line. The index covers project
+source files. Clicking refreshes the index and the target tab. Duplicate labels offer a
+choice of locations; missing labels show a message.
 
 **Slash commands.** Type `/` in the message box to see every command and skill, with completion
 (↑↓ to choose, Tab or ↵ to take one).
@@ -586,8 +599,14 @@ Consequences:
 
 - Claude reads your project's `CLAUDE.md`, skills and `.claude/settings.json`, exactly as it
   would in a terminal. Put writing conventions or rules for the paper in `CLAUDE.md`.
-- **Edit** mode (`acceptEdits`) may change files. Nothing can be approved interactively, so
-  the agent gets no shell (Bash, PowerShell): it reads and edits with its file tools.
+- **Edit** mode (`acceptEdits`) may change files. The agent normally gets no shell
+  (Bash, PowerShell): it reads and edits with its file tools.
+- **Web permissions** appear in the conversation when Claude requests WebSearch or
+  WebFetch. Allow once, allow for this conversation, always allow, or deny. Approval
+  continues the original blocked request in the same CLI process. Saved grants are
+  confined to the project, CLI profile and tool; WebFetch grants cover one public HTTP
+  origin. Claude's deny rules and file/shell restrictions still apply. Saved grants live
+  in `web-permissions.json` in Prism's user state folder, outside the project.
 - **The agent compiles** with a `compile` tool (`prism_local/mcp_compile.py`) that runs the
   editor's own build, the same as the Compile button: the PDF reloads, the Problems list
   fills in, and the agent gets the errors with their file:line to fix. The API models
@@ -622,9 +641,12 @@ Consequences:
 - **Cost**: each message is a full Claude Code run, billed to your Claude plan or API account
   like any other Claude Code usage.
 - **Usage limits**: the bars show the 5-hour and 7-day utilization that Claude Code reports.
-  - They update after each message.
-  - **↻** refreshes them with a tiny Haiku call (counted toward your plan's limits, not billed).
-  - Usage from other sessions shows up at the next update.
+  - They synchronize after each message and periodically while the panel is visible.
+  - **↻** always starts a new read-only `get_usage` query, without a model message.
+  - The panel shows the last successful sync time. A failed query keeps the previous
+    snapshot marked stale; a changed account/profile cannot reuse it. Cached snapshots
+    expire after 60 seconds or when a reported reset time passes.
+  - Older CLIs without `get_usage`, and API/cloud authentication, show usage as unavailable.
 - The panel finds the CLI on `PATH`. Set `CLAUDE_BIN=/path/to/claude` to override. Start
   prism-local from the same environment you use for `claude`, including any `CLAUDE_CONFIG_DIR`,
   or pick the profile folder in Home → Settings → Claude account to use another login than the
@@ -739,7 +761,9 @@ native `--image` option. Deep Code defaults to text attachments pending model va
   `api_key_env` (omit it for a server that needs no key), `models` (suggestions for `/model`;
   the first is the default), `default_model` (applied to checks and every runtime), `efforts` (for APIs that take
   `reasoning_effort`), `headers`, `max_steps` (tool rounds per message, default 40),
-  `timeout` (seconds), `enabled`.
+  `model_efforts` (per-model effort lists, for example
+  `"model_efforts": {"my-reasoner": ["low", "high"], "my-fast-model": []}`),
+  `timeout` (seconds), `enabled`. Per-model levels override provider-wide `efforts`.
 - `PRISM_AGENT=<name>` picks the default provider for one run.
 
 **Adding another kind of backend** (another agent CLI, or an API that is not OpenAI-compatible):

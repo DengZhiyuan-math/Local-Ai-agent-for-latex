@@ -357,7 +357,7 @@ check("a Claude Code turn: thinking, a streamed reply, an Edit written live, the
   assert.strictEqual(t.status, "writing a reply…");
   assert.deepStrictEqual(brief(t.feed([{ t: "delta", text: "." }, { t: "text", text: "Done." }, { t: "context", used: 9 },
     { t: "rate", rate: {} }, { t: "done", changed: [{ path: "a.tex" }] }])),
-    ['message 2 "Done."', "context", "done"]);
+    ['message 2 "Done."', "context", "rate", "done"]);
   assert.deepStrictEqual([t.session, t.changed, brief(t.end())], ["s1", ["a.tex"], []]);
 });
 
@@ -525,6 +525,32 @@ check("math: KaTeX gets the project's macros and what it lacks, mapped", () => {
   // An unknown macro is marked, and the rest of the formula is still drawn.
   const unknown = MathText.render("$\\nosuch + x$", { markdown: (s) => s, katex });
   assert.ok(unknown.includes('class="katex"') && unknown.includes("#cc0000"), unknown.slice(0, 300));
+});
+
+check("math: navigation sees original labels without invalidating formula cache", () => {
+  const seen = [];
+  let typeset = 0;
+  const renderer = { renderToString: () => { typeset++; return "<span>formula</span>"; } };
+  const options = { markdown: s => MDJS.parse(s), katex: renderer,
+    afterMath: (html, formula) => { seen.push(formula.tex); return html + '<span class="navigation">label</span>'; } };
+  const text = "$\\label{eq:main}x$ and `$\\ref{eq:code}$`";
+  const first = MathText.render(text, options);
+  const second = MathText.render(text, options);
+  assert.deepStrictEqual(seen, ["\\label{eq:main}x", "\\label{eq:main}x"]);
+  assert.strictEqual(typeset, 1, "navigation must reuse the cached KaTeX formula");
+  assert.ok(first.includes('</span><span class="navigation">label</span>'), first);
+  assert.strictEqual(first, second);
+});
+
+check("math: source label links stay outside KaTeX and escape label text", () => {
+  const fs = require("fs"), vm = require("vm");
+  const app = fs.readFileSync(require.resolve("../prism_local/static/app.js"), "utf8");
+  const source = app.slice(app.indexOf("function labelLink("), app.indexOf("function linkLabels("));
+  const afterMath = vm.runInNewContext(source + ";mathLabelLinks", { ChatLogic: Chat, esc: Util.escapeHtml });
+  const html = MathText.render('$\\label{eq:"<&}x$', { markdown: s => s, katex: fakeKatex, afterMath });
+  assert.ok(html.includes('[inline: x]<span class="label-links">'), html);
+  assert.ok(html.includes('data-label="eq:&quot;&lt;&amp;"'), html);
+  assert.ok(html.includes('>eq:&quot;&lt;&amp;</a>'), html);
 });
 
 // ---------------------------------------------------------------- findlogic.js

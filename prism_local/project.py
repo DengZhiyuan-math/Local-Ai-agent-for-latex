@@ -17,6 +17,8 @@ put back an older one.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
+import json
 import os
 import re
 import shutil
@@ -27,6 +29,7 @@ from pathlib import Path
 from typing import Callable
 
 import build
+import build_results
 import desktop
 from errors import Conflict, NotFound, Refused
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,
@@ -279,6 +282,38 @@ class Project:
     def resolve_tex_name(self, name: str) -> str | None:
         return build.project_file(self.root, name)
 
+    def label_index(self, *, fresh: bool = False) -> dict:
+        """Visible project labels, including duplicate definitions. A click uses fresh=True
+        so a coarse or preserved file timestamp cannot send it to an old source line."""
+        if fresh:
+            self._scans.clear()
+        visible = set(self.list_files())
+        labels: dict[str, list[dict]] = {}
+        for item in self.symbols()["labels"]:
+            if item["file"] not in visible:
+                continue
+            try:
+                if not self.resolve(item["file"]).is_file():
+                    continue
+            except (ValueError, OSError, RuntimeError):
+                continue
+            labels.setdefault(item["label"], []).append(item)
+        version = hashlib.sha256(json.dumps(labels, sort_keys=True).encode("utf-8")).hexdigest()
+        return {"labels": labels, "version": version}
+
+    def resolve_label(self, label: str, version: str | None = None) -> dict:
+        """Resolve against the current sources; never pick an arbitrary duplicate."""
+        if not isinstance(label, str) or not label or len(label) > 512:
+            raise Refused("invalid LaTeX label")
+        index = self.label_index(fresh=True)
+        matches = index["labels"].get(label, [])
+        result = {"label": label, "version": index["version"], "matches": matches,
+                  "stale": version is not None and version != index["version"],
+                  "status": "missing" if not matches else "duplicate" if len(matches) > 1 else "ok"}
+        if len(matches) == 1:
+            result.update(file=matches[0]["file"], line=matches[0]["line"])
+        return result
+
     def stale_document(self) -> str | None:
         """A document whose .tex is newer than its PDF (just edited): the one shown if it is,
         else the most recently edited. None when every PDF is up to date."""
@@ -416,6 +451,7 @@ class Project:
             t0 = time.time()
             before = mtime(cfg.pdf) if cfg.pdf.exists() else None
             self._running_pdf = (cfg.pdf, before)
+            proof = build_results.begin(cfg)
             cmd = cfg.custom.get(mode)
             b = self.builder(self.root, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
                              command=cfg.expand(cmd) if cmd else None, clean=clean,
@@ -423,6 +459,9 @@ class Project:
             self._running = b
             try:
                 r = b.run()
+            except Exception:
+                build_results.finish(cfg, proof, {"exit": None, "pdf_updated": False})
+                raise
             finally:
                 self._running_pdf = None
                 self.show(cfg.main)
@@ -430,8 +469,10 @@ class Project:
             if cfg.error:
                 r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
             pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
-            return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
-                    "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+            result = {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
+                      "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+            build_results.finish(cfg, proof, result)
+            return result
         finally:
             self._running = self._running_pdf = None
             self._build_lock.release()
@@ -474,6 +515,29 @@ class Project:
             self.files_lock.release()
         self.on_change()
         return {"ok": True, "mtime": mtime(p)}, 200
+
+    def save_conditional(self, rel: str, content: str, expected_sha256: str) -> tuple[dict, int]:
+        """A separate endpoint so older services cannot silently ignore the hash guard."""
+        if (not isinstance(content, str) or not 1 <= len(content.encode("utf-8")) <= 4_000_000
+                or not isinstance(expected_sha256, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)):
+            raise Refused("invalid conditional source edit")
+        p = self.resolve(rel)
+        if not self.files_lock.acquire(timeout=SAVE_WAIT):
+            return {"busy": True, "error": "the source files are busy"}, 503
+        try:
+            if self.turn.editing():
+                return {"busy": True, "error": "the agent is editing the files"}, 503
+            before = p.read_bytes()
+            if hashlib.sha256(before).hexdigest() != expected_sha256:
+                return {"conflict": True}, 409
+            raw = content.encode("utf-8")
+            write_bytes(p, raw)
+            self.turn.server_wrote([self.rel(p)])
+        finally:
+            self.files_lock.release()
+        self.on_change()
+        return {"ok": True, "sha256": hashlib.sha256(raw).hexdigest(), "mtime": mtime(p)}, 200
 
     def texts(self, rels: list[str]) -> list[dict]:
         """Editable files' text for the page's project search: {path, mtime, content} each

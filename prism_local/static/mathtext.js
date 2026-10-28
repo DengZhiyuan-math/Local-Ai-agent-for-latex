@@ -181,7 +181,7 @@ const MathText = (() => {
 
   // The reply as HTML: Markdown with the math taken out, the math put back as KaTeX. A
   // placeholder in code (an indented block) or in a tag's attribute goes back as its source.
-  function render(text, { markdown, katex, macros }) {
+  function render(text, { markdown, katex, macros, afterMath }) {
     const { text: md, math } = split(text);
     let code = 0;
     const source = (s) => s.replace(/(\d+)/g, (_, k) => esc(math[k] ? math[k].raw : ""));
@@ -193,7 +193,9 @@ const MathText = (() => {
       }
       const f = math[k];
       if (!f) return "";
-      return code ? esc(f.raw) : texHtml(katex, f, macros);
+      if (code) return esc(f.raw);
+      const html = texHtml(katex, f, macros);
+      return afterMath ? afterMath(html, f) : html;
     });
   }
 

@@ -41,6 +41,7 @@ import httpbase  # noqa: E402
 import instances  # noqa: E402
 import publish  # noqa: E402
 import registry  # noqa: E402
+import build_results  # noqa: E402
 import settings  # noqa: E402
 import tools  # noqa: E402
 
@@ -295,6 +296,11 @@ class Handler(httpbase.Handler):
             # project_key: the pop-out PDF polls only this, and so learns whose PDF it shows.
             return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg),
                                "project_key": registry.project_key(PROJECT.root)})
+        if path == "/api/build/result":
+            cfg = PROJECT.config
+            if q.get("main") and q["main"] != cfg.main:
+                return self._err(409, "the compiled document changed")
+            return self._json(build_results.read(cfg, building=PROJECT.building))
         if path == "/pdf":
             cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
@@ -359,12 +365,19 @@ class Handler(httpbase.Handler):
         if path == "/api/agent/commands":
             r = AGENT.commands(q.get("provider") or None, refresh=q.get("refresh") == "1")
             return self._json(r, 502 if "error" in r else 200)
+        if path == "/api/agent/models":
+            r = AGENT.models(q.get("provider") or None, refresh=q.get("refresh") == "1")
+            return self._json(r, 502 if "error" in r else 200)
         if path == "/api/agent/account":
             return self._json(AGENT.account(q.get("provider") or None, PROJECT.root, fresh=q.get("fresh") == "1"))
         if path == "/api/agent/info":
             return self._json(AGENT.info())
         if path == "/api/symbols":
             return self._json(PROJECT.symbols())
+        if path == "/api/labels":
+            return self._json(PROJECT.label_index())
+        if path == "/api/labels/resolve":
+            return self._json(PROJECT.resolve_label(q.get("label", ""), q.get("version")))
         if path == "/api/snippets":
             # Your snippets file and how they expand, both set in Home → Settings.
             st = settings.load()
@@ -484,6 +497,9 @@ class Handler(httpbase.Handler):
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
                                             bool(body.get("force"))))
+        if path == "/api/file/conditional":
+            return self._json(*PROJECT.save_conditional(body["path"], body["content"],
+                                                        body["expected_sha256"]))
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
             done = None
@@ -528,7 +544,14 @@ class Handler(httpbase.Handler):
             r = instances.ensure(None)
             return self._json(r, 502 if "error" in r else 200)
         if path == "/api/agent/usage":
-            return self._json(AGENT.probe_rate(body.get("provider") or None))
+            return self._json(AGENT.probe_rate(body.get("provider") or None, force=body.get("force") is not False))
+        if path == "/api/agent/config":
+            r = AGENT.configure(body.get("provider") or AGENT.default, body.get("model"), body.get("effort"))
+            return self._json(r, 400 if "error" in r else 200)
+        if path == "/api/agent/permission":
+            r = AGENT.permission(int(body["job"]), str(body.get("request_id") or ""),
+                                 str(body.get("decision") or ""), str(body.get("scope") or "once"))
+            return self._json(r, 409 if "error" in r else 200)
         if path == "/api/agent/stop":
             return self._json(AGENT.stop(int(body["job"])))
         if path == "/api/agent/undo":
