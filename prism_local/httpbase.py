@@ -38,6 +38,10 @@ MIME = {".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=ut
 
 
 class Server(ThreadingHTTPServer):
+    # A browser's cold asset load can fill the default five-connection backlog
+    # before accept runs again, causing connection resets and a blank page.
+    request_queue_size = socket.SOMAXCONN
+
     # http.server sets SO_REUSEADDR, which on Windows lets a second server bind a port
     # that is already in use. Ask for exclusive use there instead.
     allow_reuse_address = os.name != "nt"

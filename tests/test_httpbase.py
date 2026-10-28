@@ -1,6 +1,7 @@
 """What both servers' requests share (httpbase.py): an error is always an answer."""
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -8,6 +9,8 @@ import tempfile
 import unittest
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPException, HTTPResponse
 from pathlib import Path
 from unittest import mock
 
@@ -87,6 +90,63 @@ class Answers(unittest.TestCase):
             self.assertIn("Traceback", log.call_args.args[0])
             self.assertEqual(self.ask("/value"), (400, {"error": "not a name"}))
             self.assertIn("refused GET /value", log.call_args.args[0])
+
+
+class StaticAssets(unittest.TestCase):
+    def test_a_browser_asset_burst_survives_an_accept_pause(self):
+        # Browsers open several asset connections at once. Hold accept until every
+        # client has submitted its request, without relying on thread scheduling.
+        srv = httpbase.Server(("127.0.0.1", 0), httpbase.Handler)
+        self.addCleanup(srv.server_close)
+        address = srv.server_address
+        clients = 8                 # some kernels admit backlog + 1 connections
+        submitted = threading.Condition()
+        count = 0
+        accepting = threading.Event()
+        request = (f"GET /static/tabs.js HTTP/1.0\r\n"
+                   f"Host: 127.0.0.1:{address[1]}\r\n\r\n").encode()
+
+        def fetch():
+            nonlocal count
+            sock, error = None, None
+            try:
+                try:
+                    sock = socket.create_connection(address, timeout=2)
+                    sock.sendall(request)
+                except OSError as exc:
+                    error = exc
+                finally:
+                    with submitted:
+                        count += 1
+                        submitted.notify_all()
+                if error:
+                    return error
+                accepting.wait(10)
+                try:
+                    with HTTPResponse(sock) as response:
+                        response.begin()
+                        return response.status, response.read()
+                except (OSError, HTTPException) as exc:
+                    return exc
+            finally:
+                if sock is not None:
+                    sock.close()
+
+        with ThreadPoolExecutor(max_workers=clients) as pool:
+            pending = [pool.submit(fetch) for _ in range(clients)]
+            try:
+                with submitted:
+                    self.assertTrue(submitted.wait_for(lambda: count == clients, timeout=10))
+            finally:
+                threading.Thread(target=srv.serve_forever, daemon=True).start()
+                self.addCleanup(srv.shutdown)
+                accepting.set()
+            results = [future.result(timeout=10) for future in pending]
+        errors = [str(result) for result in results if isinstance(result, Exception)]
+        self.assertEqual(errors, [], "static asset connections were dropped before accept")
+        expected = (httpbase.STATIC / "tabs.js").read_bytes()
+        for result in results:
+            self.assertEqual(result, (200, expected))
 
 
 class CodeStamp(unittest.TestCase):
