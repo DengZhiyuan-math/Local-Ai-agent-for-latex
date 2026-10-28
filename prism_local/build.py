@@ -689,7 +689,7 @@ class Build:
 
     # ------------------------------------------------------------ built-in
     def _engine_argv(self) -> list[str]:
-        argv = [self._which(self.engine) or self.engine, "-synctex=1",
+        argv = [self._which(self.engine) or self.engine, "-synctex=1", "-recorder",
                 "-interaction=nonstopmode", "-file-line-error", f"-output-directory={self.outdir}"]
         if self.shell_escape:
             argv.append("-shell-escape")
@@ -838,10 +838,10 @@ class Build:
             argv = shell_argv(self.command) if isinstance(self.command, str) else list(self.command)
         elif self.builder == "tectonic":
             argv = ["tectonic", "-o", self.outdir, "--keep-logs", "--keep-intermediates",
-                    "--synctex"]
+                    "--synctex", "--makefile-rules", str(self.out / f"{self.stem}.prism-deps.mk")]
             argv += ([] if self.strict else ["-Z", "continue-on-errors"]) + [self.main]
         else:                                           # latexmk
-            argv = ["latexmk", LATEXMK_FLAG[self.engine], "-synctex=1",
+            argv = ["latexmk", LATEXMK_FLAG[self.engine], "-synctex=1", "-recorder",
                     "-interaction=nonstopmode", "-file-line-error", f"-outdir={self.outdir}",
                     "-halt-on-error" if self.strict else "-f"]
             argv += (["-shell-escape"] if self.shell_escape else []) + [self.main]

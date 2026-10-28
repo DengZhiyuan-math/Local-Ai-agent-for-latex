@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Callable
 
 import build
+import build_results
 import desktop
 from errors import Conflict, NotFound, Refused
 from fsutil import (EDITABLE_SUFFIXES, SKIP_DIRS, WINDOWS_RESERVED, bad_name, is_metadata,
@@ -391,6 +392,7 @@ class Project:
             t0 = time.time()
             before = mtime(cfg.pdf) if cfg.pdf.exists() else None
             self._running_pdf = (cfg.pdf, before)
+            proof = build_results.begin(cfg)
             cmd = cfg.custom.get(mode)
             b = self.builder(self.root, cfg.main, cfg.outdir, mode, builder=cfg.builder, engine=cfg.engine,
                              command=cfg.expand(cmd) if cmd else None, clean=clean,
@@ -398,6 +400,9 @@ class Project:
             self._running = b
             try:
                 r = b.run()
+            except Exception:
+                build_results.finish(cfg, proof, {"exit": None, "pdf_updated": False})
+                raise
             finally:
                 self._running_pdf = None
                 self.show(cfg.main)
@@ -405,8 +410,10 @@ class Project:
             if cfg.error:
                 r["output"] = f"prism-local: {cfg.error}\n" + r["output"]
             pdf = mtime(cfg.pdf) if cfg.pdf.exists() else None
-            return {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
-                    "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+            result = {**r, "busy": False, "mode": mode, "seconds": round(time.time() - t0, 1),
+                      "main": cfg.main, "pdf_mtime": pdf, "pdf_updated": pdf is not None and pdf != before}
+            build_results.finish(cfg, proof, result)
+            return result
         finally:
             self._running = self._running_pdf = None
             self._build_lock.release()

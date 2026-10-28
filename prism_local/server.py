@@ -42,6 +42,7 @@ import publish  # noqa: E402
 import registry  # noqa: E402
 import selfupdate  # noqa: E402
 import sources  # noqa: E402
+import build_results  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -241,6 +242,11 @@ class Handler(httpbase.Handler):
         if path == "/api/pdfstat":
             cfg = PROJECT.config
             return self._json({"main": cfg.main, "mtime": PROJECT.pdf_state(cfg)})
+        if path == "/api/build/result":
+            cfg = PROJECT.config
+            if q.get("main") and q["main"] != cfg.main:
+                return self._err(409, "the compiled document changed")
+            return self._json(build_results.read(cfg, building=PROJECT.building))
         if path == "/pdf":
             cfg = PROJECT.config
             if q.get("main") and q["main"] != cfg.main:
