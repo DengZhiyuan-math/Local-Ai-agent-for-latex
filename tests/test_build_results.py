@@ -148,6 +148,15 @@ class Results(unittest.TestCase):
         (self.root / "build/main.pdf").write_bytes(b"%PDF replaced")
         self.assertEqual(build_results.read(self.project.config)["status"], "unknown")
 
+    def test_nonobject_receipt_is_unknown_and_read_only(self):
+        self.compile()
+        path = build_results._latest(self.root, self.project.config.main)
+        for raw in ("null", "[]", "true", "42", '"invalid"'):
+            with self.subTest(raw=raw):
+                path.write_text(raw)
+                self.assertEqual(build_results.read(self.project.config)["status"], "unknown")
+                self.assertEqual(path.read_text(), raw)
+
     def test_building_result_never_exposes_previous_success(self):
         self.compile()
         self.assertEqual(build_results.read(self.project.config, building=True)["status"], "building")

@@ -3062,7 +3062,7 @@ function setProvider(id, quiet) {
   catalog = null;
   $("#chat-provider").value = id;
   $("#quota").hidden = !p.usage_limits;
-  if (p.usage_limits) { renderQuota(p.usage); checkUsage(true, false); }
+  if (p.usage_limits) { renderQuota(p.usage || { rate: null, stale: true }); checkUsage(true, false); }
   renderModelControls(); loadModels();
   if (!quiet) saveAgentChoice(C.model, C.effort);
   if (!quiet) sysNote(p.available

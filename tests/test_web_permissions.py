@@ -145,6 +145,26 @@ class GrantBoundaries(unittest.TestCase):
             self.assertEqual(answer["behavior"], "deny", (tool, inp))
         self.assertEqual(self.job.events, [])
 
+    def test_noncanonical_numeric_fetch_addresses_are_rejected(self):
+        from permissions import web_target
+        for host in ("127.1", "127.0.0.01", "0x7f.0.0.1", "0177.0.0.1", "0x7f000001", "2130706433",
+                     "127.0x", "0x7f.0x", "127.0.0x", "0x7f.0.0.0x", "127.０ｘ", "１２７.０ｘ"):
+            with self.subTest(host=host), self.assertRaises(ValueError):
+                web_target("WebFetch", {"url": f"http://{host}/private"})
+
+    def test_fetch_origin_keeps_port_boundaries(self):
+        from permissions import web_target
+        for url in ("http://example.com:0/", "https://example.com:0/"):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                web_target("WebFetch", {"url": url})
+        for url, target in (("https://example.com:443/a", "https://example.com"),
+                            ("http://example.com:80/a", "http://example.com"),
+                            ("https://example.com:8443/a", "https://example.com:8443"),
+                            ("https://8.8.8.8/a", "https://8.8.8.8"),
+                            ("https://[2606:4700:4700::1111]/a", "https://[2606:4700:4700::1111]")):
+            with self.subTest(url=url):
+                self.assertEqual(web_target("WebFetch", {"url": url}), target)
+
     def test_failed_persistent_save_keeps_prompt_pending_without_granting(self):
         thread = self.start()
         with mock.patch("permissions.registry.write_state", side_effect=OSError("disk full")):

@@ -226,7 +226,8 @@ def read(cfg, *, building=False):
         path = _latest(cfg.root, cfg.main)
         _plain(cfg.root, path.relative_to(cfg.root).as_posix(), 128_000)
         receipt = json.loads(path.read_bytes())
-        if (receipt.get("schema_version") != SCHEMA or receipt.get("main") != cfg.main
+        if (not isinstance(receipt, dict)
+                or receipt.get("schema_version") != SCHEMA or receipt.get("main") != cfg.main
                 or not isinstance(receipt.get("id"), str)
                 or not re.fullmatch(r"[a-f0-9]{32}", receipt["id"])):
             raise ValueError("invalid build result")

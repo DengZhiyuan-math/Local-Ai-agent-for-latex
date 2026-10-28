@@ -37,20 +37,28 @@ def web_target(tool: str, inp: dict) -> str:
         raise ValueError("Invalid WebFetch URL") from e
     if p.scheme not in ("http", "https") or not host or p.username or p.password:
         raise ValueError("WebFetch needs an HTTP URL without credentials")
+    if port == 0:
+        raise ValueError("WebFetch needs a nonzero port")
     host = host.lower().rstrip(".")
-    if host == "localhost" or host.endswith((".localhost", ".local")) or \
+    if not host.isascii() or host == "localhost" or host.endswith((".localhost", ".local")) or \
             any(c in host for c in "*()%,\\"):
         raise ValueError("Local or malformed WebFetch host cannot be approved")
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
+        # URL clients also accept short, octal and hexadecimal IPv4 spellings.
+        # Only canonical IP literals may pass through the public-address check.
+        last = host.rsplit(".", 1)[-1]
+        if last.isdigit() or (last.startswith("0x")
+                              and all(c in "0123456789abcdef" for c in last[2:])):
+            raise ValueError("Non-canonical numeric WebFetch address cannot be approved")
         if "." not in host or not all(c.isalnum() or c in ".-" for c in host):
             raise ValueError("Invalid WebFetch host")
     else:
         if not addr.is_global:
             raise ValueError("Private WebFetch address cannot be approved")
     authority = f"[{host}]" if ":" in host else host
-    if port and port != (443 if p.scheme == "https" else 80):
+    if port is not None and port != (443 if p.scheme == "https" else 80):
         authority += f":{port}"
     return f"{p.scheme}://{authority}"
 
