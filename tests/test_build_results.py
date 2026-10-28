@@ -239,3 +239,34 @@ class HTTPResult(unittest.TestCase):
             http.shutdown()
             thread.join(5)
             http.server_close()
+
+    def test_conditional_write_has_a_separate_endpoint_and_preserves_conflicting_manual_text(self):
+        import hashlib
+        import json
+        import server
+        from test_lifecycle import request
+        from http.server import ThreadingHTTPServer
+        from threading import Thread
+        root = tmpdir()
+        (root / "main.tex").write_text("Original source")
+        server.set_root(root)
+        http = ThreadingHTTPServer(("127.0.0.1", 0), server.Handler)
+        thread = Thread(target=http.serve_forever, daemon=True)
+        thread.start()
+        url = f"http://127.0.0.1:{http.server_port}"
+        headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
+        payload = {"path": "main.tex", "content": "Corrected source",
+                   "expected_sha256": hashlib.sha256(b"Original source").hexdigest()}
+        try:
+            (root / "main.tex").write_text("Manual source")
+            status, result = request(url, "/api/file/conditional", json.dumps(payload).encode(), headers)
+            self.assertEqual((status, result["conflict"]), (409, True))
+            self.assertEqual((root / "main.tex").read_text(), "Manual source")
+            payload["expected_sha256"] = hashlib.sha256(b"Manual source").hexdigest()
+            status, result = request(url, "/api/file/conditional", json.dumps(payload).encode(), headers)
+            self.assertEqual((status, result["ok"]), (200, True))
+            self.assertEqual((root / "main.tex").read_text(), "Corrected source")
+        finally:
+            http.shutdown()
+            thread.join(5)
+            http.server_close()

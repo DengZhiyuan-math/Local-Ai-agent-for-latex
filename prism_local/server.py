@@ -413,6 +413,9 @@ class Handler(httpbase.Handler):
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
                                             bool(body.get("force"))))
+        if path == "/api/file/conditional":
+            return self._json(*PROJECT.save_conditional(body["path"], body["content"],
+                                                        body["expected_sha256"]))
         if path == "/api/git/sync":
             action = str(body.get("action") or "")
             if action == "bind":

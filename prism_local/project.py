@@ -17,6 +17,7 @@ put back an older one.
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import os
 import re
 import shutil
@@ -454,6 +455,29 @@ class Project:
             self.files_lock.release()
         self.on_change()
         return {"ok": True, "mtime": mtime(p)}, 200
+
+    def save_conditional(self, rel: str, content: str, expected_sha256: str) -> tuple[dict, int]:
+        """A separate endpoint so older services cannot silently ignore the hash guard."""
+        if (not isinstance(content, str) or not 1 <= len(content.encode("utf-8")) <= 4_000_000
+                or not isinstance(expected_sha256, str)
+                or not re.fullmatch(r"[a-f0-9]{64}", expected_sha256)):
+            raise Refused("invalid conditional source edit")
+        p = self.resolve(rel)
+        if not self.files_lock.acquire(timeout=SAVE_WAIT):
+            return {"busy": True, "error": "the source files are busy"}, 503
+        try:
+            if self.turn.editing():
+                return {"busy": True, "error": "the agent is editing the files"}, 503
+            before = p.read_bytes()
+            if hashlib.sha256(before).hexdigest() != expected_sha256:
+                return {"conflict": True}, 409
+            raw = content.encode("utf-8")
+            write_bytes(p, raw)
+            self.turn.server_wrote([self.rel(p)])
+        finally:
+            self.files_lock.release()
+        self.on_change()
+        return {"ok": True, "sha256": hashlib.sha256(raw).hexdigest(), "mtime": mtime(p)}, 200
 
     def upload(self, name: str, data: bytes, folder: str = UPLOAD_DIR) -> str:
         """Save an upload in the project (attachments under prism-uploads/). Reuse identical
