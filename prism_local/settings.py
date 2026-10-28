@@ -17,7 +17,8 @@ from pathlib import Path
 import registry
 
 DEFAULTS = {"default_parent": "", "git_init": True, "github_repo": False,
-            "github_owner": "", "claude_account": "", "claude_config_dir": ""}
+            "github_owner": "", "claude_account": "", "claude_config_dir": "",
+            "agent_defaults": {}}
 EMAIL_RE = re.compile(r"[^@\s]+@[^@\s]+\.[^@\s]+")
 OWNER_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})")      # a GitHub user or organization
 
@@ -53,6 +54,21 @@ def save(changes: dict) -> dict:
             if owner and not OWNER_RE.fullmatch(owner):
                 raise ValueError("not a GitHub user or organization name")
             cur["github_owner"] = owner
+        if "agent_defaults" in changes:
+            choice = changes["agent_defaults"]
+            if not isinstance(choice, dict) or not isinstance(choice.get("provider"), str) \
+                    or not isinstance(choice.get("providers"), dict):
+                raise ValueError("invalid agent defaults")
+            providers = {}
+            for provider, config in choice["providers"].items():
+                if not isinstance(provider, str) or not isinstance(config, dict) \
+                        or any(config.get(k) is not None and not isinstance(config[k], str)
+                               for k in ("model", "effort")):
+                    raise ValueError("invalid model or effort default")
+                providers[provider] = {k: config.get(k) for k in ("model", "effort")}
+            previous = cur.get("agent_defaults") or {}
+            cur["agent_defaults"] = {"provider": choice["provider"], "providers": {
+                **previous.get("providers", {}), **providers}}
         registry.write_json(path(), cur)
         return cur
 

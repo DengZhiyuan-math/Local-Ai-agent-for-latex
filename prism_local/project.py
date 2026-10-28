@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -268,6 +269,38 @@ class Project:
 
     def resolve_tex_name(self, name: str) -> str | None:
         return build.project_file(self.root, name)
+
+    def label_index(self, *, fresh: bool = False) -> dict:
+        """Visible project labels, including duplicate definitions. A click uses fresh=True
+        so a coarse or preserved file timestamp cannot send it to an old source line."""
+        if fresh:
+            self._scans.clear()
+        visible = set(self.list_files())
+        labels: dict[str, list[dict]] = {}
+        for item in self.symbols()["labels"]:
+            if item["file"] not in visible:
+                continue
+            try:
+                if not self.resolve(item["file"]).is_file():
+                    continue
+            except (ValueError, OSError, RuntimeError):
+                continue
+            labels.setdefault(item["label"], []).append(item)
+        version = hashlib.sha256(json.dumps(labels, sort_keys=True).encode("utf-8")).hexdigest()
+        return {"labels": labels, "version": version}
+
+    def resolve_label(self, label: str, version: str | None = None) -> dict:
+        """Resolve against the current sources; never pick an arbitrary duplicate."""
+        if not isinstance(label, str) or not label or len(label) > 512:
+            raise Refused("invalid LaTeX label")
+        index = self.label_index(fresh=True)
+        matches = index["labels"].get(label, [])
+        result = {"label": label, "version": index["version"], "matches": matches,
+                  "stale": version is not None and version != index["version"],
+                  "status": "missing" if not matches else "duplicate" if len(matches) > 1 else "ok"}
+        if len(matches) == 1:
+            result.update(file=matches[0]["file"], line=matches[0]["line"])
+        return result
 
     def stale_document(self) -> str | None:
         """A document whose .tex is newer than its PDF (just edited): the one shown if it is,

@@ -348,7 +348,7 @@ check("a Claude Code turn: thinking, a streamed reply, an Edit written live, the
   assert.strictEqual(t.status, "writing a reply…");
   assert.deepStrictEqual(brief(t.feed([{ t: "delta", text: "." }, { t: "text", text: "Done." }, { t: "context", used: 9 },
     { t: "rate", rate: {} }, { t: "done", changed: [{ path: "a.tex" }] }])),
-    ['message 2 "Done."', "context", "done"]);
+    ['message 2 "Done."', "context", "rate", "done"]);
   assert.deepStrictEqual([t.session, t.changed, brief(t.end())], ["s1", ["a.tex"], []]);
 });
 

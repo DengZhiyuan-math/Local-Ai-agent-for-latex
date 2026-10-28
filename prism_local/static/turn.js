@@ -118,8 +118,10 @@ const Turn = (() => {
           if (live.delete(e.id)) out.push({ draw: "live-close", id: e.id });
           out.push({ view: "end", id: e.id, ok: !e.error });
           status = "working…";
-        } else if (e.t === "build" || e.t === "error" || e.t === "context") {
+        } else if (["build", "error", "context", "rate", "permission", "permission_resolved"].includes(e.t)) {
           out.push({ draw: e.t, event: e });
+          if (e.t === "permission") status = `waiting for ${e.tool} permission…`;
+          if (e.t === "permission_resolved") status = "working…";
         } else if (e.t === "done") {
           turn.changed = (e.changed || []).map((c) => c.path);
           out.push({ draw: "done", event: e });

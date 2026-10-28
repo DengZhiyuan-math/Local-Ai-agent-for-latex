@@ -7,7 +7,8 @@ Each chat turn runs the local Claude Code CLI headlessly in the repository:
 
 so the agent loads the project's CLAUDE.md, skills and .claude/settings.json
 permissions exactly as it would in the terminal. In "edit" mode file edits are accepted
-automatically. Non-interactive runs cannot approve a shell command, so the shell tools
+automatically. Web approvals use a bidirectional stream-json control channel. The panel
+does not approve shell commands, so the shell tools
 are left out unless the settings allow some commands, and then only those run. "ask" mode uses plan mode (read-only).
 """
 from __future__ import annotations
@@ -25,7 +26,11 @@ from pathlib import Path
 import registry
 import settings
 import sessionmeta
-from backends import NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, executable, find_bin, kill_tree, start
+from backends import (NO_WINDOW, SYSTEM_APPEND, CliBackend, Job, agent_env, cli_process,
+                      executable, find_bin, kill_tree, start)
+from permissions import WebPermissions
+from usage import UsageCache
+from usage import control_query
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
 CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
@@ -384,6 +389,10 @@ class ClaudeCode(CliBackend):
         self.bin_override = (spec or {}).get("bin")
         self.rate: dict | None = None   # last rate_limit_info seen, plus "at"
         self.probe_lock = threading.Lock()
+        self.permissions = WebPermissions()
+        self.model_catalog_lock = threading.Lock()
+        self.model_catalog_key: tuple | None = None
+        self.model_catalog_at = 0.0
         # Skills and slash commands Claude Code offers in this project, from its init event.
         self.catalog: dict | None = None
         self.catalog_key: tuple | None = None
@@ -401,6 +410,47 @@ class ClaudeCode(CliBackend):
 
     def info(self) -> dict:
         return {**super().info(), "bin": self.bin(), "rate": self.rate}
+
+    def model_catalog(self, root: Path, refresh: bool = False) -> dict:
+        """Read models and effort capabilities from initialize; send no user prompt."""
+        use_config_dir()
+        key = self.catalog_key_for(self.bin(), root)
+        with self.model_catalog_lock:
+            if self.model_catalog_key != key:
+                # A failed lookup for another profile/project must not feed its
+                # fallback picker or request validation with the former capabilities.
+                self._discovered_models = []
+                self._catalog_default_model = None
+                self.model_catalog_key, self.model_catalog_at = key, 0.0
+            if not refresh and self._discovered_models and self.model_catalog_key == key \
+                    and time.monotonic() - self.model_catalog_at < CATALOG_RETRY:
+                return {"models": self._discovered_models, "source": "claude-initialize",
+                        "default_model": self.default_model or self._catalog_default_model}
+            try:
+                payload = control_query(self.bin(), root=root)
+                entries = []
+                for model in payload.get("models") or []:
+                    if not isinstance(model, dict) or not isinstance(model.get("value"), str):
+                        continue
+                    levels = model.get("supportedEffortLevels") or []
+                    if not isinstance(levels, list) or any(not isinstance(e, str) for e in levels):
+                        continue
+                    mid = model["value"]
+                    entries.append({"id": mid, "label": model.get("displayName") or mid,
+                                    "efforts": self.model_efforts.get(mid,
+                                               levels if model.get("supportsEffort") else [])})
+                if not entries:
+                    raise ValueError("Claude Code did not report available models")
+            except (ValueError, OSError) as e:
+                old = self._discovered_models if self.model_catalog_key == key else []
+                return {"models": old or super().model_catalog(root)["models"],
+                        "source": "claude-initialize" if old else "configuration",
+                        "stale": True, "error": str(e)}
+            self._discovered_models = entries
+            self._catalog_default_model = next((m["id"] for m in entries if m["id"] == "default"), None)
+            self.model_catalog_key, self.model_catalog_at = key, time.monotonic()
+            return {"models": entries, "source": "claude-initialize",
+                    "default_model": self.default_model or self._catalog_default_model}
 
     def account(self, root: Path | None, fresh: bool = False) -> dict:
         info = claude_account(self.bin(), root, max_age=0 if fresh else ACCOUNT_TTL)
@@ -431,7 +481,8 @@ class ClaudeCode(CliBackend):
             # refuses every write that no rule allows, so only these files can change.
             perm = "default"
         cmd = [self.bin(), "-p", "--output-format", "stream-json", "--verbose",
-               "--include-partial-messages", "--permission-mode", perm,
+               "--include-partial-messages", "--input-format", "stream-json",
+               "--permission-prompt-tool", "stdio", "--permission-mode", perm,
                "--append-system-prompt", SYSTEM_APPEND]
         allowed = self.scope_rules(job.scope) if job.scope else []
         cmd += ["--strict-mcp-config"]
@@ -454,6 +505,88 @@ class ClaudeCode(CliBackend):
         if job.effort:
             cmd += ["--effort", job.effort]
         return cmd, job.prompt
+
+    def run(self, job: Job) -> dict:
+        """Keep the control channel open while a web operation waits for the author.
+
+        The wire protocol follows anthropics/claude-agent-sdk-python query.py.
+        Only WebSearch/WebFetch approvals are exposed; other callbacks fail closed.
+        """
+        cmd, prompt = self.command(job)
+        st: dict = {}
+        writer = threading.Lock()
+        workers: list[threading.Thread] = []
+        namespace = json.dumps([str(job.root.resolve()), str(profile_dir().resolve()), self.id])
+        init_id = "prism-initialize"
+        initial = json.dumps({"type": "control_request", "request_id": init_id,
+                              "request": {"subtype": "initialize", "hooks": {},
+                                          "sdkMcpServers": []}}) + "\n"
+        with cli_process(job, cmd, initial, agent_env(), bufsize=1,
+                         keep_stdin_open=True) as (proc, lines, errors):
+            if proc is None:
+                return st
+
+            def send(message):
+                with writer:
+                    if not job.cancel.is_set() and proc.poll() is None:
+                        try:
+                            proc.stdin.write(json.dumps(message) + "\n")
+                            proc.stdin.flush()
+                        except (OSError, ValueError):
+                            pass
+
+            def approve(frame):
+                request = frame.get("request") or {}
+                rid = frame.get("request_id")
+                if request.get("subtype") == "can_use_tool":
+                    answer = self.permissions.request(
+                        job, rid, request.get("tool_name"), request.get("input"),
+                        st.get("session_id"), namespace)
+                    send({"type": "control_response", "response": {
+                        "subtype": "success", "request_id": rid, "response": answer}})
+                else:
+                    send({"type": "control_response", "response": {
+                        "subtype": "error", "request_id": rid,
+                        "error": "Unsupported control request"}})
+
+            try:
+                for line in lines:
+                    try:
+                        d = json.loads(line)
+                    except ValueError:
+                        continue
+                    if not isinstance(d, dict):
+                        continue
+                    if d.get("type") == "control_response":
+                        response = d.get("response") or {}
+                        if response.get("request_id") == init_id:
+                            if response.get("subtype") != "success":
+                                raise ValueError(response.get("error") or "Claude initialization failed")
+                            send({"type": "user", "session_id": job.session_id or "",
+                                  "message": {"role": "user", "content": prompt},
+                                  "parent_tool_use_id": None})
+                    elif d.get("type") == "control_request":
+                        thread = threading.Thread(target=approve, args=(d,), daemon=True)
+                        workers.append(thread)
+                        thread.start()
+                    elif d.get("type") == "control_cancel_request":
+                        self.permissions.cancel(job, d.get("request_id"))
+                    else:
+                        self.handle(d, job, st)
+                        if d.get("type") == "result":
+                            # One top-level turn per process, as before. EOF lets the
+                            # CLI finish; no permission response is needed after result.
+                            with writer:
+                                proc.stdin.close()
+                proc.wait()
+            finally:
+                self.permissions.cancel(job)
+                for thread in workers:
+                    thread.join(.5)
+        st["exit"] = proc.returncode
+        if st["exit"] != 0 or st.get("is_error"):
+            st["stderr"] = "".join(errors)[-2000:]
+        return st
 
     def handle(self, d: dict, job: Job, st: dict) -> None:
         t = d.get("type")
@@ -657,38 +790,16 @@ class ClaudeCode(CliBackend):
             kill_tree(proc)
         return self.catalog or {"error": "Claude Code did not report its commands"}
 
-    def probe_rate(self) -> dict:
-        """Refresh usage limits with the cheapest possible call.
-
-        Haiku, no tools, no MCP, no skills, no session file, run outside the
-        repository so CLAUDE.md is not loaded (about $0.001 at list price).
-        """
-        exe = self.bin()
-        if not exe:
-            return {"error": "Claude Code CLI not found"}
-        if not self.probe_lock.acquire(blocking=False):
-            return {"rate": self.rate, "busy": True}
-        try:
-            use_config_dir()
-            cmd = [exe, "-p", "--model", "haiku", "--tools", "",
-                   "--system-prompt", "Reply with the single word ok.",
-                   "--no-session-persistence", "--strict-mcp-config",
-                   "--disable-slash-commands", "--output-format", "stream-json", "--verbose"]
-            try:
-                out = subprocess.run(cmd, input="ok", capture_output=True, text=True,
-                                     encoding="utf-8", errors="replace", timeout=90,
-                                     cwd=tempfile.gettempdir(), **NO_WINDOW).stdout
-            except subprocess.TimeoutExpired:
-                return {"error": "usage check timed out", "rate": self.rate}
-            except OSError as e:
-                return {"error": f"Could not start Claude Code: {e}", "rate": self.rate}
-            for line in out.splitlines():
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue
-                if d.get("type") == "rate_limit_event" and d.get("rate_limit_info"):
-                    self.rate = {**d["rate_limit_info"], "at": time.time()}
-            return {"rate": self.rate}
-        finally:
-            self.probe_lock.release()
+    def probe_rate(self, force: bool = True) -> dict:
+        """Read subscription usage through the CLI; no model request is made."""
+        use_config_dir()
+        with self.probe_lock:
+            if not hasattr(self, "_usage_cache"):
+                self._usage_cache = UsageCache()
+            exe = self.bin()
+            identity = (exe, stamp(exe), str(profile_dir().resolve()),
+                        tuple(stamp(f) for f in login_files(None)),
+                        tuple(os.environ.get(k) for k in OVERRIDE_ENV))
+            result = self._usage_cache.get(exe, identity, force=force)
+            self.rate = result["rate"]
+            return result

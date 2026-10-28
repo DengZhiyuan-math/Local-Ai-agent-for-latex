@@ -17,6 +17,9 @@ from __future__ import annotations
 import json
 import base64
 import mimetypes
+import hashlib
+import threading
+import time
 import os
 import re
 import urllib.error
@@ -103,6 +106,66 @@ class OpenAICompat(Backend):
             self.default_model = self.models[0]
         self.sessions: dict[str, list[dict]] = {}
         self.session_projects: dict[str, str] = {}
+        self._models_lock = threading.Lock()
+        self._models_key = None
+        self._models_at = 0.0
+        self._models_error = None
+
+    def model_catalog(self, root: Path, refresh: bool = False) -> dict:
+        # Model discovery is metadata only. No prompt or completion is sent.
+        key = hashlib.sha256(os.environ.get(self.api_key_env or "", "").encode()).hexdigest()
+        with self._models_lock:
+            if key != self._models_key:
+                self._discovered_models = []
+                self._models_at = 0.0
+                self._models_key = key
+            if not refresh and self._models_at and time.time() - self._models_at < 300:
+                result = {"models": self._discovered_models, "source": "provider", "at": self._models_at,
+                          "default_model": self.default_model}
+                if self._models_error:
+                    result.update(stale=True, error=self._models_error)
+                return result
+            headers = {"Accept": "application/json", **self.headers}
+            if self.api_key_env:
+                headers["Authorization"] = f"Bearer {os.environ.get(self.api_key_env, '')}"
+            try:
+                why = self.unavailable()
+                if why:
+                    raise ValueError(why)
+                req = urllib.request.Request(self.base_url + "/models", headers=headers)
+                with urllib.request.urlopen(req, timeout=min(self.timeout, 15)) as response:
+                    data = json.load(response)
+                entries = data.get("data", data.get("models")) if isinstance(data, dict) else None
+                if not isinstance(entries, list):
+                    raise ValueError("Provider did not return a model list")
+                models = {}
+                for entry in entries:
+                    if not isinstance(entry, dict):
+                        continue
+                    mid = entry.get("id") or entry.get("slug")
+                    if not isinstance(mid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}", mid):
+                        continue
+                    levels = entry.get("supported_reasoning_efforts", entry.get("supportedReasoningEfforts"))
+                    if isinstance(levels, list):
+                        levels = [e.get("reasoningEffort") if isinstance(e, dict) else e for e in levels]
+                        levels = [e for e in levels if isinstance(e, str)]
+                    else:
+                        # Standard /models has no effort metadata. Do not invent it.
+                        levels = list(self.model_efforts.get(mid, self.efforts))
+                    models[mid] = {"id": mid, "label": str(entry.get("display_name") or entry.get("name") or mid),
+                                   "efforts": list(self.model_efforts.get(mid, levels))}
+                self._discovered_models = list(models.values())
+                self._models_at, self._models_error = time.time(), None
+                return {"models": self._discovered_models, "source": "provider", "at": self._models_at,
+                        "default_model": self.default_model}
+            except (OSError, ValueError, urllib.error.URLError) as error:
+                if isinstance(error, urllib.error.HTTPError):
+                    error.close()
+                self._models_error = f"Could not list models: {error}"
+                fallback = self._discovered_models or super().model_catalog(root)["models"]
+                return {"models": fallback, "source": "provider" if self._discovered_models else "configuration",
+                        "at": self._models_at or None, "stale": True, "default_model": self.default_model,
+                        "error": self._models_error}
 
     def check_session(self, root: Path, session_id: str) -> str | None:
         import registry

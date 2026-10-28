@@ -1,0 +1,17 @@
+.....F
+======================================================================
+FAIL: test_the_output_folder_stays_inside_the_project (test_projectconfig.ProjectConfig.test_the_output_folder_stays_inside_the_project)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/prism-agent-baseline/tests/test_projectconfig.py", line 60, in test_the_output_folder_stays_inside_the_project
+    self.assertEqual(cfg.outdir, expected, outdir)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'C:/x' != 'build'
+- C:/x
++ build
+ : C:/x
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.016s
+
+FAILED (failures=1)

@@ -10,7 +10,7 @@ from texutil import group, plain_text
 STANDARD_THEOREMS = ["theorem", "proposition", "lemma", "corollary", "definition",
                      "remark", "example"]
 
-LABEL_RE = re.compile(r"\\label\{([^}]+)\}")
+LABEL_RE = re.compile(r"\\label\s*\{([^}]+)\}")
 BEGIN_RE = re.compile(r"\\begin\{([A-Za-z*]+)\}(?:\[([^\]]*)\])?")
 # \section{…}, \section*{…}, \section[short]{long}; the title is read with its braces paired.
 SECTION_RE = re.compile(

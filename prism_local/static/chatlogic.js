@@ -32,6 +32,44 @@ const ChatLogic = (() => {
   // free text. Keep referenced text for unknown commands and all providers too.
   const slashPrompt = (text, refs) => (refs ? text + "\n\n" + refs : text);
 
+  // Source navigation in an agent reply. Explicit TeX references remain clickable when
+  // their label is missing; plain names must occur in the project's label index. The
+  // caller inserts links with DOM APIs, so labels are returned as text, never HTML.
+  function labelReferences(text, knownLabels = []) {
+    text = String(text ?? "");
+    const out = [];
+    const commands = /\\(?:label|[cC]ref|[cC]pageref|ref|eqref|autoref|pageref|labelcref|namecref|nameref)\*?\s*\{([^{}]*)\}/g;
+    for (const m of text.matchAll(commands)) {
+      const start = m.index + m[0].indexOf("{") + 1;
+      let offset = 0;
+      const parts = m[0].startsWith("\\label{") || /^\\label\s/.test(m[0]) ? [m[1]] : m[1].split(",");
+      for (const part of parts) {
+        const label = part.trim();
+        if (label && label.length <= 512) {
+          const from = start + offset + part.indexOf(label);
+          out.push({ from, to: from + label.length, label });
+        }
+        offset += part.length + 1;
+      }
+    }
+    const names = [...new Set(Array.isArray(knownLabels) ? knownLabels : Object.keys(knownLabels || {}))]
+      .filter((name) => typeof name === "string" && name.length > 0 && name.length <= 512)
+      .sort((a, b) => b.length - a.length);
+    if (names.length) {
+      const pattern = names.map((name) => name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+      const joined = (c) => !!c && /[\p{L}\p{N}_:/+\-\[\]\\]/u.test(c);
+      for (const m of text.matchAll(new RegExp(pattern, "g"))) {
+        const from = m.index, to = from + m[0].length;
+        if (joined(text[from - 1]) || joined(text[to])
+            || (text[from - 1] === "." && joined(text[from - 2]))
+            || (text[to] === "." && joined(text[to + 1]))
+            || out.some((r) => from < r.to && to > r.from)) continue;
+        out.push({ from, to, label: m[0] });
+      }
+    }
+    return out.sort((a, b) => a.from - b.from);
+  }
+
   const REF_RE = /\\(?:[cC]ref|[cC]pageref|ref|eqref|autoref|pageref|labelcref|namecref|nameref)\*?\{([^}]*)$/;
   const CITE_RE = /\\(?:cite[tp]?|nocite|citeauthor|citeyear)\*?(?:\[[^\]]*\]){0,2}\{([^}]*)$/;
   const CMD_RE = /\\([A-Za-z]*)$/;
@@ -64,7 +102,21 @@ const ChatLogic = (() => {
     return list.length ? { word, items: list } : null;
   }
 
-  return { storageKey, parseMentions, slashPrompt, completions, MENTION_RE, REF_RE, CITE_RE, CMD_RE };
+  // HTTP and stream updates share one ordering rule. A partial rate notification is
+  // useful, but cannot replace the last complete subscription snapshot.
+  function mergeUsage(current, incoming) {
+    current = current || {};
+    incoming = incoming || { rate: null, stale: true };
+    const rate = incoming.rate;
+    if (rate && !rate.unifiedWindows) return { ...current, stale: true };
+    const sameIdentity = !current.identity || !incoming.identity || current.identity === incoming.identity;
+    const before = current.last_success || (current.rate || {}).at || 0;
+    const after = incoming.last_success || (rate || {}).at || 0;
+    if (rate && current.rate && sameIdentity && after < before) return current;
+    return incoming;
+  }
+
+  return { storageKey, parseMentions, slashPrompt, labelReferences, mergeUsage, completions, MENTION_RE, REF_RE, CITE_RE, CMD_RE };
 })();
 
 if (typeof module !== "undefined") module.exports = ChatLogic;

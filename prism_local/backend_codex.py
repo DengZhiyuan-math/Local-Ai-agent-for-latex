@@ -21,9 +21,13 @@ import os
 import re
 import shutil
 import subprocess
+import queue
+import threading
+import time
 from functools import lru_cache
 
-from backends import FILE_TOOL_RULE, SYSTEM_APPEND, NO_WINDOW, CliBackend, Job, executable, find_bin
+from backends import (FILE_TOOL_RULE, SYSTEM_APPEND, NO_WINDOW, CliBackend, Job, executable, find_bin,
+                      agent_env, start, kill_tree, end_group)
 from fsutil import METADATA, is_metadata, metadata_paths, project_path
 import mcp_compile
 import sessionmeta
@@ -139,6 +143,117 @@ class Codex(CliBackend):
     def __init__(self, pid: str, spec: dict | None = None):
         super().__init__(pid, spec)
         self.bin_override = (spec or {}).get("bin")
+        self._models_lock = threading.Lock()
+        self._models_at = 0.0
+        self._models_key = None
+        self._models_error = None
+
+    def model_catalog(self, root: Path, refresh: bool = False) -> dict:
+        home = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+        def stamp(path):
+            try:
+                stat = path.stat()
+                return stat.st_mtime_ns, stat.st_size
+            except OSError:
+                return None
+        key = (self.bin(), str(root.resolve()), str(home), stamp(home / "auth.json"),
+               stamp(home / "config.toml"))
+        with self._models_lock:
+            if key != self._models_key:
+                self._models_at, self._models_key, self._discovered_models = 0.0, key, []
+                self._catalog_default_model = None
+            if refresh or not self._models_at or time.time() - self._models_at >= 300:
+                try:
+                    self._discovered_models = self._read_models(root)
+                    self._catalog_default_model = next((m["id"] for m in self._discovered_models
+                                                        if m.get("is_default")), None)
+                    self._models_at, self._models_error = time.time(), None
+                except (OSError, ValueError, queue.Empty, subprocess.SubprocessError) as error:
+                    self._models_error = f"Could not list Codex models: {error}"
+            result = {"models": self._discovered_models or super().model_catalog(root)["models"],
+                      "source": "codex app-server", "at": self._models_at or None,
+                      "default_model": self.default_model or self._catalog_default_model}
+            if self._models_error:
+                result.update(stale=True, error=self._models_error)
+            return result
+
+    def _read_models(self, root: Path) -> list[dict]:
+        """Metadata RPC only; no thread is started and no inference request is made."""
+        proc = start([self.bin(), "app-server", "--listen", "stdio://", "-c", "features.hooks=false",
+                      "-c", "features.apps=false"], cwd=root, env=agent_env(), stdin=subprocess.PIPE,
+                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
+        responses = queue.Queue()
+        def read():
+            try:
+                for line in proc.stdout:
+                    try:
+                        responses.put(json.loads(line))
+                    except ValueError:
+                        pass
+            finally:
+                responses.put(None)
+        reader = threading.Thread(target=read, daemon=True)
+        reader.start()
+        deadline, serial = time.monotonic() + 15, 0
+        def send(message):
+            proc.stdin.write(json.dumps(message) + "\n")
+            proc.stdin.flush()
+        def request(method, params):
+            nonlocal serial
+            serial += 1
+            send({"id": serial, "method": method, "params": params})
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise ValueError("metadata request timed out")
+                message = responses.get(timeout=left)
+                if message is None:
+                    raise ValueError("app-server ended before answering")
+                if isinstance(message, dict) and message.get("id") == serial:
+                    if message.get("error"):
+                        raise ValueError(str(message["error"])[:300])
+                    result = message.get("result") or {}
+                    if not isinstance(result, dict):
+                        raise ValueError("app-server returned an invalid result")
+                    return result
+        try:
+            request("initialize", {"clientInfo": {"name": "prism_local", "version": "1"}})
+            send({"method": "initialized"})
+            cursor, models = None, {}
+            for _ in range(20):
+                result = request("model/list", {"cursor": cursor, "limit": 100, "includeHidden": False})
+                if not isinstance(result.get("data"), list):
+                    raise ValueError("app-server returned no model list")
+                for entry in result["data"]:
+                    if not isinstance(entry, dict) or entry.get("hidden"):
+                        continue
+                    mid = entry.get("model") or entry.get("id")
+                    if not isinstance(mid, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._:/\[\]-]{0,119}", mid):
+                        continue
+                    levels = entry.get("supportedReasoningEfforts") or []
+                    if not isinstance(levels, list):
+                        levels = []
+                    efforts = [e.get("reasoningEffort") for e in levels
+                               if isinstance(e, dict) and isinstance(e.get("reasoningEffort"), str)]
+                    model = {"id": mid, "label": str(entry.get("displayName") or mid),
+                             "efforts": list(self.model_efforts.get(mid, efforts))}
+                    if entry.get("isDefault"):
+                        model["is_default"] = True
+                    if entry.get("defaultReasoningEffort") in model["efforts"]:
+                        model["default_effort"] = entry["defaultReasoningEffort"]
+                    models[mid] = model
+                cursor = result.get("nextCursor")
+                if not cursor:
+                    return list(models.values())
+            raise ValueError("model list has too many pages")
+        finally:
+            proc.stdin.close()
+            if proc.poll() is None:
+                kill_tree(proc)
+            end_group(proc)
+            reader.join(1)
+            if not reader.is_alive():
+                proc.stdout.close()
 
     def bin(self) -> str | None:
         return self.bin_override or codex_bin()
