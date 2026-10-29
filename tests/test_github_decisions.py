@@ -299,6 +299,164 @@ class GitHubDecisions(unittest.TestCase):
         self.assertEqual(self.knowledge.status()["proposals"][0]["status"], "rejected")
         self.assertEqual(self.knowledge.classify("$q$")["unknown"], [])
 
+    def test_late_older_comment_cannot_replace_or_reopen_a_newer_expression_refusal(self):
+        proposal = self.propose()
+        subjects = self.subjects([proposal])
+        self.knowledge.decide_github_reply(subjects, self.source([proposal],
+            "Reject item 1 and keep its expression expanded.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002",
+            created_at="2026-10-29T13:00:00Z", updated_at="2026-10-29T13:00:00Z"))
+        saved = self.knowledge._path().read_bytes()
+        for body in ("Use $q$ instead of item 1.", "Reopen item 1."):
+            for updated in ("2026-10-29T12:00:00Z", "2026-10-29T14:00:00Z"):
+                with self.subTest(body=body, updated=updated):
+                    result = ResearchKnowledge(self.project).decide_github_reply(subjects, self.source([proposal],
+                        body, id=6001, html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001",
+                        updated_at=updated))
+                    self.assertEqual(result["decisions"], [])
+                    self.assertTrue(result["clarifications"])
+                    self.assertEqual(self.knowledge._path().read_bytes(), saved)
+                    self.assertTrue(self.knowledge.expression_rejected("x+x"))
+                    self.assertTrue(self.knowledge.classify("$q$")["unknown"])
+
+    def test_github_reply_order_uses_comment_id_for_equal_creation_times(self):
+        proposal = self.propose()
+        subjects = self.subjects([proposal])
+        self.knowledge.decide_github_reply(subjects, self.source([proposal],
+            "Reject item 1 and keep its expression expanded.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002"))
+        older = self.knowledge.decide_github_reply(subjects, self.source([proposal],
+            "Use $q$ instead of item 1.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001"))
+        self.assertEqual(older["decisions"], [])
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))
+        newer = self.knowledge.decide_github_reply(subjects, self.source([proposal],
+            "Use $q$ instead of item 1.", id=6003,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6003"))
+        self.assertEqual(len(newer["decisions"]), 1)
+        self.assertFalse(self.knowledge.expression_rejected("x+x"))
+        self.assertEqual(self.knowledge.classify("$q$")["unknown"], [])
+
+    def test_older_reply_can_decide_an_unaffected_subject_in_the_same_batch(self):
+        proposals = [self.propose(), self.propose("w", source_expression="x*x")]
+        subjects = self.subjects(proposals)
+        self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Reject item 1 and keep its expression expanded.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002",
+            created_at="2026-10-29T13:00:00Z", updated_at="2026-10-29T13:00:00Z"))
+        result = self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Reopen item 1; approve item 2.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001"))
+        self.assertEqual(len(result["decisions"]), 1)
+        self.assertEqual(result["decisions"][0]["proposal_id"], proposals[1]["id"])
+        self.assertTrue(result["clarifications"])
+        self.assertEqual([p["status"] for p in self.knowledge.status()["proposals"]], ["rejected", "approved"])
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))
+
+    def test_older_other_subject_cannot_cancel_a_shared_expression_refusal(self):
+        proposals = [self.propose(), self.propose("w")]
+        subjects = self.subjects(proposals)
+        self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Reject item 1 and keep its expression expanded.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002",
+            created_at="2026-10-29T13:00:00Z", updated_at="2026-10-29T13:00:00Z"))
+        result = self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Use $q$ instead of item 2.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001"))
+        self.assertEqual(result["decisions"], [])
+        self.assertTrue(result["clarifications"])
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))
+        self.assertTrue(self.knowledge.classify("$q$")["unknown"])
+
+    def test_older_other_subject_cannot_reuse_a_later_refused_name_or_family_member(self):
+        proposals = [self.propose(), self.propose("a_1"), self.propose("w", source_expression="x*x")]
+        subjects = self.subjects(proposals)
+        self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Reject item 1; reject item 2.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002",
+            created_at="2026-10-29T13:00:00Z", updated_at="2026-10-29T13:00:00Z"))
+        saved = self.knowledge._path().read_bytes()
+        for body in ("Use $z$ instead of item 3.", "Use $a_i$ for $x*x$ with i in {1,2}."):
+            with self.subTest(body=body):
+                result = self.knowledge.decide_github_reply(subjects, self.source(proposals, body,
+                    id=6001, html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001"))
+                self.assertEqual(result["decisions"], [])
+                self.assertTrue(result["clarifications"])
+                self.assertEqual(self.knowledge._path().read_bytes(), saved)
+                self.assertEqual({item["canonical"] for item in self.knowledge.classify("$z+a_1$")["unknown"]},
+                                 {"z", "a_1"})
+
+    def test_older_expression_refusal_cannot_withdraw_a_newer_other_subject_approval(self):
+        proposals = [self.propose(), self.propose("w")]
+        subjects = self.subjects(proposals)
+        self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Approve item 1.", id=6002,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6002",
+            created_at="2026-10-29T13:00:00Z", updated_at="2026-10-29T13:00:00Z"))
+        result = self.knowledge.decide_github_reply(subjects, self.source(proposals,
+            "Reject item 2 and keep its expression expanded.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001"))
+        self.assertEqual(result["decisions"], [])
+        self.assertTrue(result["clarifications"])
+        self.assertFalse(self.knowledge.expression_rejected("x+x"))
+        self.assertEqual(self.knowledge.classify("$z$")["unknown"], [])
+
+    def test_github_comment_must_be_created_after_a_conflicting_local_decision(self):
+        import time
+        from datetime import datetime, timezone
+        from research_decisions import make_github_source
+        proposal = self.propose()
+        subjects = self.subjects([proposal])
+        local_at = time.time()
+        stamp = lambda offset: datetime.fromtimestamp(local_at + offset, timezone.utc).isoformat()
+        with mock.patch("research_decisions.time.time", return_value=local_at):
+            self.knowledge.decide_reply("Reject $z$ and keep its expression expanded.", "local-refusal")
+        saved = self.knowledge._path().read_bytes()
+        for body in ("Use $q$ instead of item 1.", "Reopen item 1."):
+            with self.subTest(body=body):
+                raw = self.source_data([proposal], body, created_at=stamp(-3600), updated_at=stamp(60))
+                raw["publication"]["created_at"] = stamp(-7200)
+                result = ResearchKnowledge(self.project).decide_github_reply(subjects, make_github_source(self.key, raw))
+                self.assertEqual(result["decisions"], [])
+                self.assertTrue(result["clarifications"])
+                self.assertEqual(self.knowledge._path().read_bytes(), saved)
+                self.assertTrue(self.knowledge.expression_rejected("x+x"))
+        raw = self.source_data([proposal], "Use $q$ instead of item 1.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001",
+            created_at=stamp(60), updated_at=stamp(60))
+        raw["publication"]["created_at"] = stamp(-7200)
+        result = self.knowledge.decide_github_reply(subjects, make_github_source(self.key, raw))
+        self.assertEqual(len(result["decisions"]), 1)
+        self.assertFalse(self.knowledge.expression_rejected("x+x"))
+        self.assertEqual(self.knowledge.classify("$q$")["unknown"], [])
+
+    def test_delayed_github_reply_preserves_newer_local_approval_and_unrelated_subjects(self):
+        import time
+        from datetime import datetime, timezone
+        from research_decisions import make_github_source
+        proposals = [self.propose(), self.propose("w", source_expression="x*x")]
+        subjects = self.subjects(proposals)
+        local_at = time.time()
+        stamp = lambda offset: datetime.fromtimestamp(local_at + offset, timezone.utc).isoformat()
+        with mock.patch("research_decisions.time.time", return_value=local_at):
+            self.knowledge.decide_reply("Approve $z$.", "local-approval")
+        raw = self.source_data(proposals, "Reject item 1; use $q$ instead of item 2.",
+            created_at=stamp(-3600), updated_at=stamp(60))
+        raw["publication"]["created_at"] = stamp(-7200)
+        result = self.knowledge.decide_github_reply(subjects, make_github_source(self.key, raw))
+        self.assertEqual(len(result["decisions"]), 2)
+        self.assertTrue(result["clarifications"])
+        self.assertEqual([p["status"] for p in self.knowledge.status()["proposals"]], ["approved", "rejected"])
+        self.assertEqual(self.knowledge.classify("$z+q$")["unknown"], [])
+        raw = self.source_data(proposals, "Reject item 1.", id=6001,
+            html_url="https://github.com/fixture/paper/issues/1#issuecomment-6001",
+            created_at=stamp(60), updated_at=stamp(60))
+        raw["publication"]["created_at"] = stamp(-7200)
+        result = self.knowledge.decide_github_reply(subjects, make_github_source(self.key, raw))
+        self.assertEqual(len(result["decisions"]), 1)
+        self.assertEqual(self.knowledge.status()["proposals"][0]["status"], "rejected")
+        self.assertTrue(self.knowledge.classify("$z$")["unknown"])
+
     def test_reopen_and_replace_cannot_use_an_expired_published_version(self):
         proposal = self.propose()
         subjects = self.subjects([proposal])

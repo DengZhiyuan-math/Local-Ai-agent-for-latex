@@ -16,6 +16,9 @@ MATH_ENVS = "equation|align|alignat|gather|multline|displaymath|math|eqnarray|fl
 MATH_START = re.compile(r"(?<!\\)(\$\$?|\\\(|\\\[)|\\begin\{(" + MATH_ENVS + r")(\*?)\}|\\ensuremath\s*\{")
 COMMAND = re.compile(r"\\([A-Za-z]+|.)", re.S)
 STYLED = set("mathbb mathcal mathfrak mathscr mathrm mathsf mathtt mathit mathbf boldsymbol bm hat widehat tilde widetilde bar overline underline vec dot ddot check breve acute grave mathring".split())
+SINGLE_STYLED_ARGUMENT = re.compile(
+    r"(?<!\\)\\(" + "|".join(sorted(STYLED | {"operatorname"})) +
+    r")(?![A-Za-z])\s*(\\(?:[A-Za-z]+|.)|[^\s{}\\_^])")
 OPERATORS = set("sum prod coprod int iint iiint iiiint oint oiint oiiint lim limsup liminf sup inf max min det gcd lcm sin cos tan cot sec csc arcsin arccos arctan sinh cosh tanh log ln exp ker dim hom Hom arg deg mod bmod pmod Pr partial nabla infty forall exists nexists in notin ni subset subseteq supset supseteq cup cap bigcup bigcap times cdot otimes oplus circ bullet pm mp le leq ge geq neq ne equiv sim simeq cong approx propto to mapsto rightarrow leftarrow Rightarrow Leftarrow Leftrightarrow iff implies ldot ldots cdots vdots ddots dots emptyset varnothing setminus wedge vee neg land lor perp parallel mid vert Vert lvert rvert lVert rVert langle rangle ast star dagger prime colon coloneqq triangleq".split())
 LAYOUT = set("left right middle big Big bigg Bigg bigl bigr Bigl Bigr biggl biggr Biggl Biggr limits nolimits displaystyle textstyle scriptstyle scriptscriptstyle quad qquad thinspace medspace thickspace enspace hfill hfil nonumber notag allowbreak protect relax mathstrut".split())
 ARGUMENTS = set("label tag ref eqref cite text textrm textbf textit textnormal mbox hbox hspace vspace color phantom hphantom vphantom rule".split())
@@ -38,6 +41,10 @@ UNICODE_DECORATIONS = set("₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎⁺⁻�
 def _canonical(notation: str) -> str:
     """Normalize equivalent spelling without equating different styled identifiers."""
     value = "".join(UNICODE_IDENTIFIERS.get(c, c) for c in notation)
+    # One unbraced TeX token is the same argument as its braced spelling.
+    # Keep command boundaries before removing whitespace (\hat x != \hatx).
+    value = re.sub(r"\\operatorname\s*\*", r"\\operatorname", value)
+    value = SINGLE_STYLED_ARGUMENT.sub(lambda m: "\\" + m[1] + "{" + m[2] + "}", value)
     value = re.sub(r"\s+", "", value).replace("′", "'")
     value = re.sub(r"\^\{((?:\\prime)+)\}|\^\\prime(?![A-Za-z])",
                    lambda m: "'" * (m.group(1).count(r"\prime") if m.group(1) else 1), value)
@@ -289,6 +296,12 @@ def math_notations(text: str, *, known_commands=(), latex: bool = True) -> dict:
                         gap(begin, "A composed mathematical decoration needs context before registration.", body[begin:i])
                         continue
                     if name in STYLED or name == "operatorname":
+                        if name == "operatorname":
+                            star = i
+                            while star < end and body[star].isspace():
+                                star += 1
+                            if star < end and body[star] == "*":
+                                i = star + 1
                         arg = _argument(body, i, end)
                         if not arg:
                             gap(begin, f"Unresolved argument for \\{name}.")

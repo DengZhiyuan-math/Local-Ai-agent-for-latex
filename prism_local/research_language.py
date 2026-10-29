@@ -13,7 +13,12 @@ from notation import _canonical
 MATH = r"\$([^$\n]+)\$"
 TARGET = r"(?:\$[^$\n]+\$|`[^`\n]+`|第[一二三四五六七八九十\d]+项|(?:item|proposal)\s+\d+|[\\\w{}_^'+*\-]+)"
 ACTION_START = r"(?:and\s+)?(?:i\s+)?(?:(?:approve|reject|use|adopt|reopen|keep)\b|(?:don't|do not)\s+(?:use|adopt|approve)\b|同意|拒绝|不同意|用|采用|重新|保持|不要|不采用|(?:最终)?不用|最终不采用)"
-UNCERTAIN = re.compile(r"\b(?:if|unless|maybe|perhaps|whether|might|either|or)\b|[?？]|如果|也许|可能|或者|是否|看情况", re.I)
+CONDITIONAL = re.compile(r"\b(?:(?:but\s+)?(?:only\s+)?(?:if|unless|until|when|once|provided|providing|"
+    r"assuming|before|after(?!\s+all\b))|as\s+soon\s+as|as\s+long\s+as|subject\s+to|pending|"
+    r"upon|contingent\s+on|depending\s+on|only\s+with)\b|"
+    r"如果|若|只要|只有|除非|一旦|等(?:我|到|待)|待(?:我|确认|批准)|之后|以后|之前|后再|时才|才能|"
+    r"(?:经|需|须)(?:我|你|您|作者)?(?:批准|同意|确认)|才(?:采用|使用|批准|同意|用)", re.I)
+UNCERTAIN = re.compile(CONDITIONAL.pattern + r"|\b(?:maybe|perhaps|whether|might|either|or)\b|[?？]|也许|可能|或者|是否|看情况", re.I)
 REPORTED = re.compile(r"\b(?:document|attachment|model|tool|paper|quote|author)\s+(?:says?|said|reads?|wrote)\b|(?:文档|附件|模型|工具|引文|引用|作者)(?:说|写|指出|中说)", re.I)
 BASE = r"(?:\\[A-Za-z]+|[^\W\d_])"
 INDEX = r"(?:-?\d+|\\[A-Za-z]+|[^\W\d_])"
@@ -67,10 +72,13 @@ def _clauses(text):
             depth += 1
         elif char == "}":
             depth = max(0, depth - 1)
+        if depth or char not in ";；\n,，":
+            continue
         scope_continuation = re.match(r"^(?:reject\b|拒绝|不同意|保持)", text[start:].lstrip(), re.I) and \
             re.match(r"^(?:and\s+)?(?:keep\b|保持|不要(?:再)?(?:引入|简称|缩写))", text[at + 1:].lstrip(), re.I)
-        guarded = re.match(r"^(?:if\b|unless\b|如果)", text[start:].lstrip(), re.I)
-        split = not depth and not guarded and (char in ";；\n" or (char in ",，" and not scope_continuation and
+        # A condition stays with its decision on either side of a separator.
+        guarded = CONDITIONAL.search(text[start:at]) or CONDITIONAL.match(text[at + 1:].lstrip())
+        split = not guarded and (char in ";；\n" or (char in ",，" and not scope_continuation and
             re.match(ACTION_START, text[at + 1:].lstrip(), re.I)))
         if split:
             result.append(text[start:at].strip())
@@ -192,8 +200,11 @@ def parse_actions(text, proposals):
         direct = re.fullmatch(r"(?:use|adopt)\s+" + NAMED_NOTATION + r"\s+(?:for|to denote)\s+(?P<meaning>.+)", value, re.I)
         direct = direct or re.fullmatch(r"(?:用|采用)\s*" + NAMED_NOTATION + r"\s*(?:表示|代表)\s*(?P<meaning>.+)", value)
         if direct:
-            notation, expression = _unwrapped(direct["notation"]), _unwrapped(direct["meaning"])
-            if not expression or re.search(r"\bbut\b|\band\s+(?:do not|don't|approve|reject|use)\b|但是|不过|但不要", expression, re.I):
+            meaning = direct["meaning"].strip()
+            notation, expression = _unwrapped(direct["notation"]), _unwrapped(meaning)
+            # A complete delimited formula does not absorb trailing qualifications.
+            if (not expression or (meaning.startswith("$") and re.fullmatch(MATH, meaning) is None)
+                    or re.search(r"\bbut\b|\band\s+(?:do not|don't|approve|reject|use)\b|但是|不过|但不要", expression, re.I)):
                 clarifications.append("Clarify the intended meaning and adoption instruction for " + notation + ".")
                 continue
             actions.append({"kind": "adopt", "notation": notation, "definition": expression,

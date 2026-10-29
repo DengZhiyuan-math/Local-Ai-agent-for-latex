@@ -70,6 +70,24 @@ class ResearchBatchHTTP(unittest.TestCase):
         self.assertEqual([a['canonical'] for a in state['adoptions']], ['q'])
         self.assertNotIn('q', {p['canonical'] for p in state['proposals']})
 
+    def test_delayed_direct_instruction_cannot_release_source_or_chat(self):
+        self.initialize()
+        original = (self.root / 'main.tex').read_text()
+        changed = original.replace(r"$\ell+\ell_+$", "$h$")
+        code, started = self.reply(r"Use $h$ for $\ell+\ell_+$ only after I approve it.", None, [
+            call_chunks('delayed', 'write_file', {'path': 'main.tex', 'content': changed}),
+            [base.say('The estimate uses $h$.')]])
+        self.assertEqual(code, 200, started)
+        events = self.finish(started['job'])
+        self.assertEqual((self.root / 'main.tex').read_text(), original)
+        self.assertEqual(self.state()['adoptions'], [])
+        self.assertTrue(any(e['t'] == 'notation_clarification' for e in events))
+        self.assertNotIn('$h$', ''.join(e.get('text', '') for e in events if e['t'] == 'delta'))
+        # A later unconditional instruction still grants the same notation.
+        self.human(r"Use $h$ for $\ell+\ell_+$.", script=[
+            call_chunks('approved', 'write_file', {'path': 'main.tex', 'content': changed})])
+        self.assertEqual((self.root / 'main.tex').read_text(), changed)
+
     def test_partial_ambiguity_does_not_expand_or_discard_other_decisions(self):
         self.initialize()
         session, _ = self.propose_batch()

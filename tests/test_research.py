@@ -59,6 +59,34 @@ class MathematicalNotation(unittest.TestCase):
 
 
 class Baseline(unittest.TestCase):
+    def test_literal_unbraced_input_and_include_share_baseline_and_refresh_coverage(self):
+        project = project_with({
+            "main.tex": "$x$\n\\input chapters/proof\n\\include{appendix}\n",
+            "chapters/proof.tex": "$\\ell_+$\n",
+            "appendix.tex": "$y$\n",
+        })
+        knowledge = ResearchKnowledge(project)
+        state = knowledge.initialize()
+        self.assertEqual(state["coverage"]["read"], ["main.tex", "chapters/proof.tex", "appendix.tex"])
+        self.assertEqual(knowledge.classify(r"$\ell_+ + y$")["unknown"], [])
+        sources, gaps = knowledge._manuscript()
+        self.assertEqual([source["path"] for source in sources], state["coverage"]["read"])
+        self.assertEqual(gaps, [])
+
+    def test_refused_large_include_does_not_consume_remaining_refresh_budget(self):
+        project = project_with({
+            "main.tex": "\\input{large}\n\\input{small}\n",
+            "large.tex": "%" + " " * 100,
+            "small.tex": "$x$\n",
+        })
+        knowledge = ResearchKnowledge(project)
+        with mock.patch("research.MAX_TOTAL_TEXT", 80):
+            state = knowledge.initialize()
+            sources, gaps = knowledge._manuscript()
+        self.assertEqual(state["coverage"]["read"], ["main.tex", "small.tex"])
+        self.assertEqual([source["path"] for source in sources], state["coverage"]["read"])
+        self.assertEqual([gap["path"] for gap in gaps], ["large.tex"])
+
     def test_status_does_not_create_or_extract_anything(self):
         project = project_with({"main.tex": "$x$"})
         self.assertEqual(ResearchKnowledge(project).status(), {"initialized": False})

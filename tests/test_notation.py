@@ -63,6 +63,28 @@ class CompleteNotation(unittest.TestCase):
                           r"\hat{\ell_+}", r"\mathbf{\alpha_i}"])
         self.assertEqual(parsed["gaps"], [])
 
+    def test_single_token_style_arguments_have_their_parsed_identity(self):
+        for unbraced, braced in ((r"\mathbb R", r"\mathbb{R}"),
+                                 (r"\hat x", r"\hat{x}"),
+                                 (r"\hat\theta", r"\hat{\theta}"),
+                                 (r"\mathbf x_i", r"\mathbf{x}_i")):
+            with self.subTest(unbraced=unbraced):
+                self.assertEqual(_canonical(unbraced), _canonical(braced))
+                self.assertEqual(self.names("$" + unbraced + "$"), [_canonical(braced)])
+        self.assertNotEqual(_canonical(r"\hatx"), _canonical(r"\hat x"))
+        self.assertNotEqual(_canonical(r"\mathbb R"), _canonical("R"))
+        self.assertEqual(_canonical(r"\mathbb{R}^2"), r"\mathbb{R}^2")
+
+    def test_starred_named_operators_keep_layout_out_of_identifier_names(self):
+        parsed = math_notations(r"$\operatorname*{lim}_{n\to\infty} x+\operatorname * {sin} y$")
+        self.assertEqual([s["canonical"] for s in parsed["symbols"]], ["n", "x", "y"])
+        self.assertEqual(parsed["gaps"], [])
+        custom = math_notations(r"$\operatorname*{Foo}_n$")
+        self.assertEqual([s["canonical"] for s in custom["symbols"]], [r"\operatorname{Foo}_n"])
+        self.assertEqual(custom["gaps"], [])
+        self.assertEqual(_canonical(r"\operatorname*{Foo}_n"), r"\operatorname{Foo}_n")
+        self.assertNotEqual(self.names(r"$\operatorname*{Foo}$"), [])
+
     def test_styling_a_number_or_operator_does_not_introduce_an_identifier(self):
         parsed = math_notations(r"$\mathrm{2}+\mathbf{\nabla}+\boldsymbol{\sum}_{i=1}^n x_i$")
         self.assertEqual([s["canonical"] for s in parsed["symbols"]], ["i", "n", "x_i"])

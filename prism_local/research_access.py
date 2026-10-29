@@ -15,7 +15,7 @@ import re
 from fsutil import write_bytes
 from notation import _canonical, _math_spans, math_fragments, math_notations
 from symbols import DEFINE_RE, NAME_RE, macro_definitions
-from texutil import LATEX_SOURCE_SUFFIXES, strip_comments
+from texutil import INCLUDE_RE as INCLUDE, LATEX_SOURCE_SUFFIXES, strip_comments
 import research_confirmation
 
 INITIALIZE_FIRST = ("Initialize the project's research baseline before AI authors or rewrites "
@@ -32,7 +32,6 @@ MATH_FENCE = re.compile(r"(?P<fence>\x60{3,}|~{3,})(?:latex|tex|math)\s*\n(?P<bo
 ATOM = r"(?:" + IDENTIFIER + r"|\d+(?:\.\d+)?)"
 BARE_EQUATION = re.compile(r"(?<![\w\\])(?P<body>" + IDENTIFIER + r"\s*:?=\s*" + ATOM
                            + r"(?:\s*[+*/−-]\s*" + ATOM + r")*)")
-INCLUDE = re.compile(r"\\(?:input|include)\s*(?:\{([^}]+)\}|([^\s{}%]+))")
 LOCAL_PACKAGE = re.compile(r"\\(?:usepackage|documentclass)(?:\[[^\]]*\])?\s*\{([^}]+)\}")
 DYNAMIC = re.compile(r"\\(?:csname|catcode|mathcode|char|mathchar|chardef|mathchardef|scantokens|"
                      r"directlua|latelua|openout|openin|write|read|shipout|special|let|futurelet|edef|xdef|"
@@ -374,7 +373,7 @@ class ResearchAccess:
     def check_write(self, path, text):
         project = self.knowledge.project
         rel = project.rel(path)
-        if rel == "research/knowledge.json" or rel.startswith("research/"):
+        if rel.split("/", 1)[0].casefold() == "research":
             raise ValueError("Research records must be changed through the research interface.")
         if not self.initialized:
             raise ValueError(INITIALIZE_FIRST)

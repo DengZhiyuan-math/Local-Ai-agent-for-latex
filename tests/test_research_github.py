@@ -345,6 +345,7 @@ class GitHubDiscussionTests(unittest.TestCase):
         self.now[0] += 31; worker.tick()
         self.assertEqual(len(attempts), 3)
 
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "Named-pipe fixture requires os.mkfifo.")
     def test_topic_pipe_is_refused_without_waiting_for_a_writer(self):
         topic = self.topic(); worker = self.worker(); worker.configure("github", [])
         path = self.project.root / topic["path"]

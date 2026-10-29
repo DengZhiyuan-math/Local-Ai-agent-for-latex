@@ -186,6 +186,90 @@ class IncrementalKnowledge(unittest.TestCase):
         self.assertEqual([s["notation"] for s in state["symbols"]], [r"\ell"])
         self.assertFalse(any(n["kind"] == "baseline_added" for n in state["maintenance_notices"]))
 
+    def test_later_human_adoption_overrides_only_the_extraction_exclusion(self):
+        self.write("$x+h$")
+        self.knowledge.initialize()
+        self.knowledge.correct(excluded_symbols=["h"])
+        self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+        self.knowledge.decide_reply("Use $h$ for $x+x$.", "fixture:exclusion")
+        self.assertEqual(self.knowledge.classify("$h$")["unknown"], [])
+        adopted = next(s for s in self.knowledge.status()["symbols"] if s["canonical"] == "h")
+        self.assertEqual([s["evidence"] for s in adopted["sources"]], ["human_decision"])
+        self.assertEqual(self.knowledge.refresh()["corrections"][0]["excluded_symbols"], ["h"])
+        self.knowledge.decide_reply("Don't use h.", "fixture:exclusion")
+        self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+        self.assertEqual(self.knowledge.status()["adoptions"], [])
+        self.knowledge.decide_reply("Reopen h.", "fixture:exclusion")
+        self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+        self.assertNotIn("h", {s["canonical"] for s in self.knowledge.refresh()["symbols"]})
+
+    def real_manual_save(self, text):
+        from research_edits import EditTokens
+        path = self.project.root / "main.tex"
+        before, after = path.read_bytes(), text.encode()
+        tokens = EditTokens()
+        key = project_key(self.project.root)
+        capability = tokens.issue(key, "main.tex", before)
+        path.write_bytes(after)
+        consumed, receipt = tokens.consume(capability["token"], key, "main.tex", before, after)
+        self.assertTrue(consumed)
+        if receipt:
+            self.knowledge.add_manual(receipt)
+        return receipt
+
+    def test_new_manual_adoption_overrides_extraction_exclusion_with_its_own_evidence(self):
+        from research_edits import verify_receipt
+        with mock.patch("research._verify_manual", side_effect=verify_receipt):
+            self.write("$x+h$")
+            self.knowledge.initialize()
+            self.knowledge.correct(excluded_symbols=["h"])
+            self.real_manual_save("$x$")
+            receipt = self.real_manual_save("$x+h$")
+            self.assertEqual(self.knowledge.classify("$h$")["unknown"], [])
+            adopted = next(s for s in self.knowledge.status()["symbols"] if s["canonical"] == "h")
+            self.assertEqual([s["evidence"] for s in adopted["sources"]], ["human_edit"])
+            self.assertEqual(adopted["sources"][0]["receipt_id"], receipt["id"])
+            state = self.knowledge.refresh()
+            self.assertEqual(state["corrections"][0]["excluded_symbols"], ["h"])
+            self.assertTrue(any(n["kind"] == "manual_added" and n["canonical"] == "h"
+                                for n in state["maintenance_notices"]))
+            self.assertEqual(ResearchKnowledge(self.project).classify("$h$")["unknown"], [])
+            self.knowledge.decide_reply("Don't use h.", "fixture:manual-exclusion")
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            # A fresh save alone does not override the explicit name refusal.
+            self.real_manual_save("$x$")
+            self.real_manual_save("$x+h$")
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            self.knowledge.decide_reply("Reopen h.", "fixture:manual-exclusion")
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            self.real_manual_save("$x$")
+            self.real_manual_save("$x+h$")
+            self.assertEqual(self.knowledge.classify("$h$")["unknown"], [])
+
+    def test_excluded_old_manual_receipt_cannot_revive_but_a_new_save_can_adopt(self):
+        from research_edits import verify_receipt
+        with mock.patch("research._verify_manual", side_effect=verify_receipt):
+            self.knowledge.initialize()
+            first = self.real_manual_save("$x+h$")
+            self.knowledge.correct(excluded_symbols=["h"])
+            self.knowledge.refresh()
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            self.knowledge.add_manual(first)
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            self.real_manual_save("$x$")
+            second = self.real_manual_save("$x+h$")
+            self.assertNotEqual(first["id"], second["id"])
+            self.assertEqual(self.knowledge.classify("$h$")["unknown"], [])
+            adopted = next(s for s in self.knowledge.status()["symbols"] if s["canonical"] == "h")
+            self.assertEqual([s["receipt_id"] for s in adopted["sources"]], [second["id"]])
+            self.assertEqual(len([n for n in self.knowledge.status()["maintenance_notices"]
+                                  if n["kind"] == "manual_added" and n["canonical"] == "h"]), 2)
+            self.knowledge.correct(excluded_symbols=["h"])
+            self.knowledge.refresh()
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+            self.knowledge.add_manual(second)
+            self.assertEqual(self.knowledge.classify("$h$")["known"], [])
+
     def test_changed_definition_and_equivalent_spelling_keep_known_identity(self):
         self.write("$\\alpha_i$ denotes a vector.")
         self.knowledge.initialize()
@@ -193,6 +277,73 @@ class IncrementalKnowledge(unittest.TestCase):
         self.assertEqual({s["canonical"] for s in result["known"]}, {r"\alpha_i"})
         self.assertEqual([s["notation"] for s in result["unknown"]], ["i"])
         self.assertEqual(result["gaps"], [])
+
+    def test_unbraced_styled_baseline_keeps_identity_after_refresh_and_reopen(self):
+        original = r"$\mathbb R+\hat x+\hat\theta$"
+        equivalent = r"$\mathbb{R}+\hat{x}+\hat{\theta}$"
+        self.write(original)
+        initial = self.knowledge.initialize()
+        self.assertEqual(len(initial["symbols"]), 3)
+        for knowledge in (self.knowledge, ResearchKnowledge(self.project)):
+            for text in (original, equivalent):
+                with self.subTest(text=text, knowledge=knowledge):
+                    result = knowledge.classify(text)
+                    self.assertEqual(result["unknown"], [])
+                    self.assertEqual(len(result["known"]), 3)
+                    self.assertEqual(result["gaps"], [])
+            refreshed = knowledge.refresh()
+            self.assertEqual(len(refreshed["symbols"]), 3)
+            self.assertEqual(refreshed["unverified_symbols"], [])
+        self.assertEqual(self.knowledge.classify("$R+x+z$")["known"], [])
+
+    def test_signed_manual_styled_notation_uses_the_parser_canonical(self):
+        before, after = "$x$", r"$x+\hat y$"
+        self.knowledge.initialize()
+        self.write(after)
+        receipt = self.receipt(before, after, [r"\hat y"])
+        receipt["added"][0]["canonical"] = r"\hat{y}"
+        receipt["signature"] = signature(receipt)
+        state = self.knowledge.add_manual(receipt)
+        symbol = next(s for s in state["symbols"] if s["canonical"] == r"\hat{y}")
+        self.assertEqual(symbol["sources"][0]["receipt_id"], receipt["id"])
+        self.assertEqual(self.knowledge.classify(r"$\hat{y}+\hat y$")["unknown"], [])
+        self.assertEqual(self.knowledge.refresh(), state)
+        self.assertEqual(self.knowledge.classify("$y$")["known"], [])
+
+    def test_unbraced_styled_proposal_keeps_approval_and_refusal_bound_to_identity(self):
+        self.knowledge.initialize()
+        proposal = self.knowledge.propose(r"\hat z", "The error term.", "The proof.",
+                                          "Name the error.", source_expression="x+x")
+        self.assertEqual(proposal["canonical"], r"\hat{z}")
+        self.assertEqual(self.knowledge.classify(r"$\hat z$")["known"], [])
+        self.knowledge.decide_reply(r"Approve $\hat z$.", "fixture:style")
+        self.assertEqual(self.knowledge.classify(r"$\hat z+\hat{z}$")["unknown"], [])
+        self.assertEqual(self.knowledge.classify("$z$")["known"], [])
+        self.knowledge.decide_reply(r"Reject $\hat{z}$.", "fixture:style")
+        self.assertEqual(self.knowledge.classify(r"$\hat z+\hat{z}$")["known"], [])
+
+    def test_starred_standard_operator_can_reach_shared_output_and_source_checks(self):
+        from research_access import ResearchAccess
+        self.write("$x+n$")
+        self.knowledge.initialize()
+        access = ResearchAccess(self.knowledge)
+        draft = r"$\operatorname*{lim}_{n\to\infty} x$"
+        self.assertEqual(access.review_output(draft), draft)
+        path = self.project.root / "main.tex"
+        access.apply_write(path, draft, path.read_bytes())
+        self.assertEqual(path.read_text(), draft)
+        self.assertEqual(self.knowledge.status()["proposals"], [])
+
+    def test_unbraced_style_does_not_allow_a_mismatched_manual_identity(self):
+        self.knowledge.initialize()
+        after = r"$x+\hat y$"
+        self.write(after)
+        receipt = self.receipt("$x$", after, [r"\hat y"])
+        receipt["added"][0]["canonical"] = "z"
+        receipt["signature"] = signature(receipt)
+        with self.assertRaisesRegex(ValueError, "does not match"):
+            self.knowledge.add_manual(receipt)
+        self.assertEqual(self.knowledge.classify(r"$\hat y+z$")["known"], [])
 
     def test_unknown_complex_notation_stays_a_reported_gap(self):
         self.knowledge.initialize()

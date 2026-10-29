@@ -430,6 +430,17 @@ class ResearchDraftChecks(unittest.TestCase):
             self.access.apply_write(path, "{}", before)
         self.assertEqual(path.read_bytes(), before)
 
+    def test_agent_cannot_write_case_variants_of_the_research_namespace(self):
+        original = (self.project.root / RECORD).read_bytes()
+        for relative in ("ReSeArCh/knowledge.json", "RESEARCH/first.md", "research/second.md"):
+            with self.subTest(relative=relative):
+                path = self.project.root / relative
+                with self.assertRaisesRegex(NotationStop, "research interface"):
+                    self.access.apply_write(path, "Discussion changed.", path.read_bytes() if path.exists() else None)
+                if path.name != "knowledge.json":
+                    self.assertFalse(path.exists())
+                self.assertEqual((self.project.root / RECORD).read_bytes(), original)
+
 
 if __name__ == "__main__":
     unittest.main()

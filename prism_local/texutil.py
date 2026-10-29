@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 LATEX_SOURCE_SUFFIXES = {".tex", ".sty", ".cls", ".bib", ".bbx", ".cbx", ".tikz"}
+INCLUDE_RE = re.compile(r"\\(?:input|include)(?![A-Za-z])\s*(?:\{([^}]+)\}|([^\s{}%]+))")
 
 GREEK = {g: chr(c) for g, c in zip(
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho "

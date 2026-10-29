@@ -19,7 +19,7 @@ from errors import Conflict, Refused
 from fsutil import project_path, replace_file
 from project import MAX_TEXT, SAVE_WAIT
 from registry import project_key
-from texutil import group, plain_text, strip_comments
+from texutil import INCLUDE_RE as INCLUDE, group, plain_text, strip_comments
 from notation import MATH_START, MAX_NOTATIONS, _canonical, math_fragments, math_notations
 from symbols import DEFINE_RE, NAME_RE, macro_definitions
 from research_provenance import Provenance, read_plain
@@ -30,7 +30,6 @@ MAX_RECORD = 32 * 1024 * 1024
 MAX_SOURCES = 300
 MAX_INPUT = 40000
 MAX_TOTAL_TEXT = 8 * 1024 * 1024
-INCLUDE = re.compile(r"\\(?:input|include)\s*\{([^}]+)\}")
 SOURCE_COMMANDS = set("input include includeonly documentclass usepackage begin end newcommand renewcommand providecommand DeclareMathOperator DeclareRobustCommand DeclarePairedDelimiter def gdef edef xdef let futurelet csname endcsname expandafter noexpand catcode newcount newdimen newtoks newwrite openout closeout write read openin closein immediate directlua latelua luacode special".split())
 SOURCE_COMMANDS.update("InputIfFileExists inputiffileexists import subimport includefrom subincludefrom RequirePackage LoadClass newenvironment renewenvironment mathcode char mathchar chardef mathchardef scantokens shipout".split())
 
@@ -380,14 +379,32 @@ class ResearchKnowledge:
                     entry["sources"].append(source)
         return result
 
-    @staticmethod
-    def _manual_occurrences(data: dict) -> dict[str, dict]:
+    @classmethod
+    def _manual_occurrences(cls, data: dict) -> dict[str, dict]:
+        # An extraction correction removes the evidence observed at that time,
+        # not a later editor save which independently adopts the same name.
+        removed = set()
+        for correction in data["corrections"]:
+            if not isinstance(correction, dict):
+                continue
+            excluded = {_canonical(name) for name in correction.get("excluded_symbols", [])
+                        if isinstance(name, str)}
+            for symbol in correction.get("removed_symbols", []):
+                if not isinstance(symbol, dict) or not isinstance(symbol.get("notation"), str):
+                    continue
+                canonical = _canonical(symbol["notation"])
+                if canonical in excluded:
+                    removed.update((canonical, source["receipt_id"]) for source in symbol.get("sources", [])
+                                   if isinstance(source, dict) and isinstance(source.get("receipt_id"), str))
+        withdrawn = {r.get("target") if r["kind"] == "reopen" else r["canonical"]: r["at"]
+                     for r in cls._instructions(data) if r["kind"] in ("refuse_name", "reopen")}
         result = {}
         for receipt in data.get("manual_evidence", []):
             if (not isinstance(receipt, dict) or not isinstance(receipt.get("path"), str)
                     or not isinstance(receipt.get("id"), str)
                     or not isinstance(receipt.get("after_sha256"), str)
                     or not isinstance(receipt.get("added"), list)
+                    or type(receipt.get("at")) not in (int, float) or not math.isfinite(receipt["at"])
                     or not _verify_manual(receipt, data["project_key"])):
                 continue
             for item in receipt.get("added", []):
@@ -395,7 +412,9 @@ class ResearchKnowledge:
                     continue
                 canonical = _canonical(item["notation"])
                 if (item.get("canonical") != canonical or not isinstance(item.get("line"), int)
-                        or isinstance(item["line"], bool) or item["line"] < 1):
+                        or isinstance(item["line"], bool) or item["line"] < 1
+                        or (canonical, receipt["id"]) in removed
+                        or canonical in withdrawn and receipt["at"] <= withdrawn[canonical]):
                     continue
                 source = {"path": receipt["path"], "line": item["line"],
                           "sha256": receipt["after_sha256"], "evidence": "human_edit",
@@ -623,7 +642,7 @@ class ResearchKnowledge:
 
     def _decide_reply(self, human_text, conversation, *, github_subjects=None, github_source=None, guard=None):
         from research_decisions import get_subjects, make_decision, make_instruction, parse_reply, set_subject
-        from research_decisions import _github_time, github_source_key, verify_decision
+        from research_decisions import _github_time, github_source_key, verify_decision, verify_instruction
         from research_language import parse_actions
         if not isinstance(human_text, str) or len(human_text) > MAX_INPUT:
             raise Refused("The original human message must be text of at most 40000 characters.")
@@ -681,6 +700,26 @@ class ResearchKnowledge:
                 actions = []
             if github_source is not None:
                 scoped = []
+                historical = self._github_receipts(data, historical=True)
+                comment = github_source["comment"]
+                comment_order = (_github_time(comment["created_at"]), comment["id"],
+                                 _github_time(comment["updated_at"]))
+                versions = [v for p in proposals for v in [p, *p.get("history", [])]]
+                historical += [r for r in data.get("decisions", [])
+                    if isinstance(r, dict) and r.get("channel") == "editor_chat"
+                    and (verify_instruction(r, key) or any(verify_decision(r, key,
+                        {**v, "status": r.get("decision")}) for v in versions))]
+
+                def affected(instruction, proposal):
+                    names = {_canonical(value) for value in (instruction.get("target"), instruction.get("canonical"),
+                        instruction.get("notation")) if isinstance(value, str) and value}
+                    if instruction.get("kind") == "family":
+                        rule = instruction["rule"]
+                        names.update(_canonical(rule["base"] + "_{" + index + "}") for index in rule["indices"])
+                    expression = self._expression_key(instruction.get("source_expression") or proposal.get("source_expression", ""))
+                    expanded = instruction.get("kind") == "refuse_expression" or instruction.get("rejection_scope") == "expression"
+                    return names, expression, expanded
+
                 pending_subjects = [p for p in current if p.get("status") == "pending" and not p.get("needs_details")]
                 for action in actions:
                     target_subjects = pending_subjects
@@ -696,8 +735,33 @@ class ResearchKnowledge:
                         continue
                     if matches[0]["canonical"] in stale:
                         raise Refused("The proposal changed. Review its current version before deciding.")
-                    scoped.append({**action, "github_subject": {key: matches[0][key]
-                        for key in ("id", "revision", "content_hash")}})
+                    subject = {key: matches[0][key] for key in ("id", "revision", "content_hash")}
+                    names, expression, expanded = affected(action, matches[0])
+                    earlier, local_times = [], []
+                    for receipt in historical:
+                        binding = receipt.get("github_subject", {"id": receipt.get("proposal_id"),
+                            "revision": receipt.get("revision"), "content_hash": receipt.get("content_hash")})
+                        prior = next((v for v in versions if all(v.get(key) == binding.get(key)
+                            for key in ("id", "revision", "content_hash"))), {})
+                        prior_names, prior_expression, prior_expanded = affected(receipt.get("action", receipt), prior)
+                        if (binding == subject or names & prior_names
+                                or expression and expression == prior_expression and (expanded or prior_expanded)):
+                            if receipt.get("channel") == "github_comment":
+                                previous = receipt["source"]["comment"]
+                                earlier.append((_github_time(previous["created_at"]), previous["id"],
+                                                _github_time(previous["updated_at"])))
+                            else:
+                                at = receipt.get("at")
+                                local_times.append(at if type(at) in (int, float) and math.isfinite(at) and at > 0 else None)
+                    # Fetch order and later edits do not make an older comment
+                    # supersede a newer decision for the subject, name or expression.
+                    # Cross-channel ordering trusts host UTC, like the signed
+                    # editor evidence. Only comment creation can follow that time.
+                    if ((earlier and comment_order <= max(earlier))
+                            or any(at is None or comment_order[0] <= at for at in local_times)):
+                        clarifications.append("Use a new GitHub comment after the latest decision for this notation or expression.")
+                        continue
+                    scoped.append({**action, "github_subject": subject})
                 actions = scoped
             if not actions and not clarifications:
                 if github_source is None:
@@ -817,10 +881,12 @@ class ResearchKnowledge:
     def _known(cls, data: dict, baseline=None, manual=None) -> set[str]:
         baseline = cls._baseline_occurrences(data) if baseline is None else baseline
         manual = cls._manual_occurrences(data) if manual is None else manual
-        evidence = {**baseline, **manual, **cls._approved_occurrences(data)}
+        approved = cls._approved_occurrences(data)
+        evidence = {**baseline, **manual, **approved}
+        excluded = cls._excluded(data) - approved.keys() - manual.keys()
         return {_canonical(entry["notation"]) for entry in data["symbols"]
                 if _canonical(entry["notation"]) in evidence
-                and _canonical(entry["notation"]) not in cls._excluded(data)} | cls._family_names(data)
+                and _canonical(entry["notation"]) not in excluded} | cls._family_names(data)
 
     @staticmethod
     def _commands(data: dict) -> set[str]:
@@ -869,16 +935,16 @@ class ResearchKnowledge:
                 if path.stat().st_size > MAX_TEXT:
                     raise Refused("The current source exceeds the editor's text size limit.")
                 raw = read_plain(path, MAX_TEXT)
-                total += len(raw)
-                if len(raw) > MAX_TEXT or total > MAX_TOTAL_TEXT:
+                if len(raw) > MAX_TEXT or total + len(raw) > MAX_TOTAL_TEXT:
                     raise Refused("The current manuscript text limit was reached.")
                 text = raw.decode("utf-8")
             except (OSError, ValueError, UnicodeError) as error:
                 gaps.append({"path": rel, "line": 0, "reason": str(error)})
                 return
+            total += len(raw)
             sources.append({"path": rel, "sha256": hashlib.sha256(raw).hexdigest(), "text": text})
             for match in INCLUDE.finditer(strip_comments(text)):
-                name = match.group(1).strip()
+                name = (match[1] or match[2]).strip()
                 child = self.project.resolve_tex_name(name)
                 if child:
                     visit(child)
@@ -892,7 +958,10 @@ class ResearchKnowledge:
 
     @staticmethod
     def _notice(data: dict, kind: str, entry: dict) -> None:
-        key = hashlib.sha256((kind + "\0" + entry["canonical"]).encode()).hexdigest()[:24]
+        identity = kind + "\0" + entry["canonical"]
+        if kind == "manual_added":
+            identity += "\0" + "\0".join(source["receipt_id"] for source in entry["sources"])
+        key = hashlib.sha256(identity.encode()).hexdigest()[:24]
         if any(n.get("id") == key for n in data["maintenance_notices"] if isinstance(n, dict)):
             return
         messages = {"baseline_added": "Added omitted notation from the initialization version.",
@@ -912,7 +981,9 @@ class ResearchKnowledge:
         existing = {_canonical(item["notation"]): item for item in data["symbols"]}
         excluded = cls._excluded(data)
         for canonical, item in entries.items():
-            if canonical in excluded:
+            # Report corrections exclude extraction evidence. A verified current
+            # human save or decision can adopt the same name independently.
+            if canonical in excluded and kind not in ("manual_added", "decision_added"):
                 continue
             if canonical in existing:
                 # An unsupported, copied status field is not its own source evidence.
@@ -931,7 +1002,8 @@ class ResearchKnowledge:
         self._incremental_defaults(data)
         baseline, manual = self._baseline_occurrences(data), self._manual_occurrences(data)
         approved = self._approved_occurrences(data)
-        evidence, excluded = {**baseline, **manual, **approved}, self._excluded(data)
+        evidence = {**baseline, **manual, **approved}
+        excluded = self._excluded(data) - approved.keys() - manual.keys()
         data["symbols"] = [item for item in data["symbols"]
                            if _canonical(item["notation"]) in evidence
                            and _canonical(item["notation"]) not in excluded]
@@ -1413,7 +1485,7 @@ class ResearchKnowledge:
                 coverage["read"].append(rel)
                 record(text, rel, "baseline", digest)
                 for match in INCLUDE.finditer(strip_comments(text)):
-                    name = match.group(1).strip()
+                    name = (match[1] or match[2]).strip()
                     # Reuse the editor's TeX name lookup, but check all resolved paths
                     # through Project.resolve before reading any content.
                     child = self.project.resolve_tex_name(name)

@@ -300,3 +300,22 @@ class GitHubApprovals(unittest.TestCase):
         self.now[0] += 31
         worker.tick()
         self.assertEqual(self.knowledge.status()["proposals"][0]["status"], "approved")
+
+    def test_late_older_reply_cannot_undo_a_newer_refusal_after_restart(self):
+        worker, batch = self.prepare()
+        self.reply(batch, "Reject item 1 and keep its expression expanded.",
+                   identity=6002, created="2026-10-29T13:00:00Z")
+        self.now[0] += 31
+        worker.tick()
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))
+        self.reply(batch, "Use $q$ instead of item 1.", identity=6001)
+        worker = self.worker()
+        worker.tick()
+        self.assertEqual(worker.status()["state"], "ok")
+        self.assertEqual(self.knowledge.status()["proposals"][0]["status"], "rejected")
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))
+        self.assertTrue(self.knowledge.classify("$q$")["unknown"])
+        self.assertEqual(len(self.knowledge.status()["github_decisions"]), 1)
+        self.now[0] += 31
+        worker.tick()
+        self.assertTrue(self.knowledge.expression_rejected("x+x"))

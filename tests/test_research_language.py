@@ -97,6 +97,58 @@ class ResearchLanguage(unittest.TestCase):
                 self.assertEqual(result["actions"], [])
                 self.assertTrue(result["clarifications"])
 
+    def test_delayed_decisions_do_not_adopt_or_refuse_notation(self):
+        from research_language import parse_actions
+        for text in (
+                "Use $h$ for $x+x$ only after I approve it.",
+                "Use $h$ for $x+x$ provided I approve it.",
+                "Use $h$ for $x+x$ once I approve it.",
+                "Use $h$ for $x+x$ only when I approve it.",
+                "Use $h$ for $x+x$ before I approve it.",
+                "Use $h$ for $x+x$ subject to my approval.",
+                "Use $h$ for $x+x$ upon my approval.",
+                "Use $h$ for x+x upon my approval.",
+                "Use $h$ for $x+x$ contingent on my approval.",
+                "Use $h$ for x+x contingent on my approval.",
+                "Use $h$ for $x+x$ depending on the proof.",
+                "Use $h$ for x+x depending on the proof.",
+                "Use $h$ for $x+x$ only with my approval.",
+                "Use $h$ for x+x only with my approval.",
+                "Use $h$ to denote the error term only with my approval.",
+                "用 $h$ 表示 $x+x$，等我同意后再用。",
+                "用 $h$ 表示 $x+x$，待我批准后再采用。",
+                "用 $h$ 表示 $x+x$，经我批准才采用。",
+                "用 $h$ 表示 x+x，经我批准才采用。",
+                "After I approve this; use $h$ for $x+x$.",
+                "Use $h$ for $x+x$; only after I approve it.",
+                "Use $h$ for $x+x$\nonly after I approve it.",
+                "After I approve this; use $a_i$ for $x+x$ with i in {1,2}.",
+                "Use $a_i$ for $x+x$ with i in {1,2}; only after I approve it.",
+                "When the proof fails; reject $a$.",
+                "When the proof fails; keep $x+x$ expanded.",
+                "等我确认后；拒绝 $a$。",
+                "保持 $x+x$ 展开；只有在我确认之后。"):
+            with self.subTest(text=text):
+                result = parse_actions(text, self.proposals())
+                self.assertEqual(result["actions"], [])
+                self.assertTrue(result["clarifications"])
+
+    def test_delimited_meaning_does_not_absorb_an_unexplained_qualification(self):
+        from research_language import parse_actions
+        for text in ("Use $h$ for $x+x$ (authorization to follow).",
+                     "Use h for $x+x$ awaiting confirmation.",
+                     "用 $h$ 表示 $x+x$，尚待授权。"):
+            with self.subTest(text=text):
+                result = parse_actions(text, [])
+                self.assertEqual(result["actions"], [])
+                self.assertTrue(result["clarifications"])
+
+    def test_delayed_decision_keeps_independent_earlier_batch_action(self):
+        from research_language import parse_actions
+        result = parse_actions("Approve $a$; use $h$ for $x+x$ only after I approve it.", self.proposals())
+        self.assertEqual(result["actions"], [{"kind": "approve", "target": "a"}])
+        self.assertEqual(len(result["clarifications"]), 1)
+
     def test_direct_adoption_does_not_require_math_delimiters_or_a_special_reply(self):
         from research_language import parse_actions
         for text, definition in (("用 h 表示 x+x", "x+x"), ("Use h for x+x.", "x+x"),

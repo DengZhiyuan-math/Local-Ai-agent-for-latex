@@ -1,5 +1,5 @@
 """GitHub human decisions through real editor HTTP and a controlled adapter."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import json
 import threading
 import time
@@ -208,7 +208,8 @@ class GitHubApprovalsHTTP(unittest.TestCase):
         self.finish(self.turn([[base.say("The current author choice is saved.")]], human_text="Approve $z$."))
         marker = self.work / "fail-github-reply-ack"
         marker.touch()
-        self.remote_reply(batch, "Reject $z$.", id=6252)
+        self.remote_reply(batch, "Reject $z$.", id=6252,
+                          created_at=datetime.now(timezone.utc).isoformat())
         self.control("tick")
         state = self.state()
         self.assertEqual(state["proposals"][0]["status"], "rejected")
