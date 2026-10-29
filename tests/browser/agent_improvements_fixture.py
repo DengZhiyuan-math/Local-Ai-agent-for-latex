@@ -12,10 +12,11 @@ work = Path(sys.argv[1]).resolve()
 work.mkdir(parents=True, exist_ok=True)
 root = work / "project"
 (root / "sections").mkdir(parents=True, exist_ok=True)
-(root / "main.tex").write_text("\\documentclass{article}\n\\begin{document}\n\\input{sections/intro}\n\\label{dup}\n\\end{document}\n")
+(root / "main.tex").write_text("\\documentclass{article}\n\\begin{document}\n\\input{sections/intro}\n\\label{dup}\nMath $\\eqref{eq:one}$.\n\\end{document}\n")
 (root / "sections/intro.tex").write_text("\\section{Intro}\n\\label{eq:one}\n\\label{dup}\nHello\n")
 (work / "profile").mkdir(exist_ok=True)
-os.environ.update(PRISM_STATE_DIR=str(work / "state"), CLAUDE_CONFIG_DIR=str(work / "profile"))
+os.environ.update(PRISM_STATE_DIR=str(work / "state"), CLAUDE_CONFIG_DIR=str(work / "profile"),
+                  PRISM_STARTED_CLAUDE_CONFIG_DIR=str(work / "profile"))
 cli = work / "claude-fixture"
 cli.write_text("#!" + sys.executable + "\n" + r'''
 import json, sys
@@ -23,7 +24,7 @@ from pathlib import Path
 work=Path(__file__).parent
 if 'auth' in sys.argv:
  print(json.dumps({'loggedIn':True,'email':'fixture@example.test','authMethod':'claude.ai','apiProvider':'firstParty'})); sys.exit(0)
-with (work/'cli-requests.jsonl').open('a') as log:
+with (work/'profile/cli-requests.jsonl').open('a') as log:
  log.write(json.dumps({'argv':sys.argv[1:]})+'\n')
  def emit(data): print(json.dumps(data),flush=True)
  for line in sys.stdin:

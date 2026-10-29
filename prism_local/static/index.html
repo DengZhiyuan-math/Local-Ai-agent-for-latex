@@ -197,6 +197,33 @@
       <button id="chat-new" title="Start a new conversation">New chat</button>
     </div>
     <small id="chat-config-status" role="status" hidden></small>
+    <small id="notation-guard-status" role="status" hidden></small>
+    <section id="research" aria-label="Research baseline" hidden>
+      <div class="research-head">
+        <button id="research-toggle" class="ghost" aria-expanded="false" aria-controls="research-body">Research baseline</button>
+        <small id="research-summary"></small>
+      </div>
+      <div id="research-body" hidden>
+        <div id="research-received"></div>
+        <div id="research-invitation" hidden>
+          <p>Initialize this project's research baseline before AI writes or rewrites mathematics. Reading, discussion and manual edits remain available.</p>
+          <p class="research-note">Initialization reads the manuscript and included chapters, then saves a report. It does not rewrite your manuscript.</p>
+          <label>Research question or existing ideas <span class="research-note">(optional)</span>
+            <textarea id="research-question" rows="2"></textarea>
+          </label>
+          <label>Notation you explicitly provide <span class="research-note">(optional, LaTeX)</span>
+            <textarea id="research-notation" rows="2" placeholder="For example: \\ell, \\ell_+"></textarea>
+          </label>
+          <p class="research-note">Empty projects and empty libraries are valid. Research records use project Markdown.</p>
+          <div class="research-actions">
+            <button id="research-initialize" class="primary">Initialize</button>
+            <button id="research-later" class="ghost">Later</button>
+          </div>
+        </div>
+        <div id="research-report" hidden></div>
+        <p id="research-status" class="status" role="status" hidden></p>
+      </div>
+    </section>
     <div id="agent-account" hidden></div>
     <div id="quota"></div>
     <div id="chat-log"></div>
@@ -261,6 +288,7 @@
 <script src="/static/chatlogic.js"></script>
 <script src="/static/findlogic.js"></script>
 <script src="/static/agentsearch.js"></script>
+<script src="/static/manualinput.js"></script>
 <script src="/static/tabs.js"></script>
 <script src="/static/watch.js"></script>
 <script src="/static/turn.js"></script>

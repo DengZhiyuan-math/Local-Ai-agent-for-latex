@@ -18,6 +18,7 @@ import gitenv
 
 import argparse
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -44,6 +45,11 @@ import registry  # noqa: E402
 import build_results  # noqa: E402
 import settings  # noqa: E402
 import tools  # noqa: E402
+from research import ResearchKnowledge  # noqa: E402
+from research_edits import EditTokens  # noqa: E402
+from research_github import GitHubDiscussions  # noqa: E402
+import research_topics  # noqa: E402
+import research_confirmation  # noqa: E402
 
 # The project's files are written under it: saves, uploads, an Undo, and GITSYNC's commits
 # and merges; also by the other editors of a shared repository (repository.FilesLock).
@@ -53,11 +59,35 @@ SAVE_LOCK = FilesLock(lambda: GITSYNC.git_dir if GITSYNC.check_repo() else None)
 # The project this editor works on (project.py): its folder, its settings with the
 # document shown, and the files the editor shows.
 PROJECT: Project = None  # type: ignore[assignment]
+DISCUSSIONS = None                 # one issue worker for the currently open project
 
 
 def set_root(root: Path) -> None:
-    global PROJECT
-    PROJECT = Project(root, files_lock=SAVE_LOCK, turn=AGENT, on_change=lambda: GITSYNC.touched())
+    global PROJECT, DISCUSSIONS
+    if DISCUSSIONS is not None:
+        DISCUSSIONS.close()
+
+    def changed():
+        if PROJECT is not project:
+            return
+        GITSYNC.touched()
+        if DISCUSSIONS is not None and DISCUSSIONS.project is project:
+            DISCUSSIONS.wake()
+
+    project = Project(root, files_lock=SAVE_LOCK, turn=AGENT, on_change=changed)
+    PROJECT = project
+    DISCUSSIONS = GitHubDiscussions(ResearchKnowledge(PROJECT), target=lambda: GITSYNC.status(),
+                                   is_open=lambda: PRESENCE.count() > 0)
+
+
+def research_view(knowledge, state):
+    if state.get("initialized") or state.get("provenance"):
+        state["received_confirmations"] = research_confirmation.questions(knowledge, state)
+    if state.get("initialized"):
+        state["discussion_records"] = research_topics.status(knowledge)
+        if DISCUSSIONS is not None and DISCUSSIONS.project is knowledge.project:
+            state["github_discussion"] = DISCUSSIONS.status()
+    return state
 
 
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
@@ -251,6 +281,8 @@ GITSYNC = GitSync(lambda: PROJECT.root, lambda: PROJECT.config.outdir, busy=lamb
 AGENT.on_start = GITSYNC.before_turn
 AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
 AGENT.writes = SAVE_LOCK
+AGENT.research_fn = lambda: ResearchKnowledge(PROJECT)
+EDIT_TOKENS = EditTokens()          # private page capabilities; never sent to a Backend
 
 
 # The project's name as the Home page lists it (Rename): read again only when the list changed.
@@ -325,6 +357,23 @@ class Handler(httpbase.Handler):
                 f["git"] = st.get(f["path"], "")
             stamps = {f["path"]: f["mtime"] for f in files}
             cfg = PROJECT.config
+            discussion_version = None
+            research_version = None
+            try:
+                research_state = ResearchKnowledge(PROJECT).status()
+                raw = json.dumps({"provenance": research_state.get("provenance"),
+                                  "unverified": research_state.get("unverified_symbols", []),
+                                  "notices": [notice.get("id") for notice in research_state.get("maintenance_notices", [])
+                                              if isinstance(notice, dict)]}, sort_keys=True).encode()
+                research_version = hashlib.sha256(raw).hexdigest()
+            except (OSError, ValueError, TypeError, KeyError):
+                research_version = "unavailable"
+            if DISCUSSIONS is not None and DISCUSSIONS.project is PROJECT:
+                try:
+                    raw = json.dumps(DISCUSSIONS.status(), sort_keys=True).encode()
+                    discussion_version = hashlib.sha256(raw).hexdigest()
+                except (OSError, ValueError, TypeError, KeyError):
+                    discussion_version = "unavailable"
             return self._json({"root": PROJECT.root.name, "name": project_name(), "path": str(PROJECT.root),
                                "project_key": registry.project_key(PROJECT.root),
                                "move_error": MOVE["error"], "files": files, "folders": folders,
@@ -333,6 +382,8 @@ class Handler(httpbase.Handler):
                                "document": PROJECT.input_chain(cfg.main, stamps),
                                "pdf_main": cfg.main, "pdf_mtime": PROJECT.pdf_state(cfg),
                                "updated": APP.updated(), "server": STARTED_AT,
+                               "github_discussion_version": discussion_version,
+                               "research_version": research_version,
                                "sync": GITSYNC.status()})
         if path == "/api/git/publish":
             return self._json(publish.publish_info(PROJECT.root))
@@ -347,6 +398,13 @@ class Handler(httpbase.Handler):
             return self._json({"commits": GITSYNC.log(q["path"])})
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))
+        if path == "/api/research":
+            knowledge = ResearchKnowledge(PROJECT)
+            state = knowledge.refresh()
+            if state.get("initialized"):
+                research_topics.retry(knowledge)
+                state = knowledge.status()
+            return self._json(research_view(knowledge, state))
         if path == "/api/config":
             cfg = PROJECT.config
             return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
@@ -385,8 +443,12 @@ class Handler(httpbase.Handler):
                                "fraction": st["snippets_fraction"], "matrix": st["snippets_matrix"]})
         if path == "/api/file":
             p = PROJECT.resolve(q.get("path", ""))
-            return self._json({"path": q["path"], "content": p.read_text(encoding="utf-8"),
-                               "mtime": mtime(p)})
+            with SAVE_LOCK:
+                raw = p.read_bytes()
+                stamp = mtime(p)
+                capability = EDIT_TOKENS.issue(registry.project_key(PROJECT.root), PROJECT.rel(p), raw)
+            return self._json({"path": q["path"], "content": raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n"),
+                               "mtime": stamp, "manual_edit": capability})
         if path == "/api/asset":
             from urllib.parse import quote
             p = PROJECT.resolve(q.get("path", ""), editable_only=False)
@@ -467,8 +529,26 @@ class Handler(httpbase.Handler):
     def _post(self, path, body):
         if self._foreign_project():
             return
-        if path.startswith(("/api/agent", "/api/files/")) and body.get("project_key") != registry.project_key(PROJECT.root):
+        if path.startswith(("/api/agent", "/api/files/", "/api/research/")) and body.get("project_key") != registry.project_key(PROJECT.root):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
+        if path == "/api/research/initialize":
+            knowledge = ResearchKnowledge(PROJECT)
+            return self._json(research_view(knowledge, knowledge.initialize(
+                question=body.get("question", ""), notation=body.get("notation", ""))))
+        if path == "/api/research/correct":
+            knowledge = ResearchKnowledge(PROJECT)
+            return self._json(research_view(knowledge, knowledge.correct(
+                term_updates=body.get("term_updates"), excluded_symbols=body.get("excluded_symbols"),
+                notes=body.get("notes", ""), symbol_updates=body.get("symbol_updates"))))
+        if path == "/api/research/discussion":
+            knowledge = ResearchKnowledge(PROJECT)
+            DISCUSSIONS.configure(body.get("mode"), body.get("approvers", []),
+                                  expected_repository=body.get("expected_repository"))
+            return self._json(research_view(knowledge, knowledge.status()))
+        if path == "/api/research/github/proposals":
+            knowledge = ResearchKnowledge(PROJECT)
+            DISCUSSIONS.share_proposals(body.get("topic_id"), body.get("subjects"))
+            return self._json(research_view(knowledge, knowledge.status()))
         if path.startswith("/api/files/"):
             try:
                 return self._json(self._files(path, body))
@@ -495,8 +575,44 @@ class Handler(httpbase.Handler):
             return self._json({"files": PROJECT.texts(paths)})
         if path == "/api/file":
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
-            return self._json(*PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
-                                            bool(body.get("force"))))
+            if not SAVE_LOCK.acquire(timeout=3):
+                return self._json({"busy": True, "error": "The source files are busy; saving will retry."}, 503)
+            try:
+                p = PROJECT.resolve(body["path"])
+                before = p.read_bytes() if p.exists() else b""
+                result, status = PROJECT.save(body["path"], str(body["content"]), body.get("base_mtime"),
+                                              bool(body.get("force")))
+                if status == 200:
+                    after = p.read_bytes()
+                    key, rel = registry.project_key(PROJECT.root), PROJECT.rel(p)
+                    # Check the exact bytes under the same lock as the save. An
+                    # unproved HTTP save still succeeds, without granting adoption.
+                    try:
+                        knowledge = ResearchKnowledge(PROJECT)
+                        token = body.get("manual_edit_token")
+                        if not knowledge.status().get("initialized"):
+                            # Postponing setup must also postpone mathematical
+                            # extraction, even when the author edits manually.
+                            EDIT_TOKENS.discard(token)
+                        else:
+                            if body.get("force"):
+                                EDIT_TOKENS.discard(token)
+                                valid, receipt = False, None
+                            else:
+                                valid, receipt = EDIT_TOKENS.consume(token, key, rel, before, after)
+                            if receipt is not None:
+                                knowledge.add_manual(receipt)
+                            else:
+                                knowledge.refresh()
+                            if token and not valid:
+                                result["research_warning"] = "Source saved; its input proof could not be verified. New notation remains unverified."
+                    except (OSError, ValueError) as error:
+                        result["research_warning"] = f"Source saved; research registration failed: {error}"
+                    result["manual_edit"] = EDIT_TOKENS.issue(key, rel, after)
+                    result["sha256"] = hashlib.sha256(after).hexdigest()
+            finally:
+                SAVE_LOCK.release()
+            return self._json(result, status)
         if path == "/api/file/conditional":
             return self._json(*PROJECT.save_conditional(body["path"], body["content"],
                                                         body["expected_sha256"]))
@@ -538,7 +654,10 @@ class Handler(httpbase.Handler):
             r = AGENT.start(body["prompt"], body.get("session_id") or None,
                             body.get("mode", "ask"), body.get("model") or None,
                             body.get("effort") or None, scope, body.get("provider") or None,
-                            body.get("attachments") or [], active_file=active_file)
+                            body.get("attachments") or [], active_file=active_file,
+                            human_text=body.get("human_text"),
+                            received_subjects=body.get("received_subjects"),
+                            received_context_ambiguous=body.get("received_context_ambiguous") is True)
             return self._json(r, 409 if "error" in r else 200)
         if path == "/api/home":
             r = instances.ensure(None)
@@ -681,6 +800,7 @@ def serve(project):
         registry.safe_touch(PROJECT.root)       # list the project on the Home page
 
     def stopping():
+        DISCUSSIONS.close()
         PROJECT.stop_build()
         AGENT.shutdown()
         GITSYNC.flush()                 # what is left is committed and pushed
@@ -688,7 +808,11 @@ def serve(project):
     def successor():
         destination = MOVING["to"] or PROJECT.root
         return move_argv(destination, moving=MOVING["to"] is not None), str(PROJECT.root.parent)
-    APP.serve(busy=PROJECT.busy, what="build or agent turn", started=GITSYNC.start,
+    def started():
+        GITSYNC.start()
+        DISCUSSIONS.start()
+
+    APP.serve(busy=PROJECT.busy, what="build or agent turn", started=started,
               stopping=stopping, successor=successor)
 
 

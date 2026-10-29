@@ -28,24 +28,25 @@ const Tabs = (() => {
   function createTabStore({ saveFile, isHeld = () => false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)),
                             onChange = () => {}, notify = () => {}, busyWait = 1000,
                             schedule = (fn, ms) => setTimeout(fn, ms), cancel = clearTimeout,
-                            isStopped = () => false }) {
+                            isStopped = () => false, manualInput = null }) {
     const tabs = [];
     let heldNoted = false;
     let learned = 0;                   // counts what the page learned of the disk (t.seen)
 
     const dirty = (t) => !t.doc.isClean(t.gen);
 
-    function add(path, doc, mtime) {
+    function add(path, doc, mtime, capability = null) {
       const t = { path, doc, mtime, seen: ++learned, gen: doc.changeGeneration(true), conflict: null, saving: null,
         inFlight: false, saveError: null, retryTimer: null, retries: 0 };
       tabs.push(t);
+      manualInput?.track(doc, capability);
       return t;
     }
     const get = (path) => tabs.find((t) => t.path === path) || null;
     // Close the tabs `pred` picks (unsaved edits are lost: the page asked first).
     function remove(pred) {
       const gone = tabs.filter(pred);
-      for (const t of gone) { cancel(t.retryTimer); tabs.splice(tabs.indexOf(t), 1); }
+      for (const t of gone) { cancel(t.retryTimer); manualInput?.remove(t.doc); tabs.splice(tabs.indexOf(t), 1); }
       return gone;
     }
 
@@ -65,12 +66,15 @@ const Tabs = (() => {
       if (isStopped() || !tabs.includes(t)) return { ok: false, reason: "stopped" };
       if (isHeld()) return { ok: false, reason: "held" };
       if (!dirty(t) && !force) return { ok: true };
-      let gen, r;
+      let gen, r, evidence;
       for (let waited = false; ; waited = true) {
         gen = t.doc.changeGeneration();
+        const content = t.doc.getValue();
+        evidence = manualInput?.freeze(t.doc, force);
         // In flight: the file on disk is this save's until its answer brings the new mtime.
         t.inFlight = true;
-        try { r = await saveFile({ path: t.path, content: t.doc.getValue(), base_mtime: t.mtime, force }); }
+        try { r = await saveFile({ path: t.path, content, base_mtime: t.mtime, force,
+          ...(evidence?.token ? { manual_edit_token: evidence.token } : {}) }); }
         catch (e) { r = { _status: 0, error: e.message || String(e) }; }
         finally { t.inFlight = false; }
         if (!(r._status === 503 && r.busy)) break;
@@ -101,6 +105,9 @@ const Tabs = (() => {
       }
       cancel(t.retryTimer); t.retryTimer = null; t.retries = 0; t.saveError = null;
       t.mtime = r.mtime; t.seen = ++learned; t.gen = gen; t.conflict = null;
+      if (evidence) manualInput?.saved(t.doc, evidence, r.manual_edit);
+      if (r.research_error) notify(`${t.path}: saved, but research notation could not be registered: ${r.research_error}`);
+      else if (r.research_warning) notify(`${t.path}: saved. ${r.research_warning}`);
       onChange(t, "saved");
       return { ok: true };
     }
@@ -150,9 +157,10 @@ const Tabs = (() => {
       return content === t.doc.getValue() ? "same" : "replace";
     }
     // The tab holds the disk's text of `mtime` now.
-    function synced(t, mtime) {
+    function synced(t, mtime, capability = null) {
       cancel(t.retryTimer); t.retryTimer = null; t.saveError = null; t.retries = 0;
       t.mtime = mtime; t.seen = ++learned; t.gen = t.doc.changeGeneration(true); t.conflict = null;
+      manualInput?.synced(t.doc, capability);
       onChange(t, "synced");
     }
 

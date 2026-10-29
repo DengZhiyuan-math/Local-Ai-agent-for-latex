@@ -498,6 +498,36 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 #chat-model { width: 150px; }
 #chat-effort { width: 76px; }
 #chat-config-status { padding: 5px 10px; border-bottom: 1px solid var(--border); color: var(--err); overflow-wrap: anywhere; }
+#notation-guard-status { padding: 5px 10px; border-bottom: 1px solid var(--border); color: var(--muted); overflow-wrap: anywhere; }
+#notation-guard-status[hidden] { display: none; }
+.notation-proposal { margin: 8px 0; padding: 9px; border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: 5px; overflow-wrap: anywhere; }
+.notation-proposal p { margin: 5px 0; }
+.notation-proposal dl { margin: 8px 0 0; }
+.notation-proposal dt { margin-top: 6px; font-weight: 600; }
+.notation-proposal dd { margin-left: 0; white-space: pre-wrap; }
+.notation-proposal code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.notation-proposal .proposal-note { color: var(--muted); font-size: 11px; }
+#research { border-bottom: 1px solid var(--border); font-size: 12px; }
+#research[hidden], #research [hidden] { display: none; }
+.research-head { display: flex; align-items: center; gap: 6px; padding: 5px 8px; }
+.research-head small { color: var(--muted); }
+#research-toggle { height: auto; padding: 3px 5px; font-weight: 600; }
+#research-body { padding: 0 10px 10px; max-height: 55vh; overflow: auto; overflow-wrap: anywhere; }
+#research-body p { margin: 6px 0; }
+#research-body label { display: block; margin: 7px 0; }
+#research-body textarea { display: block; width: 100%; margin-top: 3px; resize: vertical; font: 12px/1.4 var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 5px; padding: 5px 6px; }
+#research-body textarea:focus { outline: none; border-color: var(--accent); }
+#research-body details { margin: 9px 0; }
+#research-body summary { cursor: pointer; font-weight: 600; }
+#research-body ul { margin: 5px 0; padding-left: 18px; }
+#research-body code { font: 11px/1.4 var(--mono); }
+#research-body .research-source { height: auto; border: 0; background: none; color: var(--accent); padding: 0; font: inherit; text-align: left; }
+.research-note { color: var(--muted); font-size: 11px; }
+.research-actions { display: flex; align-items: center; gap: 6px; margin-top: 8px; }
+.research-entry { margin: 7px 0; padding: 6px; border: 1px solid var(--border); border-radius: 5px; }
+#research-body .research-exclude { display: flex; gap: 5px; align-items: baseline; }
+.research-exclude input { margin: 0; }
+#research-status { white-space: pre-wrap; }
 @container (max-width: 480px) {
   #chat-head { gap: 4px; padding: 0 6px; }
   #chat-config { gap: 4px; }

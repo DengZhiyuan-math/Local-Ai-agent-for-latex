@@ -75,7 +75,7 @@ class WebPermissions:
         return registry.state_dir() / "web-permissions.json"
 
     def request(self, job, request_id: str, tool: str, inp: dict,
-                session_id: str | None, namespace: str) -> dict:
+                session_id: str | None, namespace: str, *, display_input: dict | None = None) -> dict:
         """Wait for the panel in a worker thread; the CLI reader remains available."""
         if not isinstance(request_id, str) or not request_id or len(request_id) > 200 \
                 or not isinstance(inp, dict):
@@ -83,6 +83,9 @@ class WebPermissions:
         try:
             target = web_target(tool, inp)
             original = json.loads(json.dumps(inp))
+            if display_input is not None and not isinstance(display_input, dict):
+                raise ValueError("Invalid permission preview")
+            visible = json.loads(json.dumps(display_input)) if display_input is not None else original
         except (ValueError, TypeError) as e:
             return {"behavior": "deny", "message": str(e)}
         # Fresh conversations receive a CLI session id before tool use. If an older
@@ -107,7 +110,7 @@ class WebPermissions:
                      "session": session, "answer": None}
             self.pending[key] = entry
             job.emit({"t": "permission", "request_id": request_id, "tool": tool,
-                      "input": original, "target": target, "scopes": list(SCOPES)})
+                      "input": visible, "target": target, "scopes": list(SCOPES)})
             while entry["answer"] is None and not job.cancel.is_set() and not job.done:
                 if job.proc is not None and job.proc.poll() is not None:
                     break

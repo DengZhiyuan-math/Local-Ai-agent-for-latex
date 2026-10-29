@@ -9,11 +9,13 @@ const S = {
   diagnostics: [], pdfMtime: null, pdfMain: null, building: false,
 };
 // The open files and how each is saved (tabs.js); S.tabs is its list.
+const MANUAL = ManualInput.createTracker();
 const TABS = Tabs.createTabStore({
   saveFile: Q.saveFile, isStopped: () => foreignProject, isHeld: () => C.editTurn, notify: (m) => toast(m),
+  manualInput: MANUAL,
   onChange: (t, what) => {
     updateTabState(t); showBanner(t);
-    if (what === "saved") scheduleSymbols();
+    if (what === "saved") { scheduleSymbols(); loadResearch(); }
     if (what === "back") scheduleSave(t);              // its file is there again: your edits go in
   },
 });
@@ -770,6 +772,7 @@ $("#search-pane .ps-modes").addEventListener("click", (e) => { const b = e.targe
 const SNIP_SET = { on: true, fraction: true, matrix: true };
 const SNIP = Snippets.attach(cm, {
   enabled: () => SNIP_SET.on, fraction: () => SNIP_SET.fraction, matrix: () => SNIP_SET.matrix,
+  aroundExpand: (change, expand) => MANUAL.controlledDerived(cm.getDoc(), change, expand),
 });
 let snipContent;                 // the file as last read: unchanged, it is not compiled again
 async function loadSnippets() {
@@ -790,6 +793,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 window.addEventListener("focus", () => loadSnippets());
 
 cm.getWrapperElement().style.display = "none";
+MANUAL.attachEditor(cm);
 cm.on("change", (ed, ch) => {
   const t = activeTab(); if (t) { updateTabState(t); scheduleSave(t); }
   if (ch.origin !== "setValue") stopFollowing();      // you typed (a reload from disk does not count)
@@ -825,7 +829,7 @@ async function loadTab(path) {
   t = S.tabs.find((x) => x.path === path);            // opened meanwhile, by the same request
   if (t) return t;
   if (r._status !== 200) { toast(`Cannot open ${path}: ${r.error || r._status}`); return null; }
-  return TABS.add(path, CodeMirror.Doc(r.content, modeFor(path)), r.mtime);
+  return TABS.add(path, CodeMirror.Doc(r.content, modeFor(path)), r.mtime, r.manual_edit);
 }
 // Each file asked for to be shown counts: the last one asked for is the one in front, even
 // if an earlier one's file arrives after it (see init: the tabs of the last session).
@@ -968,7 +972,7 @@ async function reloadFromDisk(t, discard = false) {
     t.doc.setCursor(cur);
     if (scroll) cm.scrollTo(scroll.left, scroll.top);
   }
-  TABS.synced(t, r.mtime);
+  TABS.synced(t, r.mtime, r.manual_edit);
   AH.apply(t.path);                                  // setValue drops classes; a resolved conflict may show them now
   if (t === activeTab()) applyDiagnostics();
 }
@@ -1340,6 +1344,16 @@ async function pollOnce() {
   for (const path of action.conflicts) { const t = TABS.get(path); if (t) TABS.diskSeen(t, r.files.find((f) => f.path === path).mtime); }
   for (const path of action.reload) { const t = TABS.get(path); if (t) await reloadFromDisk(t); }
   if (action.symbols) loadSymbols();
+  const githubVersion = r.github_discussion_version;
+  const githubChanged = typeof githubVersion === "string" && githubVersion !== RESEARCH.githubVersion;
+  const researchVersion = r.research_version;
+  const researchChanged = typeof researchVersion === "string" && researchVersion !== RESEARCH.researchVersion;
+  if ((action.symbols || githubChanged || researchChanged) && (RESEARCH.state?.initialized || RESEARCH.state?.provenance || RESEARCH.state?.received_confirmations?.length) && !C.job) {
+    if (await loadResearch()) {
+      if (typeof githubVersion === "string") RESEARCH.githubVersion = githubVersion;
+      if (typeof researchVersion === "string") RESEARCH.researchVersion = researchVersion;
+    }
+  }
   if (!S.building && (r.pdf_mtime !== S.pdfMtime || r.pdf_main !== S.pdfMain)) showPdf(r.pdf_mtime, r.pdf_main);
   if (r.updated && $("#btn-restart").hidden) toast("prism-local was updated: click “Update: restart” to use the new version");
   $("#btn-restart").hidden = !r.updated;
@@ -1936,6 +1950,656 @@ const P = { list: [], byId: {}, projectKey: null, defaults: {} };
 const C = { provider: store.get("chat.provider", null), job: null };
 const prov = () => P.byId[C.provider] || { id: C.provider, label: "Agent", models: [], efforts: [] };
 const provLabel = () => prov().label || "the agent";
+const RESEARCH = { state: null, rendered: null, busy: false, deferred: false, request: 0, githubVersion: null, researchVersion: null, seen: new Set() };
+const RECEIVED = { current: { scope: null, ids: [], ambiguous: false }, draft: null };
+
+function notationGuardDescription(provider = {}) {
+  const guard = provider.notation_guard || {};
+  const active = guard.application === true && guard.display === true && guard.proposals === true;
+  return active
+    ? "New notation: file and chat checks are active. " + (guard.decisions === true ? "Text approval is available." : "Text approval is not available yet.")
+    : `New notation checks are not available for ${provider.label || "this provider"}.`;
+}
+function renderNotationGuard() {
+  const el = $("#notation-guard-status");
+  el.hidden = !P.byId[C.provider];
+  el.textContent = notationGuardDescription(prov());
+}
+function notationDecisionNote(proposal, githubDecisions = []) {
+  if (proposal.status === "pending") return proposal.needs_details ? "This candidate needs more details before a decision." : "Reply in chat to approve or reject this candidate.";
+  const github = Array.isArray(githubDecisions) && githubDecisions.some((decision) => decision.channel === "github_comment"
+    && decision.decision === proposal.status && decision.proposal_id === proposal.id
+    && decision.revision === proposal.revision && decision.content_hash === proposal.content_hash
+    && githubDiscussionUrl(decision.comment_url, decision.repository?.full_name, "comment")
+    && (decision.subjects || []).some((subject) => subject.id === proposal.id
+      && subject.revision === proposal.revision && subject.content_hash === proposal.content_hash));
+  return github ? "Verified GitHub decision was saved. See the Research baseline for its original source." : "Human decision was saved.";
+}
+function notationProposalHtml(proposal, githubDecisions = []) {
+  if (!["pending", "approved", "rejected"].includes(proposal.status)) return "";
+  const field = (label, value, code = false) => `<dt>${label}</dt><dd>${value ? (code ? `<code>${esc(value)}</code>` : esc(value)) : '<span class="proposal-note">Needs details</span>'}</dd>`;
+  const channels = { api: "API proposal", api_proposal: "API proposal", claude_proposal: "Claude Code proposal", codex_proposal: "Codex proposal", deepcode_proposal: "Deep Code proposal", chat: "Chat reply", file: "File edit", tool: "Tool output", thinking: "Agent reasoning", compile: "Build output" };
+  const origin = typeof proposal.origin === "string" ? proposal.origin : proposal.origin
+    ? [proposal.origin.actor === "agent" ? "Agent" : proposal.origin.actor, channels[proposal.origin.channel] || proposal.origin.channel,
+      proposal.origin.provider, proposal.origin.path].filter(Boolean).join(" · ") : "";
+  const status = proposal.status === "approved" ? "Approved — registered for use." : proposal.status === "rejected"
+    ? "Rejected — keep the original expression." : "Pending — not adopted. This notation is not registered for use.";
+  return `<article class="notation-proposal" data-proposal-id="${esc(proposal.id || "")}" data-proposal-status="${proposal.status}">
+    <b>Notation candidate: <code>${esc(proposal.notation || proposal.canonical || "Needs details")}</code></b>
+    <p>${status}</p>
+    <p class="proposal-note">${notationDecisionNote(proposal, githubDecisions)}</p>
+    <dl>${field("Definition", proposal.definition)}${field("Scope", proposal.scope)}${field("Reason", proposal.reason)}${field("Source expression", proposal.source_expression, true)}${field("Origin", origin)}</dl>
+  </article>`;
+}
+function updateNotationProposalCards(state) {
+  for (const card of $("#chat-log").querySelectorAll(".notation-proposal")) {
+    const proposal = (state.proposals || []).find((p) => p.id === card.dataset.proposalId);
+    if (proposal) {
+      card.dataset.proposalStatus = proposal.status;
+      card.querySelector("p").textContent = proposal.status === "approved" ? "Approved — registered for use." : proposal.status === "rejected"
+        ? "Rejected — keep the original expression." : "Pending — not adopted. This notation is not registered for use.";
+      card.querySelector(".proposal-note").textContent = notationDecisionNote(proposal, state.github_decisions);
+    }
+  }
+}
+function notationPoliciesHtml(state) {
+  const groups = [["adoptions", "Directly adopted notation"], ["families", "Notation families"], ["rejections", "Rejection scope"]];
+  return groups.map(([key, title]) => {
+    const records = state[key] || [];
+    if (!records.length) return "";
+    return `<details open class="research-policies" data-policy="${key}"><summary>${title} (${records.length})</summary>${records.map((record) => {
+      const action = record.action || record, rule = action.rule || record.rule;
+      const notation = action.notation || action.target || record.notation || record.canonical || "";
+      const source = action.source_expression || record.source_expression || "";
+      return `<article class="research-entry"><b><code>${esc(notation)}</code></b>
+        ${action.definition ? `<p>${esc(action.definition)}</p>` : ""}
+        ${action.scope ? `<p>Scope: ${esc(action.scope)}</p>` : ""}
+        ${rule ? `<p>Allowed indices of <code>${esc(rule.base || "")}</code>: <code>${esc((rule.indices || []).join(", "))}</code></p>` : ""}
+        ${key === "rejections" ? `<p>Rejection scope: ${esc(action.rejection_scope || record.rejection_scope || (action.kind === "refuse_expression" ? "expression" : "name"))}</p>` : ""}
+        ${source ? `<p>Source expression: <code>${esc(source)}</code></p>` : ""}
+        <details><summary>Human decision evidence</summary><p>${esc(record.human_text || "")}</p></details></article>`;
+    }).join("")}</details>`;
+  }).join("");
+}
+function researchSummary(state) {
+  if (!state.initialized) return state.provenance && state.provenance.record_state !== "missing" ? "Received research material · unverified" : "Not initialized";
+  const pending = (state.proposals || []).filter((p) => p.status === "pending").length;
+  return (state.provenance?.baseline_verified === false ? "Local knowledge retained · received baseline unverified" : "Initialized") + (state.unverified_symbols?.length ? ` · ${state.unverified_symbols.length} unverified` : "")
+    + (pending ? ` · ${pending} pending candidate${pending === 1 ? "" : "s"}` : "");
+}
+function researchOpen(open) {
+  $("#research-body").hidden = !open;
+  $("#research-toggle").setAttribute("aria-expanded", String(open));
+}
+function researchMessage(message = "", error = false) {
+  const el = $("#research-status");
+  el.textContent = message;
+  el.className = "status" + (error ? " err" : " ok");
+  el.hidden = !message;
+}
+function researchBusy(busy) {
+  RESEARCH.busy = busy;
+  if (busy) ++RESEARCH.request;       // an earlier background read cannot replace this explicit update
+  $("#research").setAttribute("aria-busy", String(busy));
+  for (const el of $("#research-body").querySelectorAll("button, textarea, input, select")) el.disabled = busy;
+}
+function researchLocations(sources = []) {
+  return sources.map((source) => {
+    if (typeof source === "string") return esc(source);
+    if (source.kind === "received_library" || source.json_pointer !== undefined || source.entry_sha256 !== undefined) {
+      if (!receivedLibrarySourceValid(source)) return receivedLiteralReference(source);
+      return `<button class="research-source" data-research-source="${esc(source.path)}">${esc(source.path)} · JSON pointer <code>${esc(source.json_pointer)}</code></button>`
+        + (source.evidence === "author_confirmation" ? " · Author-confirmed adoption" : "")
+        + ` <code title="File SHA-256: ${esc(source.sha256)}; entry SHA-256: ${esc(source.entry_sha256)}">${esc(source.sha256.slice(0, 12))}</code>`;
+    }
+    const path = source.path || "Project baseline", label = path + (source.line ? ":" + source.line : "");
+    if (source.evidence === "github_decision") {
+      const repository = typeof source.url === "string" && /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/issues\/\d+#issuecomment-\d+$/.exec(source.url)?.[1];
+      const url = githubDiscussionUrl(source.url, repository, "comment");
+      return url ? `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : esc(label);
+    }
+    const location = source.sha256 && source.path && source.evidence !== "human_input"
+      ? `<button class="research-source" data-research-source="${esc(source.path)}" data-line="${Number(source.line) || 1}">${esc(label)}</button>`
+      : esc(label);
+    return location + (source.evidence === "author_confirmation" ? " · Author-confirmed adoption" : "")
+      + (source.sha256 ? ` <code title="${esc(source.sha256)}">${esc(source.sha256.slice(0, 12))}</code>` : "");
+  }).join(" · ");
+}
+function researchCoverage(title, items = []) {
+  if (!Array.isArray(items) || !items.length) return "";
+  return `<details open><summary>${esc(title)} (${items.length})</summary><ul>${items.map((item) =>
+    `<li>${typeof item === "string" ? esc(item) : `${researchLocations([item])}${item.reason ? ": " + esc(item.reason) : ""}`}</li>`).join("")}</ul></details>`;
+}
+function receivedSourceLocations(sources = []) {
+  if (!Array.isArray(sources)) return receivedLiteralReference(sources);
+  return sources.map((source) => {
+    if (!source || typeof source !== "object" || Array.isArray(source)) return receivedLiteralReference(source);
+    if (source.kind === "received_library" || source.json_pointer !== undefined || source.entry_sha256 !== undefined) {
+      return receivedLibrarySourceValid(source) ? researchLocations([{ path: source.path, sha256: source.sha256, kind: source.kind,
+        json_pointer: source.json_pointer, entry_sha256: source.entry_sha256, evidence: "received" }]) : receivedLiteralReference(source);
+    }
+    const path = source.path;
+    const local = typeof path === "string" && path && path.length <= 4096 && !/^(?:\/|[A-Za-z]:)|\\|\0/.test(path)
+      && !path.split("/").some((part) => part === "." || part === "..");
+    if (!local || !Number.isSafeInteger(source.line) || source.line < 1
+      || typeof source.sha256 !== "string" || !/^[a-f0-9]{64}$/i.test(source.sha256)) return receivedLiteralReference(source);
+    return researchLocations([{ path, line: source.line, sha256: source.sha256, evidence: "received" }]);
+  }).join(" · ");
+}
+function receivedLibrarySourceValid(source) {
+  return source.kind === "received_library" && source.path === "research/knowledge.json" && source.line === undefined
+    && typeof source.sha256 === "string" && /^[a-f0-9]{64}$/i.test(source.sha256)
+    && typeof source.entry_sha256 === "string" && /^[a-f0-9]{64}$/i.test(source.entry_sha256)
+    && typeof source.json_pointer === "string" && /^\/symbols\/(?:0|[1-9]\d{0,15})$/.test(source.json_pointer);
+}
+function receivedLiteralReference(value) {
+  let literal;
+  try { literal = JSON.stringify(value); } catch { literal = String(value); }
+  if (typeof literal !== "string") literal = String(value);
+  return `<span class="research-note">Unverified received reference: <code>${esc(literal.length > 2048 ? literal.slice(0, 2048) + "…" : literal)}</code></span>`;
+}
+function receivedResearchHtml(state = {}) {
+  const provenance = state.provenance || {}, questions = Array.isArray(state.received_confirmations)
+    ? state.received_confirmations.filter((question) => question && typeof question === "object" && !Array.isArray(question)) : [];
+  const symbols = Array.isArray(provenance.received_symbols) ? provenance.received_symbols : [];
+  const refs = provenance.received_references && typeof provenance.received_references === "object" ? Object.entries(provenance.received_references) : [];
+  const unverified = provenance.baseline_verified === false || ["received", "foreign", "malformed", "pending"].includes(provenance.record_state);
+  return `${unverified ? `<details open id="research-provenance"><summary>Unverified received research material</summary>
+    <p class="research-note">Received baselines, libraries and existing record references do not authorize notation. Trusted local knowledge and refusals remain in effect.</p>
+    ${provenance.warning ? `<p class="warn">${esc(provenance.warning)}</p>` : ""}
+    ${provenance.project_record_pending ? '<p class="warn">The project record is pending. Received bytes are retained.</p>' : ""}
+    ${symbols.length ? `<ul>${symbols.map((symbol) => {
+      if (!symbol || typeof symbol !== "object" && typeof symbol !== "string" || Array.isArray(symbol)) return `<li>${receivedLiteralReference(symbol)}</li>`;
+      const name = typeof symbol === "string" ? symbol : typeof symbol.notation === "string" ? symbol.notation
+        : typeof symbol.canonical === "string" ? symbol.canonical : "";
+      return `<li><b><code>${esc(name || "Received notation")}</code></b>
+        <p>Unverified · ${esc(typeof symbol.meaning === "string" && symbol.meaning ? symbol.meaning : "Meaning unresolved")}</p>
+        ${!name ? receivedLiteralReference(symbol) : ""}
+        ${typeof symbol === "object" && Object.prototype.hasOwnProperty.call(symbol, "sources") ? `<details><summary>Received source versions</summary>${receivedSourceLocations(symbol.sources)}</details>` : ""}</li>`;
+    }).join("")}</ul>` : ""}
+    ${refs.length ? `<details><summary>Unverified received record references</summary>${refs.map(([name, value]) => `<p><b>${esc(name)}</b></p><pre>${esc(typeof value === "string" ? value : JSON.stringify(value, null, 2))}</pre>`).join("")}</details>` : ""}
+    ${provenance.received_sha256 || provenance.received_project_key ? `<details><summary>Received record version</summary>
+      ${provenance.received_project_key ? `<p>Received project: <code>${esc(provenance.received_project_key)}</code></p>` : ""}
+      ${provenance.received_sha256 ? `<p>SHA-256: <code>${esc(provenance.received_sha256)}</code></p>` : ""}</details>` : ""}</details>` : ""}
+    <div id="research-received-confirmations">${questions.length ? `<p class="research-note">Answer these editor questions in ordinary chat. Name each notation when several questions are open. Silence grants no adoption.</p>
+      ${questions.map((question) => `<article class="received-confirmation research-entry" data-received-id="${esc(question.id || "")}"><b>Received notation: <code>${esc(question.notation || question.canonical || "Unknown notation")}</code></b>
+        <p>${esc(question.question || "May I adopt this received notation for this project? Its meaning remains unresolved unless you specify it.")}</p>
+        <details><summary>Received source version</summary>${receivedSourceLocations(question.sources || [])}</details></article>`).join("")}` : ""}</div>`;
+}
+function receivedScope() {
+  return JSON.stringify([P.projectKey, C.provider, C.session || null, C.receivedEpoch || 0]);
+}
+function captureReceivedDraft() {
+  if (!$("#chat-input")?.value) { RECEIVED.draft = null; return; }
+  if (!RECEIVED.draft) RECEIVED.draft = { scope: receivedScope(), ids: [...RECEIVED.current.ids], ambiguous: RECEIVED.current.ambiguous };
+}
+function receivedDraftInput() {
+  if (RECEIVED.draft?.stale) RECEIVED.draft = null;
+  captureReceivedDraft();
+}
+function receivedChatQuestionAmbiguous(log) {
+  for (const card of [...(log?.children || [])].reverse()) {
+    const classes = String(card.className || "").split(/\s+/);
+    if (classes.includes("user")) return false;
+    if (classes.includes("assistant")) return /[?？]/.test(card.dataset?.md || card.textContent || "");
+  }
+  return false;
+}
+function presentReceivedQuestions(state = {}) {
+  captureReceivedDraft();
+  const log = $("#chat-log"), ids = [];
+  let appended = false;
+  const ambiguous = receivedChatQuestionAmbiguous(log) || (state.proposals || []).some((proposal) => proposal.status === "pending");
+  if (log && typeof chatAppend === "function") {
+    for (const question of Array.isArray(state.received_confirmations) ? state.received_confirmations : []) {
+      if (!question || typeof question !== "object" || typeof question.id !== "string" || !question.id || ids.includes(question.id)) continue;
+      let card = [...log.querySelectorAll(".received-question")].find((element) => element.dataset.receivedId === question.id);
+      if (!card) {
+        card = chatAppend(`<b>Editor question about received notation: <code>${esc(question.notation || question.canonical || "Unknown notation")}</code></b>
+          <p>${esc(question.question || "May I adopt this received notation for this project?")}</p>
+          <p class="research-note">Reply in ordinary chat. Name each notation when several questions or Agent proposals are open.</p>
+          <details><summary>Received source version</summary>${receivedSourceLocations(question.sources || [])}</details>`, "card received-question");
+        if (card?.dataset) { card.dataset.receivedId = question.id; appended = true; }
+      }
+      if (card?.dataset?.receivedId === question.id) ids.push(question.id);
+    }
+  }
+  if (RECEIVED.draft && ids.length && JSON.stringify(RECEIVED.draft.ids) !== JSON.stringify(ids)) RECEIVED.draft.ambiguous = true;
+  RECEIVED.current = { scope: receivedScope(), ids, ambiguous: ids.length > 0 && ambiguous };
+  if (appended && typeof saveChatLog === "function") saveChatLog();
+}
+function markReceivedAmbiguous() {
+  RECEIVED.current.ambiguous = true;
+  if (RECEIVED.draft) RECEIVED.draft.ambiguous = true;
+}
+function markReceivedAiQuestion(text) {
+  if (/[?？]/.test(text) && (RECEIVED.current.ids.length || RECEIVED.draft?.ids.length)) markReceivedAmbiguous();
+}
+function receivedReplyContext() {
+  captureReceivedDraft();
+  const draft = RECEIVED.draft;
+  return { received_subjects: draft ? [...draft.ids] : [],
+    received_context_ambiguous: !!draft && !!(draft.ids.length || RECEIVED.current.ids.length)
+      && (draft.ambiguous || draft.scope !== receivedScope()) };
+}
+function researchTopicsHtml(records = {}) {
+  const topics = records.topics || [], pending = Math.max(0, Number(records.pending_count) || 0), errors = records.errors || [];
+  if (!topics.length && !pending && !errors.length) return "";
+  return `<details open id="research-topics"><summary>Research topics (${topics.length})</summary>
+    ${topics.length ? `<ul>${topics.map((topic) => `<li><b>${esc(topic.title)}</b>
+      ${topic.source_state === "unverified_received_reference" ? `<p class="warn">Unverified received reference (retained prefix)</p>
+        <p class="research-note">${esc(topic.source_warning || "The retained received prefix is reference material, not local author decisions or notation adoption.")} Later local entries keep their own source evidence.</p>` : ""}
+      <br>${researchLocations([topic])}</li>`).join("")}</ul>` : ""}
+    ${pending ? `<p class="research-note">${pending} topic update${pending === 1 ? "" : "s"} pending — not saved yet.</p>` : ""}
+    ${errors.map((error) => `<p class="err">${esc(typeof error === "string" ? error : error.message || "A topic update could not be saved.")}</p>`).join("")}
+    </details>`;
+}
+function githubDiscussionUrl(value, repository, kind = "issue") {
+  if (typeof value !== "string" || typeof repository !== "string" || !/^[\w.-]+\/[\w.-]+$/.test(repository)) return null;
+  try {
+    const url = new URL(value), base = "/" + repository.toLowerCase();
+    if (url.protocol !== "https:" || url.hostname !== "github.com" || url.username || url.password || url.port || url.search) return null;
+    const path = url.pathname.toLowerCase();
+    if (kind === "repository") return path.replace(/\/$/, "") === base && !url.hash ? url.href : null;
+    const rest = path.startsWith(base + "/issues/") ? path.slice(base.length + 8) : "";
+    return /^\d+$/.test(rest) && (kind === "comment" ? /^#issuecomment-\d+$/.test(url.hash)
+      : !url.hash || /^#issuecomment-\d+$/.test(url.hash)) ? url.href : null;
+  } catch { return null; }
+}
+function githubShareableProposals(state = {}) {
+  return (state.proposals || []).filter((proposal) => proposal.status === "pending" && proposal.needs_details === false
+    && proposal.candidate_kind === "identifier"
+    && typeof proposal.id === "string" && proposal.id && Number.isInteger(proposal.revision) && proposal.revision > 0
+    && typeof proposal.content_hash === "string" && /^[a-f0-9]{64}$/.test(proposal.content_hash)
+    && typeof proposal.source_expression === "string"
+    && ["notation", "definition", "scope", "reason"].every((key) => typeof proposal[key] === "string" && proposal[key].trim()));
+}
+function githubProposalShareHtml(state = {}) {
+  const discussion = state.github_discussion || {}, proposals = githubShareableProposals(state);
+  const topics = Array.isArray(discussion.topics) ? discussion.topics : [];
+  const ready = discussion.mode === "github" && !!discussion.bound_repository && topics.length > 0 && proposals.length > 0;
+  return `<details open id="research-github-proposals" data-repository="${esc(discussion.bound_repository || "")}"><summary>Share notation proposals on GitHub</summary>
+    <p class="research-note">Sharing records these exact proposal versions for human discussion. It does not approve or adopt notation.</p>
+    <p class="research-note">Repository for this selection: <code>${esc(discussion.bound_repository || "None")}</code></p>
+    ${discussion.mode !== "github" || !discussion.bound_repository ? '<p class="research-note">Save GitHub discussion mode with the existing bound repository before sharing.</p>' : ""}
+    ${!topics.length ? '<p class="research-note">Record a research topic first. Sharing requires an existing topic selected by the author.</p>' : ""}
+    ${!proposals.length ? '<p class="research-note">No complete pending proposals are available. Complete each identifier candidate’s definition, scope and reason first. A source expression is optional for new notation.</p>' : ""}
+    <label>Research topic <select id="research-github-topic"${ready ? "" : " disabled"}><option value="">Choose an existing research topic</option>
+      ${topics.map((topic) => `<option value="${esc(topic.id)}">${esc(topic.title || topic.id)}</option>`).join("")}</select></label>
+    ${proposals.length ? `<ul>${proposals.map((proposal) => `<li><label><input type="checkbox" class="research-github-proposal" value="${esc(proposal.id)}"
+      data-revision="${proposal.revision}" data-content-hash="${esc(proposal.content_hash)}"${ready ? "" : " disabled"}> <code>${esc(proposal.notation)}</code> (version ${proposal.revision})</label></li>`).join("")}</ul>` : ""}
+    <button id="research-github-share"${ready ? "" : " disabled"}>Share selected proposals</button>
+    <button id="research-github-refresh">Refresh proposal choices</button></details>`;
+}
+function refreshGitHubProposalChoices() {
+  if (RESEARCH.busy) return;
+  const target = $("#research-github-proposals");
+  if (target) target.outerHTML = githubProposalShareHtml(RESEARCH.state || {});
+  researchMessage("Proposal choices refreshed. Choose a topic and select current proposal versions.");
+}
+function githubProposalDraft() {
+  const topic = $("#research-github-topic"), report = $("#research-report");
+  return { topic_id: topic?.value || "", subjects: report ? [...report.querySelectorAll(".research-github-proposal:checked")]
+    .map((input) => ({ id: input.value, revision: Number(input.dataset.revision), content_hash: input.dataset.contentHash })) : [] };
+}
+function githubProposalDraftDirty() {
+  const draft = githubProposalDraft();
+  return !!draft.topic_id || draft.subjects.length > 0;
+}
+async function shareGitHubProposals() {
+  if (RESEARCH.busy) return;
+  if (C.job) return researchMessage("Wait for the current Turn to finish before sharing proposals.", true);
+  if (!P.projectKey) return researchMessage("Wait for the project to load.", true);
+  if (researchCorrectionsDirty()) return researchMessage("Save the baseline corrections before sharing proposals.", true);
+  if (researchDiscussionDirty()) return researchMessage("Save the discussion settings before sharing proposals.", true);
+  const state = RESEARCH.state || {}, discussion = state.github_discussion || {};
+  if (discussion.mode !== "github" || !discussion.bound_repository) return researchMessage("Save GitHub discussion mode with the existing bound repository before sharing.", true);
+  const visibleRepository = $("#research-github-proposals")?.dataset.repository ?? RESEARCH.rendered?.github_discussion?.bound_repository;
+  if (visibleRepository !== discussion.bound_repository) return researchMessage("The repository binding changed. Refresh proposal choices before sharing.", true);
+  const draft = githubProposalDraft();
+  if (!draft.topic_id || !(discussion.topics || []).some((topic) => topic.id === draft.topic_id)) {
+    return researchMessage("Choose an existing research topic before sharing.", true);
+  }
+  if (!draft.subjects.length) return researchMessage("Select at least one complete pending proposal.", true);
+  const proposals = githubShareableProposals(state);
+  if (draft.subjects.some((subject) => !proposals.some((proposal) => proposal.id === subject.id
+    && proposal.revision === subject.revision && proposal.content_hash === subject.content_hash))) {
+    return researchMessage("A selected proposal changed. Refresh proposal choices and review its current version before sharing.", true);
+  }
+  researchBusy(true);
+  researchMessage("Saving proposal batch…");
+  try {
+    const saved = await Q.shareGitHubProposals({ project_key: P.projectKey, topic_id: draft.topic_id, subjects: draft.subjects });
+    if (saved.error) return researchMessage(saved.error, true);
+    renderResearch(saved, true);
+    researchMessage("Proposal batch queued. Check its publication status below.");
+  } finally { researchBusy(false); }
+}
+function githubProposalBatchesHtml(discussion = {}) {
+  const batches = Array.isArray(discussion.proposal_batches) ? discussion.proposal_batches : [];
+  if (!batches.length) return "";
+  const repository = discussion.bound_repository || "";
+  return `<details open id="research-github-batches"><summary>Shared proposal batches (${batches.length})</summary>${batches.map((batch) => {
+    const issue = githubDiscussionUrl(batch.issue_url, repository), comment = githubDiscussionUrl(batch.comment_url, repository, "comment");
+    const published = batch.publication === "published" && issue && comment && comment.split("#")[0] === issue.split("#")[0];
+    const publication = batch.publication === "stale" ? "Proposal version changed — review the current candidate before sharing again."
+      : batch.publication === "pending" ? "Waiting to publish the proposal batch."
+        : published ? "Batch published on GitHub. Sharing is not approval." : "Publication outcome unknown — check before sharing again.";
+    return `<article class="research-entry" data-github-batch="${esc(batch.id || "")}"><b>${esc(batch.topic_title || "Research topic")}</b>
+      <p>Batch: <code>${esc(batch.id || "Unknown")}</code></p><p>${esc(publication)}</p>
+      ${batch.error ? `<p class="err">${esc(batch.error)}</p>` : ""}
+      ${comment ? `<a href="${esc(comment)}" target="_blank" rel="noopener noreferrer">Open proposal batch comment</a>` : ""}
+      <p class="research-note">When this is the only visible batch, an ordinary reply to its proposals is enough. If several batches could match, put <code>prism-batch:${esc(batch.id || "")}</code> on the first line, then write your decision in ordinary language.</p>
+      ${(Array.isArray(batch.proposals) ? batch.proposals : []).map((proposal) => `<details><summary><code>${esc(proposal.notation || proposal.canonical || proposal.id || "Candidate")}</code> (version ${esc(String(proposal.revision || "?"))})</summary>
+        <dl>${[ ["Definition", "definition"], ["Scope", "scope"], ["Reason", "reason"], ["Source expression", "source_expression"] ]
+          .map(([label, key]) => `<dt>${label}</dt><dd>${esc(proposal[key] || "Needs details")}</dd>`).join("")}</dl></details>`).join("")}</article>`;
+  }).join("")}</details>`;
+}
+function githubDecisionEvidenceHtml(state = {}) {
+  const decisions = (Array.isArray(state.github_decisions) ? state.github_decisions : []).filter((decision) =>
+    decision.channel === "github_comment" && typeof decision.human_text === "string" && decision.author?.login
+    && githubDiscussionUrl(decision.comment_url, decision.repository?.full_name, "comment"));
+  if (!decisions.length) return "";
+  return `<details open><summary>Verified GitHub decisions (${decisions.length})</summary>${decisions.map((decision) => {
+    const url = githubDiscussionUrl(decision.comment_url, decision.repository.full_name, "comment");
+    const subjects = Array.isArray(decision.subjects) ? decision.subjects : [];
+    const proposal = (state.proposals || []).find((candidate) => candidate.id === decision.proposal_id
+      && candidate.revision === decision.revision && candidate.content_hash === decision.content_hash);
+    const instruction = !["notation_decision", "decision"].includes(decision.kind);
+    const label = instruction ? `Direct notation instruction: ${decision.kind || "Human instruction"}`
+      : `Verified GitHub decision: ${decision.decision || "Human decision"}${proposal ? ` — ${proposal.notation || proposal.canonical} (version ${proposal.revision})` : ""}`;
+    return `<article class="research-entry" data-github-decision="${esc(decision.id || "")}"><b>${esc(label)}</b>
+      <p><a href="${esc(url)}" target="_blank" rel="noopener noreferrer">Original comment by ${esc(decision.author.login)}</a>
+        ${decision.updated_at ? ` · Comment version: ${esc(decision.updated_at)}` : ""}</p>
+      <details><summary>Published proposal context</summary><p>${subjects.map((subject) => `<code>${esc(subject.id)}</code> (version ${esc(String(subject.revision))}, <code>${esc(subject.content_hash)}</code>)`).join(" · ")}</p>
+        <p>Batch: <code>${esc(decision.batch_id || "")}</code></p></details>
+      <details open><summary>Original human text</summary><pre>${esc(decision.human_text)}</pre></details></article>`;
+  }).join("")}</details>`;
+}
+function githubDiscussionStatusHtml(discussion = {}) {
+  const repository = discussion.repository?.full_name || discussion.bound_repository || "";
+  const topics = Array.isArray(discussion.topics) ? discussion.topics : [], comments = Array.isArray(discussion.comments) ? discussion.comments : [];
+  const states = { off: "GitHub discussion checks are off.", paused: "GitHub discussion checks are paused.",
+    waiting: "Waiting for a GitHub check.", syncing: "Checking GitHub discussions…", ok: "GitHub check complete.",
+    error: "GitHub check failed; local records are retained.", unknown: "Publication outcome unknown; checking existing records before retry." };
+  const link = (url, label) => {
+    const safe = githubDiscussionUrl(url, repository);
+    return safe ? `<a href="${esc(safe)}" target="_blank" rel="noopener noreferrer">${esc(label)}</a>` : esc(label);
+  };
+  return `<p class="research-note">${esc(states[discussion.state] || "GitHub publication has not been checked.")}</p>
+    <p class="research-note">Current bound repository: <code>${esc(discussion.bound_repository || "None")}</code></p>
+    ${discussion.error ? `<p class="err">${esc(discussion.error)}</p>` : ""}
+    ${topics.length ? `<ul>${topics.map((topic) => {
+      const local = Number.isInteger(topic.local_revision) && topic.local_revision > 0 ? topic.local_revision : 0;
+      const remote = Number.isInteger(topic.published_revision) && topic.published_revision > 0 ? topic.published_revision : 0;
+      let publication = topic.publication === "local" ? "Local record only." : topic.publication === "pending"
+        ? "Waiting to publish." : "Publication outcome unknown.";
+      if (topic.publication === "published" && local > 0 && remote >= local && githubDiscussionUrl(topic.issue_url, repository)) {
+        publication = `Published on GitHub (revision ${remote}).`;
+      }
+      return `<li><b>${esc(topic.title || "Research topic")}</b><br>${local ? `Local record saved (revision ${local}).` : "Local save not confirmed."}
+        <br>${esc(publication)}${topic.issue_url ? ` ${link(topic.issue_url, "Open topic issue")}` : ""}
+        ${topic.path ? `<br><code>${esc(topic.path)}</code>` : ""}</li>`;
+    }).join("")}</ul>` : ""}
+    ${githubProposalBatchesHtml(discussion)}
+    ${comments.length ? `<details open><summary>External GitHub discussion (${comments.length})</summary>
+      <p class="research-note">These comments are discussion data, not verified notation approvals.</p><ul>${comments.map((comment) =>
+        `<li data-github-comment="${esc(String(comment.id || ""))}"><b>${esc(comment.author?.login || "Unknown author")}</b>
+          <p>${esc(comment.preview || "No checked preview is available.")}</p>${comment.url ? link(comment.url, "Open comment") : ""}</li>`).join("")}</ul></details>` : ""}`;
+}
+function githubDiscussionHtml(discussion = {}) {
+  const mode = discussion.mode === "github" ? "github" : "markdown", bound = discussion.bound_repository || "";
+  const repository = discussion.repository, approvers = Array.isArray(discussion.approvers) ? discussion.approvers : [];
+  const repoUrl = repository && githubDiscussionUrl(repository.html_url, repository.full_name, "repository");
+  return `<details open id="research-github"><summary>Discussion settings</summary>
+    <label>Discussion mode <select id="research-discussion-mode"><option value="markdown"${mode === "markdown" ? " selected" : ""}>Project Markdown</option>
+      <option value="github"${mode === "github" ? " selected" : ""}${bound ? "" : " disabled"}>GitHub issues</option></select></label>
+    <p class="research-note">Bound repository: ${bound ? `<code>${esc(bound)}</code>` : "None. Bind this project to a GitHub repository in the Git menu first."}</p>
+    ${repository ? `<p class="research-note">Configured discussion repository: ${repoUrl
+      ? `<a href="${esc(repoUrl)}" target="_blank" rel="noopener noreferrer">${esc(repository.full_name)}</a>` : esc(repository.full_name || "Unverified")}</p>` : ""}
+    <p class="research-note">Connection: existing GitHub login.</p>
+    <label>Designated human GitHub accounts <input id="research-discussion-approvers" type="text" value="${esc(approvers.join(", "))}" placeholder="account-one, account-two"></label>
+    <p class="research-note">These accounts may decide shared proposal versions through verified human GitHub replies. Settings and unverified GitHub comments do not grant notation permission.</p>
+    <div class="research-actions"><button id="research-discussion-save">Save discussion settings</button></div>
+    <div id="research-github-status">${githubDiscussionStatusHtml(discussion)}</div></details>`;
+}
+function discussionApprovers(text) {
+  return [...new Set(String(text || "").split(/[\s,]+/).filter(Boolean).map((login) => login.toLowerCase()))].sort();
+}
+function researchDiscussionDraft() {
+  const mode = $("#research-discussion-mode"), approvers = $("#research-discussion-approvers");
+  return mode && approvers ? { mode: mode.value, approvers: approvers.value } : null;
+}
+function researchDiscussionDirty() {
+  const draft = researchDiscussionDraft(), saved = RESEARCH.rendered?.github_discussion;
+  return !!draft && !!saved && (draft.mode !== saved.mode
+    || discussionApprovers(draft.approvers).join(",") !== discussionApprovers((saved.approvers || []).join(",")).join(","));
+}
+async function saveResearchDiscussion() {
+  if (RESEARCH.busy) return;
+  if (C.job) return researchMessage("Wait for the current Turn to finish before changing discussion settings.", true);
+  if (!P.projectKey) return researchMessage("Wait for the project to load.", true);
+  if (researchCorrectionsDirty()) return researchMessage("Save the baseline corrections before changing discussion settings.", true);
+  const draft = researchDiscussionDraft(), saved = RESEARCH.rendered?.github_discussion;
+  if (!draft || !saved) return researchMessage("Wait for discussion settings to load.", true);
+  if (draft.mode === "github" && !saved.bound_repository) {
+    return researchMessage("Bind this project to a GitHub repository in the Git menu first.", true);
+  }
+  if (!researchDiscussionDirty()) return researchMessage("No discussion settings to save.");
+  researchBusy(true);
+  researchMessage("Saving discussion settings…");
+  try {
+    const state = await Q.configureDiscussion({ project_key: P.projectKey, mode: draft.mode,
+      approvers: discussionApprovers(draft.approvers),
+      ...(draft.mode === "github" ? { expected_repository: saved.bound_repository } : {}) });
+    if (state.error) return researchMessage(state.error, true);
+    renderResearch(state, true);
+    researchMessage("Discussion settings saved.");
+  } finally { researchBusy(false); }
+}
+function showResearchRecord(event) {
+  const log = $("#chat-log");
+  if (event.t === "research_record_error") {
+    const message = event.message || "The topic update could not be saved.", key = (event.topic_id || event.path || "") + ":" + message;
+    if ([...log.querySelectorAll(".research-record-error")].some((card) => card.dataset.researchRecordError === key)) return;
+    chatAppend(`<div class="research-record-error err" data-research-record-error="${esc(key)}">Research topic update pending; it was not saved.<p>${esc(message)}</p></div>`, "card");
+    return;
+  }
+  if (!event.topic_id || !event.path || !event.sha256 || !Number.isInteger(event.revision) || event.revision < 1) return;
+  const key = event.topic_id + ":" + event.revision;
+  if ([...log.querySelectorAll(".research-record")].some((card) => card.dataset.researchRecord === key)) return;
+  chatAppend(`<div class="research-record" data-research-record="${esc(key)}"><b>Research topic saved: ${esc(event.title || "Research topic")}</b>
+    <p><a class="src" role="link" tabindex="0" data-file="${esc(event.path)}">${esc(event.path)}</a></p></div>`, "card");
+}
+function researchDefinitions(entry) {
+  const definitions = Array.isArray(entry.definitions) ? entry.definitions : [];
+  if (!definitions.length) return "";
+  const evidence = entry.definition_sources || [];
+  return `<div class="research-definitions"><b>Source definitions</b><ul>${definitions.map((meaning) =>
+    `<li>${esc(meaning)}${evidence.filter((source) => source.meaning === meaning).map((source) =>
+      `<br>${researchLocations([source])}`).join("")}</li>`).join("")}</ul></div>`;
+}
+function renderResearch(state, showReport = false) {
+  RESEARCH.state = state;
+  if (state.provenance || state.received_confirmations) presentReceivedQuestions(state);
+  const received = $("#research-received"), receivedHtml = receivedResearchHtml(state);
+  if (received && received.innerHTML !== receivedHtml) received.innerHTML = receivedHtml;
+  updateNotationProposalCards(state);
+  RESEARCH.rendered = state;
+  $("#research").hidden = false;
+  $("#research-summary").textContent = researchSummary(state);
+  $("#research-invitation").hidden = !!state.initialized;
+  const report = $("#research-report");
+  report.hidden = !state.initialized;
+  if (!state.initialized) {
+    report.innerHTML = "";
+    researchOpen(showReport || !RESEARCH.deferred);
+    return;
+  }
+  const terms = state.terms || [], symbols = state.symbols || [], sources = state.sources || [], coverage = state.coverage || {};
+  const proposals = state.proposals || [];
+  report.innerHTML = `<p>${state.provenance?.baseline_verified === false ? "Trusted local knowledge is retained. The received baseline is unverified." : "Baseline saved. Existing manuscript notation was registered without another approval."}</p>
+    <p class="research-note">This report records the research baseline. It does not indicate that new-notation protection is supported by a backend.</p>
+    ${state.question ? `<p><b>Research question / ideas:</b> ${esc(state.question)}</p>` : ""}
+    <p class="research-note">Discussion records: ${esc((state.discussion || {}).mode || "markdown")}</p>
+    ${githubDiscussionHtml(state.github_discussion)}
+    ${githubProposalShareHtml(state)}
+    <div id="research-github-decisions">${githubDecisionEvidenceHtml(state)}</div>
+    ${researchTopicsHtml(state.discussion_records)}
+    ${coverage.main ? `<p class="research-note">Main manuscript: <code>${esc(coverage.main)}</code></p>` : ""}
+    <details open><summary>Sources read (${sources.length})</summary>${sources.length ? `<ul>${sources.map((source) =>
+      `<li>${researchLocations([source])}<br><code>${esc(source.sha256 || "")}</code></li>`).join("")}</ul>` : `<p>No manuscript sources. Empty libraries are valid.</p>`}</details>
+    ${researchCoverage("Excluded sources", coverage.excluded)}
+    ${researchCoverage("Unread sources", coverage.unread)}
+    ${researchCoverage("Extraction gaps", coverage.gaps)}
+    ${researchCoverage("Incremental extraction gaps", state.incremental_gaps)}
+    <div id="research-proposals">${proposals.length ? `<details open><summary>Notation candidates (${proposals.length})</summary>${proposals.map((proposal) => notationProposalHtml(proposal, state.github_decisions)).join("")}</details>` : ""}</div>
+    ${notationPoliciesHtml(state)}
+    ${(state.unverified_symbols || []).length ? `<details open id="research-unverified"><summary>Unverified notation (${state.unverified_symbols.length})</summary>
+      <p class="research-note">The source text is preserved. These entries have no verified baseline or human-edit evidence and have not been adopted.</p>
+      <ul>${state.unverified_symbols.map((symbol) => `<li><code>${esc(symbol.notation)}</code><br>${researchLocations(symbol.sources)}</li>`).join("")}</ul></details>` : ""}
+    ${(state.maintenance_notices || []).length ? `<details id="research-maintenance"><summary>Notation updates (${state.maintenance_notices.length})</summary><ul>${state.maintenance_notices.map((notice) =>
+      `<li data-notice="${esc(notice.id)}">${esc(notice.message || notice.notation)}<br>${researchLocations(notice.sources)}</li>`).join("")}</ul></details>` : ""}
+    <details open><summary>Terms (${terms.length})</summary>${terms.length ? terms.map((term) => `<div class="research-entry">
+      <label>${esc(term.name)} <span class="research-note">${esc(term.status || "unresolved")}</span>
+        <textarea class="research-term" data-name="${esc(term.name)}" rows="2" aria-label="Meaning of ${esc(term.name)}">${esc(term.meaning || "")}</textarea>
+      </label>${researchDefinitions(term)}
+      <div class="research-note">${researchLocations(term.sources)}</div></div>`).join("") : `<p>No terms recorded.</p>`}</details>
+    <details><summary>Complete notation (${symbols.length})</summary>${symbols.length ? symbols.map((symbol) => `<div class="research-entry">
+      <label><code>${esc(symbol.notation)}</code> <span class="research-note">${esc(symbol.status || "unresolved")}</span>
+        <textarea class="research-symbol" data-notation="${esc(symbol.notation)}" rows="2" aria-label="Meaning of ${esc(symbol.notation)}">${esc(symbol.meaning || "")}</textarea>
+      </label>
+      ${researchDefinitions(symbol)}
+      <div class="research-note">${researchLocations(symbol.sources)}</div>
+      <label class="research-exclude"><input class="research-symbol-exclude" type="checkbox" value="${esc(symbol.notation)}"> Remove extraction error from this report</label>
+    </div>`).join("") : `<p>No symbols recorded.</p>`}</details>
+    <label>Correction notes <textarea id="research-notes" rows="2"></textarea></label>
+    <p class="research-note">Corrections retain the extraction sources. Removing an entry here does not edit your manuscript.</p>
+    <div class="research-actions"><button id="research-save">Save corrections</button></div>
+    ${(state.corrections || []).length ? `<details><summary>Saved corrections (${state.corrections.length})</summary><ul>${state.corrections.map((correction) =>
+      `<li>${esc(correction.notes || "Extraction entries corrected.")}</li>`).join("")}</ul></details>` : ""}`;
+  if (showReport) researchOpen(true);
+}
+function researchCorrectionsDirty() {
+  const rendered = RESEARCH.rendered;
+  if (!rendered?.initialized) return false;
+  return [...$("#research-report").querySelectorAll(".research-term")].some((input) =>
+    input.value !== ((rendered.terms || []).find((term) => term.name === input.dataset.name)?.meaning || ""))
+    || [...$("#research-report").querySelectorAll(".research-symbol")].some((input) =>
+      input.value !== ((rendered.symbols || []).find((symbol) => symbol.notation === input.dataset.notation)?.meaning || ""))
+    || !!$("#research-report").querySelector(".research-symbol-exclude:checked")
+    || !!$("#research-notes")?.value.trim();
+}
+async function loadResearch() {
+  if (RESEARCH.busy) return;
+  const request = ++RESEARCH.request;
+  const state = await Q.research();
+  if (request !== RESEARCH.request) return;
+  if (state.error) {
+    $("#research").hidden = false;
+    $("#research-summary").textContent = "Unavailable";
+    researchOpen(true);
+    return researchMessage(state.error, true);
+  }
+  if (state.project_key && !bindProject(state.project_key)) return;
+  if (state.provenance || state.received_confirmations) presentReceivedQuestions(state);
+  const fresh = (state.maintenance_notices || []).filter((notice) => !RESEARCH.seen.has(notice.id));
+  for (const notice of state.maintenance_notices || []) RESEARCH.seen.add(notice.id);
+  const alreadyLoaded = RESEARCH.state !== null;
+  RESEARCH.state = state;
+  const correctionsDirty = researchCorrectionsDirty();
+  const discussionDirty = !!RESEARCH.rendered?.github_discussion && researchDiscussionDirty();
+  const shareDirty = !!RESEARCH.rendered?.proposals && githubProposalDraftDirty();
+  if (!correctionsDirty && !discussionDirty && !shareDirty) renderResearch(state);
+  else {
+    $("#research-summary").textContent = researchSummary(state) + (correctionsDirty
+      ? " · report has unsaved corrections" : discussionDirty ? " · discussion settings are not saved" : " · proposal selection retained");
+    const target = state.github_discussion && $("#research-github-status");
+    if (target) {
+      const html = githubDiscussionStatusHtml(state.github_discussion);
+      if (target.innerHTML !== html) target.innerHTML = html;
+    }
+    const evidence = Array.isArray(state.github_decisions) && $("#research-github-decisions");
+    if (evidence) {
+      const html = githubDecisionEvidenceHtml(state);
+      if (evidence.innerHTML !== html) evidence.innerHTML = html;
+    }
+    const proposals = Array.isArray(state.proposals) && $("#research-proposals");
+    if (proposals) {
+      const html = (state.proposals || []).map((proposal) => notationProposalHtml(proposal, state.github_decisions)).join("");
+      if (proposals.innerHTML !== html) proposals.innerHTML = html;
+    }
+    if (Array.isArray(state.proposals) && $("#chat-log")) updateNotationProposalCards(state);
+    const received = (state.provenance || state.received_confirmations) && $("#research-received");
+    if (received) {
+      const html = receivedResearchHtml(state);
+      if (received.innerHTML !== html) received.innerHTML = html;
+    }
+  }
+  if (alreadyLoaded && fresh.length) {
+    const message = fresh.map((notice) => notice.message || notice.notation).join("\n");
+    researchMessage(message);
+    toast(message + "\nSee Research baseline for source evidence.", false);
+  }
+  return true;
+}
+$("#research-toggle").onclick = () => {
+  const opening = $("#research-body").hidden;
+  if (opening) { RESEARCH.deferred = false; loadResearch(); }
+  researchOpen(opening);
+};
+$("#research-received").onclick = (event) => {
+  const source = event.target.closest("[data-research-source]");
+  if (source) openFile(source.dataset.researchSource, source.dataset.line ? Number(source.dataset.line) || 1 : undefined);
+};
+$("#research-later").onclick = () => { RESEARCH.deferred = true; researchOpen(false); };
+$("#research-initialize").onclick = async () => {
+  if (RESEARCH.busy) return;
+  if (C.job) return researchMessage("Wait for the current Turn to finish before initializing.", true);
+  if (!P.projectKey) return researchMessage("Wait for the project to load.", true);
+  researchBusy(true);
+  researchMessage("Reading the manuscript and saving the baseline…");
+  try {
+    const saved = await TABS.saveAll();
+    if (!saved.ok) return researchMessage(Tabs.unsavedWhy(saved), true);
+    const state = await Q.initializeResearch({ project_key: P.projectKey, question: $("#research-question").value,
+      notation: $("#research-notation").value, provider: C.provider });
+    if (state.error) return researchMessage(state.error, true);
+    renderResearch(state, true);
+    researchMessage("Research baseline saved.");
+  } finally { researchBusy(false); }
+};
+$("#research-report").onclick = async (event) => {
+  const source = event.target.closest("[data-research-source]");
+  if (source) return openFile(source.dataset.researchSource, source.dataset.line ? Number(source.dataset.line) || 1 : undefined);
+  if (event.target.closest("#research-discussion-save")) return saveResearchDiscussion();
+  if (event.target.closest("#research-github-share")) return shareGitHubProposals();
+  if (event.target.closest("#research-github-refresh")) return refreshGitHubProposalChoices();
+  if (!event.target.closest("#research-save") || RESEARCH.busy) return;
+  if (C.job) return researchMessage("Wait for the current Turn to finish before correcting the baseline.", true);
+  const term_updates = [...$("#research-report").querySelectorAll(".research-term")]
+    .filter((input) => input.value !== ((RESEARCH.rendered.terms || []).find((term) => term.name === input.dataset.name)?.meaning || ""))
+    .map((input) => ({ name: input.dataset.name, meaning: input.value }));
+  const symbol_updates = [...$("#research-report").querySelectorAll(".research-symbol")]
+    .filter((input) => input.value !== ((RESEARCH.rendered.symbols || []).find((symbol) => symbol.notation === input.dataset.notation)?.meaning || ""))
+    .map((input) => ({ notation: input.dataset.notation, meaning: input.value }));
+  const excluded_symbols = [...$("#research-report").querySelectorAll(".research-symbol-exclude:checked")].map((input) => input.value);
+  const notes = $("#research-notes").value;
+  if (!term_updates.length && !symbol_updates.length && !excluded_symbols.length && !notes.trim()) return researchMessage("No corrections to save.");
+  const discussionDraft = researchDiscussionDirty() ? researchDiscussionDraft() : null;
+  researchBusy(true);
+  researchMessage("Saving corrections…");
+  try {
+    const state = await Q.correctResearch({ project_key: P.projectKey, term_updates, symbol_updates, excluded_symbols, notes });
+    if (state.error) return researchMessage(state.error, true);
+    renderResearch(state, true);
+    if (discussionDraft) {
+      $("#research-discussion-mode").value = discussionDraft.mode;
+      $("#research-discussion-approvers").value = discussionDraft.approvers;
+    }
+    researchMessage("Corrections saved.");
+  } finally { researchBusy(false); }
+};
 // Settings saved before providers existed belong to Claude Code.
 // Where each is kept: per project and provider, or per provider (chatlogic.js).
 const conversationKey = (k, provider = C.provider) => ChatLogic.storageKey(k, P.projectKey, provider);
@@ -1969,6 +2633,7 @@ function loadProvider() {
   const saved = provGet("log");
   restoreChatLog(saved || "");
   if (!saved) chatIntro();
+  if (RESEARCH.state?.received_confirmations) presentReceivedQuestions(RESEARCH.state);
 }
 
 function modelEfforts() {
@@ -2251,6 +2916,7 @@ function mentionHtml(text) {
   return esc(text).replace(/(^|\s)(@[^\s@]+)/g, '$1<span class="mention">$2</span>');
 }
 $("#chat-input").addEventListener("input", updateScope);
+$("#chat-input").addEventListener("input", receivedDraftInput);
 $("#chat-mode").addEventListener("change", updateScope);
 
 // Insert a mention at the caret (⌘L, or picking one from the @ menu).
@@ -2568,9 +3234,12 @@ async function chatSend() {
   try { return await sendMessage(); } finally { C.sending = false; }
 }
 async function sendMessage() {
+  const receivedContext = receivedReplyContext(), receivedDraft = RECEIVED.draft;
+  const replyScope = receivedScope();
+  const humanText = $("#chat-input").value;
   if (C.configSaving) await C.configSaving;
   if (prov().modelsPending) await prov().modelsPending;
-  const text = $("#chat-input").value.trim();
+  const text = humanText.trim();
   if (!text) return;
   const activeFile = S.active;                 // capture before saving or fetching references
   $("#slash-menu").hidden = true;
@@ -2594,10 +3263,18 @@ async function sendMessage() {
   const { prompt, scope } = ChatLogic.compose({ text, refs, attached, mentions, mode });
   const provider = C.provider;
   if (!P.projectKey) return toast("Wait for the project identity to load.");
-  const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
-    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path), active_file: activeFile });
-  if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
-  if ($("#chat-input").value.trim() === text) $("#chat-input").value = ""; updateScope();
+  if (replyScope !== receivedScope()) return chatAppend('<div class="err">The conversation changed while preparing this reply. Review the current source question and send again.</div>', "card");
+  const r = await Q.agent({ prompt, human_text: humanText, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
+    project_key: P.projectKey, attachments: sentFiles.map((f) => f.path), active_file: activeFile, ...receivedContext });
+  if (r.error) {
+    if (r._status === 409 && receivedContext.received_subjects.length) {
+      if (RECEIVED.draft === receivedDraft && receivedDraft) receivedDraft.stale = true;
+      await loadResearch();
+      researchMessage("The received source question changed. Review the updated question, then edit your reply before sending again.", true);
+    }
+    return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
+  }
+  if ($("#chat-input").value === humanText) { $("#chat-input").value = ""; RECEIVED.draft = null; } updateScope();
   const sentIds = new Set(sentFiles.map((f) => f.id));
   ATT.files = ATT.files.filter((f) => !sentIds.has(f.id)); ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
@@ -2673,6 +3350,7 @@ async function followTurn(job, provider, mode) {
         if (!s.shown) think.pre.remove();
         think.box.open = false; think = null;
       } else if (s.draw === "message") {
+        markReceivedAiQuestion(s.text);
         let el = messages.get(s.id);
         if (!el) messages.set(s.id, el = chatAppend("", "msg assistant"));
         replies.set(el, s.text);
@@ -2696,6 +3374,16 @@ async function followTurn(job, provider, mode) {
         const x = live.get(s.id);
         if (x) { draw(false); x.box.open = false; live.delete(s.id); }
       } else if (s.draw === "build") showBuild(s.event.result);         // the agent compiled
+      else if (s.draw === "notation_proposal") {
+        if (s.event.proposal?.status === "pending") { markReceivedAmbiguous(); chatAppend(notationProposalHtml(s.event.proposal), "card"); }
+      }
+      else if (s.draw === "notation_decision") {
+        const decision = s.event.decision;
+        const status = decision.decision === "approved" ? "approved" : decision.decision === "pending" ? "reopened for discussion; still pending" : "rejected";
+        chatAppend(`<div class="notation-decision" data-decision-id="${esc(decision.id)}">Notation ${status}. Your chat decision was saved.</div>`, "card");
+      }
+      else if (s.draw === "notation_clarification") chatAppend(`<div class="notation-clarification">${esc(s.event.message || "Clarify the undecided notation item in chat.")}</div>`, "card");
+      else if (s.draw === "research_record" || s.draw === "research_record_error") showResearchRecord(s.event);
       else if (s.draw === "permission") showPermission(job, s.event);
       else if (s.draw === "permission_resolved") resolvePermissionCard(job, s.event);
       else if (s.draw === "rate") {
@@ -2747,6 +3435,7 @@ async function followTurn(job, provider, mode) {
     clearInterval(timer);
     show(t.end(), false); replies.flush(); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
     C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
+    loadResearch();
     renderModelControls();
     for (const b of log.querySelectorAll(".permission-actions button")) b.disabled = true;
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
@@ -2927,6 +3616,8 @@ function renderTurnCard(e) {
 }
 
 $("#chat-log").addEventListener("click", async (ev) => {
+  const receivedSource = ev.target.closest(".received-question [data-research-source]");
+  if (receivedSource) return openFile(receivedSource.dataset.researchSource, receivedSource.dataset.line ? Number(receivedSource.dataset.line) || 1 : undefined);
   const label = ev.target.closest("a[data-label]");
   if (label) {
     ev.preventDefault();
@@ -3061,6 +3752,7 @@ function setProvider(id, quiet) {
   C.provider = id; store.set("chat.provider", id); loadProvider(); loadAccount();
   catalog = null;
   $("#chat-provider").value = id;
+  renderNotationGuard();
   $("#quota").hidden = !p.usage_limits;
   if (p.usage_limits) { renderQuota(p.usage || { rate: null, stale: true }); checkUsage(true, false); }
   renderModelControls(); loadModels();
@@ -3079,6 +3771,7 @@ function renderProviders(info) {
   // empty menu and say how to get the new server, instead of showing a blank box.
   $("#chat-provider").hidden = !P.list.length;
   if (!P.list.length) {
+    renderNotationGuard();
     chatAppend(`<div class="warn">The prism-local server is older than this page. Close every
       Prism page for this project, wait about 10 seconds, and open it again to restart it.</div>`, "card");
     return;
@@ -3189,11 +3882,13 @@ $("#chat-input").addEventListener("keydown", (e) => {
 });
 $("#chat-new").onclick = () => {
   if (C.job) return;
+  C.receivedEpoch = (C.receivedEpoch || 0) + 1;
   C.session = null; provSet("session", null);
   const c = provGet("context");                                    // a new chat starts empty (keep the window size)
   if (c) provSet("context", { window: c.window });
   renderContext(null);
   $("#chat-log").innerHTML = ""; chatIntro(); saveChatLog();
+  if (RESEARCH.state?.received_confirmations) presentReceivedQuestions(RESEARCH.state);
 };
 function askAboutSelection() {
   chatHidden(false);
@@ -3222,6 +3917,7 @@ async function loadAgentInfo() {
   renderQuota();
   loadAgentInfo().then((r) => {
     renderProviders(r);
+    loadResearch();
     if (r.active && !C.job && r.project_key === P.projectKey) {
       sysNote("The agent was already working when this page loaded: its turn follows, and <b>Stop</b> ends it.");
       followTurn(r.active.job, r.active.provider, r.active.mode);

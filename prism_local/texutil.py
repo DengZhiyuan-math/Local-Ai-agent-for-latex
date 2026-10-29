@@ -4,6 +4,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+LATEX_SOURCE_SUFFIXES = {".tex", ".sty", ".cls", ".bib", ".bbx", ".cbx", ".tikz"}
+
 GREEK = {g: chr(c) for g, c in zip(
     "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho "
     "varsigma sigma tau upsilon phi chi psi omega".split(), range(0x3B1, 0x3CA))}

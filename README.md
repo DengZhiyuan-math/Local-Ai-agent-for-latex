@@ -250,6 +250,192 @@ The ⌂ button in an editor opens it. Every project you open, by any route, is l
 The list and settings live in `%LOCALAPPDATA%\prism-local` on Windows,
 `~/.local/state/prism-local` elsewhere, or `$PRISM_STATE_DIR`.
 
+## Research baseline
+
+The Agent panel offers **Initialize** when a project has no research baseline.
+Opening a project does not start analysis. **Later** keeps reading, discussion and
+manual editing available; reopen **Research baseline** whenever you are ready.
+Until initialization, API providers and the controlled Claude Code, Codex and Deep Code adapters remain read-only and hold newly authored
+mathematical chat content. Existing mathematical quotations can still be discussed.
+
+Initialization records the main manuscript and included chapters, their content
+versions and locations, explicitly marked terms, and complete mathematical notation.
+Existing notation needs no second approval. Empty projects can start from a research
+question, explicitly supplied notation, or empty libraries. The report lists unread
+and excluded files, uncertain commands, and other extraction gaps. Missing definitions
+remain unresolved; conflicting definitions remain visible.
+
+The report supports corrections without editing the manuscript. Its versioned project
+record is saved in `research/knowledge.json` and follows the existing file sync setting.
+No additional Git workflow is started.
+
+After initialization, maintenance checks the original source snapshots for missed
+notation and reports each addition with its original version and location. Verified
+editor input can also register newly introduced notation, including the editor's
+controlled snippet expansions. Equivalent spellings such as `x_i` and `x_{i}` share
+an identity. Ordinary powers, standard operators and formatting commands do not add
+names. Changing the use of a known symbol does not ask for notation approval.
+
+New notation from external saves, disk changes or reference material remains
+unverified. Saving unrelated prose or whitespace does not adopt names that
+were already in the file. The report shows unverified notation, evidence, extraction
+gaps and maintenance notices; unchanged state produces no repeated notice or write.
+The editor keeps input capabilities in page memory and checks exact saved versions.
+Registered input receipts require both a local signature and a matching local editor
+witness. Copied project fields, signatures or Git author metadata are insufficient.
+
+GitSync carries initialization records, libraries, configuration and existing
+research documents through its ordinary save, upload, receive and conflict paths.
+It does not establish who adopted a received name. Prism checks initialization and
+human-decision evidence separately. A forged baseline or an `approved` field does
+not grant notation permission, and an older or missing project record does not
+erase locally verified decisions or refusals.
+
+Quoted instructions remain discussion. Markdown fences, indented code and quoted
+HTML cannot approve notation. State a decision in ordinary unquoted text when the
+editor cannot distinguish it from a quotation.
+
+When received notation has no applicable evidence, the editor keeps the source
+unchanged and asks an ordinary confirmation question with its location and version.
+Reply normally to one clear question, or name the individual items in a batch.
+The editor checks the source version again before saving adoption. A changed source
+or ambiguous answer remains unverified. Confirmation records the author's adoption;
+it does not claim that the original remote edit was human. Unknown definitions stay
+unresolved. No AI task starts merely because a record arrives.
+An explicit request such as `Reopen $z$` reopens a rejected received name for a new
+source-bound question. Reopening alone does not approve its use.
+
+A synchronized research topic keeps its identity and document when another working
+folder explicitly initializes and continues it. Received text stays marked as an
+unverified reference; later local entries carry separate sources. Reconnecting
+GitHub still requires this editor's repository and account settings. A verified
+existing topic issue is continued rather than duplicated.
+
+Records from another working folder remain visible as unverified references when
+their local evidence cannot be checked. Use **Initialize** to establish this folder's
+baseline explicitly. Conflicted or damaged records remain intact and require the
+existing conflict-resolution path; source verification does not perform another
+merge or force synchronization on. Pending saves and verification state survive
+restart without repeating unchanged notices.
+
+API providers and the controlled Claude Code, Codex and Deep Code adapters check a completed draft before writing a source file or displaying
+mathematical chat. A new name produces a saved pending candidate with its definition,
+scope, reason and original expression. The proposal ends the Turn and restores
+**Send**. It does not adopt the candidate or continue a derivation with it. Unsolicited
+new notation is held with a request for the missing details. Tool previews and provider
+reasoning do not grant permission. Received unknown expressions can remain in their
+original argument; copying or rewriting them requires review.
+
+Protected model compilation runs the entire build in a disposable copy under a verified macOS
+sandbox. Without that runtime it fails closed. Custom builds, Lua, shell escape,
+dynamic TeX and script inputs return diagnostics only. Static ordinary builds may
+publish a PDF and log after checking the input versions. Source,
+SyncTeX and dependency receipts are not copied back. Manual editor builds retain their
+existing behavior.
+
+This protects the controlled API, Claude Code, Codex, Deep Code and editor input paths. Arbitrary localhost clients,
+browser automation and unrestricted host execution remain outside that boundary.
+For one complete proposal at the end of a Turn, reply normally in the same chat:
+for example, **Yes, I approve** or **No, I reject**. The editor saves the original
+human message and decision before allowing use. An unrelated or ambiguous reply,
+quotation, attachment, model output, Stop or reload does not approve notation.
+The report and candidate cards show saved approval or rejection. Pending and decided
+notation remain available after restart; API Conversation history also restores
+within the same project and provider configuration. A history-save failure is reported.
+
+A batch keeps each item separate. For example, **Approve z; reject w; use q instead
+of v** decides only those items. A bare yes does not approve the rest of a batch.
+Clear clauses can be saved while an ambiguous clause asks only for its missing details.
+A complete direct instruction such as **Use h for x+x** adopts the author's notation
+without inventing an Agent proposal or asking for a second approval.
+
+Finite subscript families use explicit permitted indices: **Use $a_i$ for $x+x$
+with i in {1,2,3}** permits the complete names $a_1$, $a_2$ and $a_3$. Other bases,
+indices and new decorations remain subject to review. Ordinary powers of a known
+name remain ordinary mathematics. These are declarative rules, not arbitrary regexes
+or executable macros.
+
+**Reject z** rejects that name. **Reject z and keep its expression expanded** also
+prevents another letter from abbreviating that source expression. **Keep $x+x$
+expanded; do not abbreviate it** can record the same preference without a proposal.
+Refusals persist. **Reopen z** returns a rejected proposal to pending, without
+adopting it; a complete explicit adoption or replacement records the new human choice.
+Contradictory clauses, quotations, conditions, silence and a topic change grant nothing.
+Checks normalize supported literal notation spellings; they do not prove arbitrary
+mathematical equivalence. The report exposes item status, finite rules, refusal scope
+and the original human evidence. Saving fails before any of these permissions apply.
+
+Controlled Claude Code uses the same knowledge and decision rules, including batches,
+direct instructions, finite families and durable refusals. Every Turn receives current
+project knowledge. Its CLI stays in the original project directory with native session
+ownership checks, but a verified macOS sandbox denies source writes, editor-private
+state access and loopback connections. Only editor-owned SDK MCP tools can apply checked
+edits. There is no rollback-based or unprotected fallback. If this runtime cannot be
+verified, the controlled Claude entry point is unavailable.
+
+Before launch, project/profile/scratch metadata is checked for pre-existing hardlinks;
+a linked regular file, scan failure or limit (50000 entries / 5000 directories) refuses
+the run without modifying links. The selected Claude auth/session profile and scratch
+remain writable; installed runtime/system resources are trusted. Project/user settings
+that launch hooks or grant native file/shell permissions are not loaded in this flow.
+WebSearch/WebFetch still use the editor's existing Web grants. Native CLI inference,
+authentication and real-service acceptance are separate from protocol fixtures.
+
+After initialization, meaningful discussion updates are recorded automatically in one
+continuing Markdown document per topic under `research/topics/`. Ideas, confirmed
+author decisions and open questions remain separate, with their original sources.
+Recording a possible proof method does not launch research or edit the manuscript.
+The chat and Research panel show an openable location after the record is saved.
+Unchanged discussion does not create another file or repeat the saved notice.
+
+Topic summaries use the same notation checks as chat and manuscript edits. Recording
+a decision in a topic does not adopt notation. A failed save remains pending for retry;
+reopening the initialized project's Research panel can recover it without another
+model request. If the topic file changed meanwhile, its received text is kept until
+the conflict is resolved. Topic documents follow existing GitSync settings, including
+disabled sync and delays during an active Turn.
+
+To keep discussions in GitHub, choose **GitHub issues** in the Research panel's
+**Discussion mode** and save the settings. This uses the project's confirmed GitHub
+repository and the existing `gh` login from Home. Save the designated human approval
+accounts there; those settings do not approve any notation.
+
+Each topic has one continuing issue. Later updates become comments on that issue,
+preserving its coauthors' edits. The panel distinguishes a local save, an update
+waiting to publish, a confirmed publication and an unknown publication result.
+After an unknown result, Prism checks the existing remote records rather than
+blindly creating another issue or comment. A result remains unknown until it can be
+confirmed. Local documents and configuration still follow ordinary GitSync settings.
+
+GitHub discussion checks run while a project page is open. Closing the last page
+pauses them; reopening checks for missed changes. Received comments remain labelled
+external discussion. Their actual author and version are retained, and mathematical
+previews use the shared notation checks. Comments do not launch research or edit the
+manuscript.
+
+For GitHub notation approval, designate the human accounts in **Discussion settings**.
+In the research report, choose an existing topic and the complete pending proposals
+to share. The editor publishes an explicitly pending proposal batch in that topic's
+continuing issue. Sharing a proposal does not approve it. If no topic exists yet,
+record the research topic in chat first.
+
+One designated human account can decide the published proposals with an explicit
+reply. Each batch item is independent; a bare yes does not approve an entire batch.
+A reply to the only unambiguous batch needs no special command. When several batches
+are open, include the displayed `prism-batch:<batch-id>` line to identify the batch.
+An old reply cannot approve a later proposal version. Actual comment authorship and
+repository, issue, project and content versions are checked; quotations, undesignated
+accounts, Bot accounts and copied project status fields do not grant permission.
+
+Verified GitHub decisions use the same notation, family and refusal rules as chat
+decisions. The editor saves the original comment evidence and each decision before
+later Turns can use the notation. The report shows the author and source-comment
+link. A failed registration leaves the proposal pending and retryable. Repeated
+checks and reopening do not duplicate a saved decision or start an AI task.
+
+Controlled providers use the shared topic tool; their capability labels describe
+the verified runtime and adapter paths rather than the entire research feature set.
+
 ## History and sync with GitHub
 
 You do not need to know git. Create a private GitHub repository for a project from the
@@ -540,14 +726,11 @@ project cannot be verified, start a new chat. Old saved records are kept.
 This section describes the panel with Claude Code, the default. The next section covers the
 other providers and what differs for them.
 
-Each message runs Claude Code headlessly in your project:
-
-```
-claude -p --output-format stream-json --verbose --include-partial-messages \
-       --input-format stream-json --permission-prompt-tool stdio \
-       --permission-mode <acceptEdits|plan> [--resume <session>] [--model <m>] [--effort <e>] \
-       --append-system-prompt <…>
-```
+Each protected message runs Claude Code headlessly in the original project, behind a
+verified read-only source boundary. Native tools are restricted to WebSearch/WebFetch.
+The editor serves project reads, checked edits, proposals and guarded compilation over
+the existing bidirectional SDK MCP control channel. Prompt text cannot grant a file
+write or notation approval. The selected native session, model and effort still apply.
 
 **Model and thinking.** The conversation header lists available models and the selected
 model's thinking effort levels. Claude and Codex read their CLI metadata; API providers
@@ -581,45 +764,43 @@ choice of locations; missing labels show a message.
 selected in the editor (also: select text and press ⌘L). A selection becomes a mention like
 `@sections/intro.tex:12-18`, and its text is sent along.
 
-- **With @-mentions**, Claude may change only the mentioned files. This is enforced, not just
-  asked: the turn runs in Claude Code's default permission mode with `Edit`/`Write` allowed
-  for those files only, so any other write is refused. For a line range, Claude is asked to
-  keep to those lines.
+- **With @-mentions**, the editor-owned tools may change only the mentioned files.
+  They check scope before applying a draft; the CLI itself cannot write source. For a
+  line range, Claude is asked to keep to those lines.
 - **Without @-mentions**, edits default to the file open when you send the message.
   Explicit requests to edit other files take priority. The compile main file is not an
   automatic edit target. This default guides the agent; it retains permission to edit
   other project files and create files. If no file is open and the target is unclear,
   the agent is instructed to ask which file to edit.
-- The line above the message box shows the scope before you send. The card at the end of a
-  turn reports blocked edits, and any change outside the mentioned files (for example made
-  by an allowed shell command), which **Undo this turn** reverts.
+- The line above the message box shows scope before you send. The final card reports
+  checked edits and blocked operations; **Undo this turn** can revert accepted edits.
 - Each message states its own scope, so a limit from an earlier message does not carry over.
 
 Consequences:
 
-- Claude reads your project's `CLAUDE.md`, skills and `.claude/settings.json`, exactly as it
-  would in a terminal. Put writing conventions or rules for the paper in `CLAUDE.md`.
-- **Edit** mode (`acceptEdits`) may change files. The agent normally gets no shell
-  (Bash, PowerShell): it reads and edits with its file tools.
+- Put writing conventions in the project's read-only `CLAUDE.md`. Project/user executable
+  settings and external MCP servers do not expand the protected editor's tool authority.
+- **Edit** mode can change source only through the editor-owned tools and their checks.
+  Native shell, file-write and delegated Agent tools are not available.
 - **Web permissions** appear in the conversation when Claude requests WebSearch or
   WebFetch. Allow once, allow for this conversation, always allow, or deny. Approval
   continues the original blocked request in the same CLI process. Saved grants are
   confined to the project, CLI profile and tool; WebFetch grants cover one public HTTP
-  origin. Claude's deny rules and file/shell restrictions still apply. Saved grants live
+  origin. The editor's tool, scope and runtime restrictions still apply. Saved grants live
   in `web-permissions.json` in Prism's user state folder, outside the project.
-- **The agent compiles** with a `compile` tool (`prism_local/mcp_compile.py`) that runs the
-  editor's own build, the same as the Compile button: the PDF reloads, the Problems list
-  fills in, and the agent gets the errors with their file:line to fix. The API models
-  (DeepSeek and the others) get the same tool.
-- To let the agent run some shell commands too, allow them in `permissions.allow` of
-  `.claude/settings.json` (for example `"Bash(make:*)"`); it then has the shell, limited to
-  those commands. The card at the end of a turn names any step that was refused.
-- **Ask** mode (`plan`) is read-only.
+- **The agent compiles** through the shared guarded compile tool: isolated inputs,
+  checked artifact publication and diagnostics. The manual Compile button keeps its own
+  behavior. API models use the same guarded model-tool path.
+- Adding shell permissions in `.claude/settings.json` does not expand this protected
+  workflow. Refused operations appear in the Turn's result.
+- **Ask** mode is read-only. Its tool list omits source writes and compilation, and the
+  editor rechecks mode even if a malformed CLI requests one.
 - The active file's path is sent with each message; selected source text is sent when
   you @-mention it.
 - **Add files** to a message with **+**, by dragging them onto the panel, or by pasting an
   image. They are saved in the project's `prism-uploads/` folder (up to 25 MB each) and the
-  message tells the agent where they are; Claude Code also reads PDFs and images.
+  protected Claude transport sends text as reference data and images/PDFs as structured
+  content. Attachments never substitute for the independent human decision message.
 - **Added files go to GitHub.** Each one is committed on its own in the project's repository
   (your other changes are left as they are) and pushed; its chip says *✓ GitHub*, *local*
   (no repository of its own, no remote, or `prism-uploads/` in `.gitignore`) or *not pushed*
@@ -677,8 +858,28 @@ Windows, set one for your user once and restart prism-local:
 setx DEEPSEEK_API_KEY "sk-..."
 ```
 
-**Codex CLI.** Each message runs `codex exec --json` in the project, with the sandbox set to
-an isolated named permissions profile, and `resume` to continue the
+**Codex CLI.** In editor projects, controlled turns use the local app-server stdio
+protocol in the original project directory. Editor-owned tools reuse the API's file
+and notation checks. The native CLI cannot write the manuscript, access editor
+approval evidence or reach editor loopback HTTP. Streaming mathematical text and
+visible tool diagnostics are checked before publication; proposals end the Turn.
+Ordinary human replies use the same saved single, batch, direct, family and refusal
+rules as API and Claude Code. Each Turn loads current knowledge and enforces its
+Ask/Edit mode, mentioned-file scope and active target.
+
+New controlled Conversations install parent-owned dynamic tools. Older native
+Conversations keep their id and history and use a required stdio MCP relay to the
+same parent checker. The relay uses per-Turn local pipes, with no HTTP endpoint or
+human-approval operation. Native or restored tools cannot bypass the source write
+boundary. Hooks, apps, external MCP servers and native command tools stay disabled;
+configuration that cannot be verified fails closed. Supported controlled execution
+currently requires the verified macOS sandbox. Other systems do not fall back to an
+unprotected editor Turn. Manual editing and manual compilation remain available.
+These are controlled-protocol capabilities; real model and installed-App acceptance
+need separate evidence.
+
+When project research access is absent, the legacy path runs `codex exec --json`
+with an isolated named permissions profile, and `resume` continues the native
 conversation. Codex reads your `AGENTS.md`. `/effort` sets `model_reasoning_effort`
 (`minimal` … `xhigh`). Edit grants native write permission only to the @-mentioned files,
 or the project tree when there are no mentions. `.git`, `.codex`, `.agents` and `.aws`
@@ -708,7 +909,29 @@ The [Windows sandbox audit](docs/audits/2026-10-15-codex-windows/report.md) reco
 related fixes, offline native tests and validation limits.
 
 **Deep Code (DeepSeek's terminal agent).** [Deep Code](https://github.com/lessweb/deepcode-cli)
-is the CLI that DeepSeek's documentation lists for agents. Each message runs
+uses a controlled exec path in editor projects. It requires the verified macOS
+sandbox and support for `--settings`, `--json` and `--session-id`. The editor passes
+per-Turn settings from a temporary file, retains the original HOME, project cwd and
+native Conversation, and never overlays the project's settings or rewrites history.
+Its stdio MCP child uses the same checked parent tools as the other controlled CLIs.
+Native writes cannot modify the manuscript or editor approval evidence, even when
+Deep Code's category checks do not restrict a command.
+
+Each Turn sends current research knowledge. A proposal is saved and ends the CLI
+before another generation request; the next ordinary human message uses the shared
+single, batch, direct, family, refusal and reopening rules. Mathematical output and
+native tool-log previews are checked before display. Only unchanged parent-applied
+writes enter the Turn's diff and Undo; other saves and later manual edits stay intact.
+Stale whole-file drafts require another parent read before application. Stop cleans
+up the CLI and descendants.
+
+The replacement settings disable inherited MCP servers and make notification and
+custom Web scripts inert. Existing configuration and manual edits stay in place.
+Deep Code's native MCP call limit remains 60 seconds; the relay's longer transport
+budget does not extend it. Compile-route tests use controlled diagnostics, with no
+claim of a real model or TeX acceptance run. Unverified runtimes fail closed.
+
+Without project research access, the legacy CLI path runs
 `deepcode --exec` in the project, with the message on stdin, and `--resume` continues the
 conversation. Its own settings apply (`~/.deepcode/settings.json` and `.deepcode/settings.json`: model, API key,
 permissions); prism-local passes `DEEPSEEK_API_KEY` on when Deep Code has no key of its own,

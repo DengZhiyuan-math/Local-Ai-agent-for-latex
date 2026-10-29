@@ -1,17 +1,13 @@
 """OpenAI Codex CLI backend.
 
-Each chat turn runs the local Codex CLI non-interactively in the repository:
+Research-controlled Turns use app-server with editor-owned checked tools and a
+native read-only boundary. Original cwd, native Conversation and current Turn
+scope are retained; only the parent editor can apply manuscript edits.
 
-    codex exec --json --skip-git-repo-check -c default_permissions="prism-editor"
-               [-m <model>] [-c model_reasoning_effort=<level>] [resume <id>] -
-
-The prompt comes on stdin ("-"); Codex prints one JSON event per line
-(thread.started, item.started/completed, turn.completed, turn.failed, error).
-Codex reads the project's AGENTS.md itself. It uses its own login (`codex login`)
-or OPENAI_API_KEY; prism-local passes no key.
-
-Each turn supplies a named native permissions profile. Ask permits no project writes.
-Edit permits scoped files, or the project tree with repository metadata read-only.
+Without research access the legacy path runs `codex exec --json` with a named
+native permission profile: Ask is read-only; Edit permits scoped files or the
+project tree while repository metadata remains read-only. Codex uses its own
+login; prism-local passes no credential.
 """
 from __future__ import annotations
 
@@ -133,6 +129,7 @@ class Codex(CliBackend):
         return "Codex session does not belong to this project. Start a new chat."
 
     kind = "codex"
+    research_support = True
     label = "Codex CLI"
     models: list[str] = []
     efforts = ("minimal", "low", "medium", "high", "xhigh")
@@ -263,7 +260,14 @@ class Codex(CliBackend):
             "Codex CLI not found. Install it (npm i -g @openai/codex) or set CODEX_BIN=/path/to/codex."
 
     def info(self) -> dict:
-        return {**super().info(), "bin": self.bin()}
+        from claude_sandbox import availability
+        runtime = availability("codex")
+        supported = runtime["supported"]
+        return {**super().info(), "bin": self.bin(),
+                "research_initialization": supported,
+                "notation_guard": {"application": supported, "display": supported,
+                                   "proposals": supported, "decisions": supported},
+                "research_runtime": runtime}
 
     def preflight(self, root: Path) -> str | None:
         binary = shutil.which(self.bin()) or self.bin()
@@ -343,6 +347,17 @@ class Codex(CliBackend):
                   "These instructions replace earlier editor instructions.\n"
                   f"{self.system_text()}\n[Message]\n{job.prompt}")
         return cmd + ["-"], prompt
+
+    def check_research(self, root: Path) -> str | None:
+        from claude_sandbox import availability
+        result = availability("codex")
+        return None if result["supported"] else result["reason"]
+
+    def run(self, job: Job) -> dict:
+        if job.research_access is not None:
+            from codex_research import run
+            return run(self, job)
+        return super().run(job)
 
     def handle(self, d: dict, job: Job, st: dict) -> None:
         t = d.get("type")
