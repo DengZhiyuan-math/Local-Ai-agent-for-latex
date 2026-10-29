@@ -2,6 +2,8 @@
 
 This review bundle covers the twelve engineering slices of [Spec: Research initialization and conversational approval of new notation](https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/10), their integration repairs, and the subsequent cross-platform output-folder fix. GitHub Issues remain the authoritative specification and tracker.
 
+This bundle records the initial PR candidate at `b32b3a8`. Subsequent findings, repairs and current validation are in the [PR 27 follow-up review](../2026-10-29-pr27-review/README.md). Its source changes supersede the initial review verdict below; the older counts and fingerprints remain historical evidence.
+
 ## Resulting behavior
 
 - Explicit initialization records the manuscript baseline, terms and complete notation. Known manuscript notation remains usable; new AI notation stays pending until a source-bound human decision is saved.
@@ -16,9 +18,9 @@ This review bundle covers the twelve engineering slices of [Spec: Research initi
 | --- | --- |
 | Final full discovery | **1544 tests: 1488 passed, 56 existing platform/boundary skips, zero failures/errors**, process exit0; 791.139 seconds |
 | Source integrity | 458 source fingerprints, no drift during the final run |
-| Visible browser | 66 checks plus7 server-restart checks passed on the earlier research candidate; those research/frontend sources remain unchanged |
+| Visible browser | 66 checks plus7 server-restart checks passed on the earlier research candidate; no fresh browser acceptance is claimed for the follow-up repairs |
 | Requirement mapping | 29 parent scenarios and98 engineering clauses; named unit/HTTP cases reran in final discovery; visible interaction also uses the browser record |
-| Independent review | No remaining actionable Standards/Spec findings on the research candidate; the later path and cache-fixture deltas were separately reviewed |
+| Initial independent review | Reported no remaining actionable findings on its candidate. The later full PR review found additional defects and records their repairs separately. |
 
 [validation.json](validation.json) records exact skip IDs/reasons and scope. [coverage.json](coverage.json) maps requirements to current named tests; its rows are supporting evidence, not independent test counts. [browser-checks.json](browser-checks.json) preserves the check names without private fixture state. [source-manifest.json](source-manifest.json) records the tested source candidate.
 

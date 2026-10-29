@@ -284,5 +284,8 @@
     "installed_app": false,
     "human_product_acceptance": false
   },
-  "record_source": "Curated from the final source-bound local reports. No temporary project state, private receipt keys, browser profiles or raw operation logs are included."
+  "record_source": "Curated from the final source-bound local reports. No temporary project state, private receipt keys, browser profiles or raw operation logs are included.",
+  "recorded_at_head": "b32b3a852a739abc915b053b12506e0abdd827b7",
+  "followup_review": "../2026-10-29-pr27-review/README.md",
+  "record_scope": "Historical initial PR evidence; the follow-up review records subsequent fixes and validation."
 }
