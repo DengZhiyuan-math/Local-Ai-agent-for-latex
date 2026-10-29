@@ -33,8 +33,12 @@ if '--legacy' in sys.argv:
     if not native.exists():native.write_text(json.dumps({'type':'session_meta','payload':{'id':legacy_session,'cwd':str(root)}})+'\n')
 cli = profile / 'codex-fixture'
 cli.write_text('#!' + sys.executable + '\n' + r'''
-import json,os,socket,subprocess,sys,time,tomllib,uuid
+import json,os,socket,subprocess,sys,time,uuid
 from pathlib import Path
+try:
+ import tomllib
+except ModuleNotFoundError:
+ import tomli as tomllib
 profile=Path(__file__).parent
 root=Path.cwd().resolve()
 argv=sys.argv[1:]

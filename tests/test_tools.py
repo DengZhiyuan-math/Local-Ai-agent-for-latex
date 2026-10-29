@@ -27,6 +27,13 @@ def program(folder: Path, name: str) -> Path:
     return p
 
 
+class WindowsOS:
+    name = "nt"
+
+    def __getattr__(self, name):
+        return getattr(os, name)
+
+
 class Tools(unittest.TestCase):
     def setUp(self):
         self.base = tmpdir()
@@ -38,7 +45,9 @@ class Tools(unittest.TestCase):
         tools.INSTALL.clear()
         self.addCleanup(tools.INSTALL.clear)
         # Nothing from this computer's own installs or registry.
-        for patch in (mock.patch.object(tools, "KNOWN_DIRS", {"git": [str(self.base / "Git" / "cmd")],
+        for patch in (mock.patch.object(tools, "os", WindowsOS()),
+                      mock.patch.object(tools, "_system", return_value="windows"),
+                      mock.patch.object(tools, "KNOWN_DIRS", {"git": [str(self.base / "Git" / "cmd")],
                                                                "gh": [str(self.base / "GitHub CLI")]}),
                       mock.patch.object(tools, "USER_BIN", self.base / "home" / ".local" / "bin"),
                       mock.patch.object(tools, "_registry_path", return_value=[])):

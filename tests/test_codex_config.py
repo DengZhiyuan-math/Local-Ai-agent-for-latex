@@ -3,8 +3,12 @@ import copy
 from pathlib import Path
 import sys
 import tempfile
-import tomllib
 import unittest
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'prism_local'))
 

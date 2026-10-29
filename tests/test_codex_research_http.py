@@ -23,6 +23,8 @@ def mcp(name, **arguments):
 def text(value):
     return {'type':'text','text':value}
 
+@unittest.skipUnless(sys.platform == 'darwin' and Path('/usr/bin/sandbox-exec').is_file(),
+                     'Controlled native Codex HTTP fixtures require macOS sandbox-exec.')
 class CodexResearchHTTP(unittest.TestCase):
     setUp=base.ResearchHTTP.setUp
     stop=base.ResearchHTTP.stop

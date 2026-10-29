@@ -5,6 +5,7 @@ examples/*/build/
 # Python
 __pycache__/
 *.pyc
+/.ci-results/
 # macOS
 .DS_Store
 ._*

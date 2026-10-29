@@ -21,7 +21,6 @@ from research_access import ResearchAccess
 
 
 class SourceCoordinationHTTP(unittest.TestCase):
-    setUp = base.ResearchHTTP.setUp
     tearDown = base.ResearchHTTP.tearDown
     stop = base.ResearchHTTP.stop
     request = base.ResearchHTTP.request
@@ -29,6 +28,12 @@ class SourceCoordinationHTTP(unittest.TestCase):
     events = base.ResearchHTTP.events
     finish = base.ResearchHTTP.finish
     provider = "claude"
+
+    def setUp(self):
+        if self.provider != "fixture" and (sys.platform != "darwin"
+                or not Path('/usr/bin/sandbox-exec').is_file()):
+            self.skipTest('Controlled native CLI HTTP fixtures require macOS sandbox-exec.')
+        base.ResearchHTTP.setUp(self)
 
     def start(self):
         (self.work / "ready.json").unlink(missing_ok=True)

@@ -117,7 +117,8 @@ class InstallSh(unittest.TestCase):
 
     def fake(self, name, text):
         p = self.bin / name
-        p.write_text(text.replace("NAME", name, 1), encoding="utf-8", newline="\n")
+        with p.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(text.replace("NAME", name, 1))
         p.chmod(0o755)
 
     def tools_dir(self) -> str:
