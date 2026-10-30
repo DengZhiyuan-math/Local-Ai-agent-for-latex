@@ -70,6 +70,20 @@ def wait_file(path, timeout=15):
     raise AssertionError(f"{path} did not appear")
 
 
+class LifecycleDiagnostics(unittest.TestCase):
+    def test_large_child_failure_output_is_drained_and_keeps_a_bounded_tail(self):
+        proc = subprocess.Popen([sys.executable, "-c",
+                                 "import sys; sys.stderr.write('x' * 262144 + 'lifecycle-error-tail'); sys.exit(1)"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(stop, proc)
+        case = ServerLifecycle("test_silent_page_goes_stale")
+        case.proc = proc
+        with self.assertRaisesRegex(AssertionError, "lifecycle-error-tail") as failed:
+            case.assertExitsWithin(0, 1, time.monotonic())
+        self.assertLess(len(str(failed.exception)), 40000)
+
+
 class ServerLifecycle(unittest.TestCase):
     def start(self, timings, *extra, project=PROJECT, port="0"):
         self.tmp = tmpdir()
@@ -78,15 +92,15 @@ class ServerLifecycle(unittest.TestCase):
             [sys.executable, str(SERVER), str(project), "--port", port, "--no-browser",
              "--exit-when-idle", "--idle-timings", timings, "--ready-file", str(self.ready),
              *extra], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
-            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state")})
+            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state"), "PYTHONFAULTHANDLER": "1"})
         self.addCleanup(self.proc.stdout.close)
         self.addCleanup(stop, self.proc)
         return wait_file(self.ready)["url"]
 
     def assertExitsWithin(self, lo, hi, t0):
-        self.proc.wait(hi + 5)
+        output, _ = self.proc.communicate(timeout=hi + 5)
         took = time.monotonic() - t0
-        self.assertEqual(self.proc.returncode, 0)
+        self.assertEqual(self.proc.returncode, 0, output[-32768:].decode("utf-8", "replace"))
         self.assertGreaterEqual(took, lo)
         self.assertLessEqual(took, hi)
         self.assertFalse(self.ready.exists(), "ready file should be removed on exit")
