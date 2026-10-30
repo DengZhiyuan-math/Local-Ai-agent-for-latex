@@ -209,35 +209,57 @@ class EditorEvidence(unittest.TestCase):
         from repository import FilesLock
         import research_edits as evidence
         import server
-        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
         project = SimpleNamespace(root=self.state, files_lock=FilesLock(lambda: None))
-        knowledge = mock.Mock()
-        knowledge.refresh.return_value = {"initialized": True}
-        knowledge.status.return_value = {"initialized": True}
-        handler = mock.Mock()
-        handler._foreign_project.return_value = False
+        routes = ("/api/research", "/api/research/initialize", "/api/research/correct",
+                  "/api/research/discussion", "/api/research/github/proposals")
+        for route in routes:
+            with self.subTest(route=route):
+                receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+                knowledge, discussion, handler = mock.Mock(), mock.Mock(), mock.Mock()
+                knowledge.project = project
+                knowledge.status.return_value = {"initialized": True}
+                handler._foreign_project.return_value = False
+                changed = []
 
-        def render(*args):
-            self.assertTrue(project.files_lock.held())
-            with mock.patch.object(evidence, "_key", wraps=evidence._key) as keys, \
-                    mock.patch.object(evidence.registry, "read_state", wraps=evidence.registry.read_state) as witnesses:
-                for _ in range(20):
-                    self.assertTrue(verify_receipt(receipt, "p"))
-                self.assertEqual((keys.call_count, witnesses.call_count), (1, 1))
-            return {"ready": True}
+                def mutate(*args, **kwargs):
+                    self.assertFalse(project.files_lock.held())
+                    with mock.patch.object(evidence, "_key", wraps=evidence._key) as keys:
+                        self.assertTrue(verify_receipt(receipt, "p"))
+                        self.assertTrue(verify_receipt(receipt, "p"))
+                        self.assertEqual(keys.call_count, 2)
+                    changed.append(True)
+                    return {"initialized": True}
 
-        def respond(view):
-            self.assertFalse(project.files_lock.held())
-            (self.state / WITNESS_FILE).unlink()
-            self.assertFalse(verify_receipt(receipt, "p"))
-            return view
+                def render(*args):
+                    self.assertEqual(changed, [True])
+                    self.assertTrue(project.files_lock.held())
+                    with mock.patch.object(evidence, "_key", wraps=evidence._key) as keys, \
+                            mock.patch.object(evidence.registry, "read_state", wraps=evidence.registry.read_state) as witnesses:
+                        for _ in range(20):
+                            self.assertTrue(verify_receipt(receipt, "p"))
+                        self.assertEqual((keys.call_count, witnesses.call_count), (1, 1))
+                    return {"ready": True}
 
-        handler._json.side_effect = respond
-        with mock.patch.object(server, "PROJECT", project), \
-                mock.patch.object(server, "ResearchKnowledge", return_value=knowledge), \
-                mock.patch.object(server.research_topics, "retry"), \
-                mock.patch.object(server, "research_view", side_effect=render):
-            self.assertEqual(server.Handler._get(handler, "/api/research", {}), {"ready": True})
+                def respond(view):
+                    self.assertFalse(project.files_lock.held())
+                    (self.state / WITNESS_FILE).unlink()
+                    self.assertFalse(verify_receipt(receipt, "p"))
+                    return view
+
+                for method in (knowledge.refresh, knowledge.initialize, knowledge.correct,
+                               discussion.configure, discussion.share_proposals):
+                    method.side_effect = mutate
+                handler._json.side_effect = respond
+                with mock.patch.object(server, "PROJECT", project), \
+                        mock.patch.object(server, "ResearchKnowledge", return_value=knowledge), \
+                        mock.patch.object(server, "DISCUSSIONS", discussion), \
+                        mock.patch.object(server.research_topics, "retry"), \
+                        mock.patch.object(server, "research_view", side_effect=render):
+                    if route == "/api/research":
+                        result = server.Handler._get(handler, route, {})
+                    else:
+                        result = server.Handler._post(handler, route, {"project_key": evidence.registry.project_key(project.root)})
+                    self.assertEqual(result, {"ready": True})
 
     def test_readable_signing_key_cannot_forge_an_editor_witness(self):
         receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")

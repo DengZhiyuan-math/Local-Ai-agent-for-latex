@@ -304,7 +304,6 @@ class GitHubDiscussions:
             approvals.share(self, topic_id, subjects)
         except _Obsolete as error:
             raise Conflict("The project changed while sharing proposals. Refresh its page and try again.") from error
-        return self.status()
 
     @staticmethod
     def _cache_comments(record, comments):

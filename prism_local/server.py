@@ -90,6 +90,17 @@ def research_view(knowledge, state):
     return state
 
 
+def capture_research_view(knowledge):
+    project = knowledge.project
+    if not project.files_lock.acquire(timeout=SAVE_WAIT):
+        raise Conflict("The project files are busy; retry reading the research record.")
+    try:
+        with evidence_snapshot():
+            return research_view(knowledge, knowledge.status())
+    finally:
+        project.files_lock.release()
+
+
 def git(*args: str, timeout: float = 10) -> subprocess.CompletedProcess:
     """Read-only git in the project (gitenv.git)."""
     return gitenv.git(PROJECT.root, *args, timeout=timeout)
@@ -403,14 +414,7 @@ class Handler(httpbase.Handler):
             state = knowledge.refresh()
             if state.get("initialized"):
                 research_topics.retry(knowledge)
-            if not PROJECT.files_lock.acquire(timeout=SAVE_WAIT):
-                raise Conflict("The project files are busy; retry reading the research record.")
-            try:
-                with evidence_snapshot():
-                    view = research_view(knowledge, knowledge.status())
-            finally:
-                PROJECT.files_lock.release()
-            return self._json(view)
+            return self._json(capture_research_view(knowledge))
         if path == "/api/config":
             cfg = PROJECT.config
             return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
@@ -539,22 +543,23 @@ class Handler(httpbase.Handler):
             return self._err(409, "This page belongs to another project. Reopen the project's editor.")
         if path == "/api/research/initialize":
             knowledge = ResearchKnowledge(PROJECT)
-            return self._json(research_view(knowledge, knowledge.initialize(
-                question=body.get("question", ""), notation=body.get("notation", ""))))
+            knowledge.initialize(question=body.get("question", ""), notation=body.get("notation", ""))
+            return self._json(capture_research_view(knowledge))
         if path == "/api/research/correct":
             knowledge = ResearchKnowledge(PROJECT)
-            return self._json(research_view(knowledge, knowledge.correct(
+            knowledge.correct(
                 term_updates=body.get("term_updates"), excluded_symbols=body.get("excluded_symbols"),
-                notes=body.get("notes", ""), symbol_updates=body.get("symbol_updates"))))
+                notes=body.get("notes", ""), symbol_updates=body.get("symbol_updates"))
+            return self._json(capture_research_view(knowledge))
         if path == "/api/research/discussion":
             knowledge = ResearchKnowledge(PROJECT)
             DISCUSSIONS.configure(body.get("mode"), body.get("approvers", []),
                                   expected_repository=body.get("expected_repository"))
-            return self._json(research_view(knowledge, knowledge.status()))
+            return self._json(capture_research_view(knowledge))
         if path == "/api/research/github/proposals":
             knowledge = ResearchKnowledge(PROJECT)
             DISCUSSIONS.share_proposals(body.get("topic_id"), body.get("subjects"))
-            return self._json(research_view(knowledge, knowledge.status()))
+            return self._json(capture_research_view(knowledge))
         if path.startswith("/api/files/"):
             try:
                 return self._json(self._files(path, body))
