@@ -25,6 +25,7 @@
      {mark: "on", path} / {mark: "read", path, from, to} / {mark: "clear-read"}
                                             marks in the editor (AH); lines 0-based
      {save: "session", id}                  the conversation's session (init)
+     {draw: "notation_proposal", event}    a saved candidate, never an adopted symbol
      {draw: "context" | "build" | "error" | "done", event}   as the event says
 
    One reply is one message: its streamed pieces (delta) are joined, and the whole text
@@ -121,10 +122,11 @@ const Turn = (() => {
           if (live.delete(e.id)) out.push({ draw: "live-close", id: e.id });
           out.push({ view: "end", id: e.id, ok: !e.error });
           status = "working…";
-        } else if (["build", "error", "context", "rate", "permission", "permission_resolved"].includes(e.t)) {
+        } else if (["build", "error", "context", "rate", "permission", "permission_resolved", "notation_proposal", "notation_decision", "notation_clarification", "research_record", "research_record_error"].includes(e.t)) {
           out.push({ draw: e.t, event: e });
           if (e.t === "permission") status = `waiting for ${e.tool} permission…`;
           if (e.t === "permission_resolved") status = "working…";
+          if (e.t === "notation_proposal") { msg = null; status = "notation candidate saved…"; }
         } else if (e.t === "done") {
           turn.changed = (e.changed || []).map((c) => c.path);
           out.push({ draw: "done", event: e });

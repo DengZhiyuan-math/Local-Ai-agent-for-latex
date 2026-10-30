@@ -21,6 +21,15 @@ import mcp_compile
 from unittest import mock
 
 
+def require_symlinks(test, folder):
+    link = folder / "symlink-probe"
+    try:
+        link.symlink_to(folder / "missing-target")
+    except OSError as e:
+        test.skipTest(f"needs symlink permission: {e}")
+    link.unlink()
+
+
 class ProjectPaths(unittest.TestCase):
     def test_git_directory_is_off_limits_in_any_case(self):
         from fsutil import project_path
@@ -35,6 +44,7 @@ class ProjectPaths(unittest.TestCase):
     def test_search_and_catalog_cannot_read_external_links(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
+            require_symlinks(self, base)
             root = base / "project"
             root.mkdir()
             (root / "main.tex").write_text("INSIDE\n")
@@ -105,6 +115,7 @@ class ChangeCoverage(unittest.TestCase):
     def test_undo_restores_a_replaced_link_without_touching_its_external_target(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
+            require_symlinks(self, base)
             root = base / "project"
             root.mkdir()
             (root / "main.tex").write_bytes(b"original")
@@ -119,6 +130,7 @@ class ChangeCoverage(unittest.TestCase):
 
             m = manager(root, replace=Replace("replace"))
             done = wait_done(m.jobs[m.start("replace", None, "edit")["job"]])
+            self.assertTrue((root / "main.tex").is_symlink())
             self.assertEqual(m.undo(done["turn"])["restored"], ["main.tex"])
             self.assertEqual((root / "main.tex").read_bytes(), b"original")
             self.assertEqual(outside.read_bytes(), b"private")

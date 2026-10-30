@@ -34,7 +34,7 @@ async function providerQuota() {
   const ctx = { C, P, catalog: null,
     $: (id) => elements[id] ||= { classList: { toggle() {} } },
     store: { get: () => false, set() {} }, esc: x => x, icon: () => "",
-    loadProvider() {}, loadAccount() {}, renderModelControls() {}, loadModels() {},
+    loadProvider() {}, loadAccount() {}, renderModelControls() {}, loadModels() {}, renderNotationGuard() {},
     checkUsage: (...args) => queried.push([C.provider, ...args]) };
   const run = vm.runInNewContext(section("let lastUsage =", "\nasync function checkUsage(") +
     section("function setProvider(", "\nfunction renderProviders(") + ";({renderQuota, setProvider})", ctx);

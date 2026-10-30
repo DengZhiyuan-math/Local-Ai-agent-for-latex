@@ -13,6 +13,8 @@ import stat
 from pathlib import Path
 from uuid import uuid4
 
+from fsutil import read_windows_file
+
 SCHEMA = "prism-build-result/v1"
 MAX_FILE = 4_000_000
 MAX_BYTES = 32_000_000
@@ -34,6 +36,9 @@ def _plain(root, name, limit=MAX_FILE):
             or any(p.is_symlink() for p in (path, *path.parents))
             or path.resolve(strict=True).is_relative_to(root) is False):
         raise ValueError("unsafe local input")
+    if os.name == "nt":
+        raw, version = read_windows_file(path, limit)
+        return _sha(raw), version
     fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(fd, "rb") as stream:
         before = os.fstat(stream.fileno())

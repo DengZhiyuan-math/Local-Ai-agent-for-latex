@@ -166,7 +166,9 @@ class Results(unittest.TestCase):
         self.assertEqual(build_results.read(self.project.config)["status"], "unknown")
 
     def test_system_distribution_inputs_are_historical_environment(self):
-        self.compile(extra="INPUT /usr/local/texlive/2026/texmf-dist/tex/latex/base/article.cls\n")
+        distribution = ("C:/Program Files/MiKTeX/tex/latex/base/article.cls" if sys.platform == "win32"
+                        else "/usr/local/texlive/2026/texmf-dist/tex/latex/base/article.cls")
+        self.compile(extra=f"INPUT {distribution}\n")
         self.assertEqual(build_results.read(self.project.config)["status"], "complete")
 
     def test_tectonic_uses_native_rules_and_does_not_assume_fls(self):

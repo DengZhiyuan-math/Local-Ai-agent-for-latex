@@ -30,7 +30,8 @@ def control_query(exe: str | None, request: dict | None = None, timeout: float =
     if not exe:
         raise ValueError("Claude Code CLI not found")
     cmd = [exe, "-p", "--input-format", "stream-json", "--output-format", "stream-json",
-           "--verbose", "--tools", "", "--strict-mcp-config", "--no-session-persistence"]
+           "--verbose", "--tools", "", "--strict-mcp-config", "--setting-sources", "",
+           "--no-session-persistence"]
     job = Job(0)
     job.root = root or Path(tempfile.gettempdir())
     initialize = {"type": "control_request", "request_id": "prism-init",

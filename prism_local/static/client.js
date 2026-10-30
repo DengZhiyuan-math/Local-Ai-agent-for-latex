@@ -26,6 +26,11 @@ const Client = (() => {
       // the project
       tree: () => get("/api/tree"),
       config: () => get("/api/config"),
+      research: () => get("/api/research"),
+      initializeResearch: (body) => post("/api/research/initialize", body),
+      correctResearch: (body) => post("/api/research/correct", body),
+      configureDiscussion: (body) => post("/api/research/discussion", body),
+      shareGitHubProposals: (body) => post("/api/research/github/proposals", body),
       symbols: () => get("/api/symbols"),
       labels: () => get("/api/labels"),
       resolveLabel: (label, version) => get("/api/labels/resolve", { label, version }),
@@ -36,7 +41,8 @@ const Client = (() => {
       snippets: () => get("/api/snippets"),
       // files
       file: (path) => get("/api/file", { path }),
-      saveFile: ({ path, content, base_mtime, force }) => post("/api/file", { path, content, base_mtime, force }),
+      saveFile: ({ path, content, base_mtime, force, manual_edit_token }) => post("/api/file", {
+        path, content, base_mtime, force, ...(manual_edit_token ? { manual_edit_token } : {}) }),
       // many files' text at once, for search and word counts: {files: [{path, mtime, content | skipped}]}
       texts: (paths) => post("/api/texts", { paths }),
       // the Files menu: one of FILE_ACTIONS

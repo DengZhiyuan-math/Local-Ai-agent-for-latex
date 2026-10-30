@@ -1,4 +1,5 @@
 """A project's settings (projectconfig.py): the defaults, overridden by its prism.json."""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -59,6 +60,19 @@ class ProjectConfig(unittest.TestCase):
             cfg = Config(project({"main.tex": "", "prism.json": f'{{"outdir": "{outdir}"}}'}))
             self.assertEqual(cfg.outdir, expected, outdir)
             self.assertEqual(cfg.pdf, cfg.root / expected / "main.pdf")
+
+    def test_windows_output_paths_fall_back_on_every_host(self):
+        for outdir in ("C:/x", r"C:\x", "C:x", "c:out", "/C:/x", "/C:x", r"\C:\x", r"\\server\share\out",
+                       "//server/share/out", r"\\?\C:\out", r"\\?\UNC\server\share\out"):
+            with self.subTest(outdir=outdir):
+                cfg = Config(project({"paper.tex": "", "prism.json": json.dumps({
+                    "main": "paper.tex", "outdir": outdir})}))
+                self.assertEqual(cfg.main, "paper.tex", "the valid JSON must still be read")
+                self.assertEqual(cfg.outdir, "build")
+                self.assertEqual(cfg.pdf, cfg.root / "build" / "paper.pdf")
+                self.assertEqual(cfg.log, cfg.root / "build" / "paper.log")
+                self.assertEqual(cfg.synctex, cfg.root / "build" / "paper.synctex.gz")
+                self.assertIn("outdir must be a folder inside the project", cfg.error)
 
     def test_a_document_opened_on_its_own(self):
         cfg = Config(project({"main.tex": "", "notes.tex": ""}), main="notes.tex")

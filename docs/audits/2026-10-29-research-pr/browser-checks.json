@@ -1,0 +1,302 @@
+{
+  "research_source_sha256": "d67662acc726d7317730b281d47c16fc96dd549aa0b05590fa9d29af8cda2823",
+  "checks": [
+    {
+      "name": "research invitation is ready",
+      "passed": true
+    },
+    {
+      "name": "opening project does not silently initialize",
+      "passed": true
+    },
+    {
+      "name": "Later retains uninitialized state",
+      "passed": true
+    },
+    {
+      "name": "explicit Initialize completes",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Propose one candidate before using it.",
+      "passed": true
+    },
+    {
+      "name": "candidate ends Turn and remains unadopted without modal",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: ~~~\nYes\n~~~",
+      "passed": true
+    },
+    {
+      "name": "quoted Yes grants no permission",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Approve $z$.",
+      "passed": true
+    },
+    {
+      "name": "ordinary named reply adopts after intervening quoted discussion",
+      "passed": true
+    },
+    {
+      "name": "provider fixture-2 is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "fixture-2 uses shared adopted z in source and visible chat",
+      "passed": true
+    },
+    {
+      "name": "provider fixture is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Discuss these two names.",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Reject $w$; approve $v$.",
+      "passed": true
+    },
+    {
+      "name": "batch decisions retain individual scope",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Reopen $w$.",
+      "passed": true
+    },
+    {
+      "name": "Reopen returns to pending without adoption",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Yes",
+      "passed": true
+    },
+    {
+      "name": "ordinary Yes approves the current reopened question",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Reject $w$.",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the estimate.",
+      "passed": true
+    },
+    {
+      "name": "unknown write is held and source preserved",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Use $h$ for $x+x$.",
+      "passed": true
+    },
+    {
+      "name": "complete human instruction adopts despite incomplete AI candidate",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Don't use $h$ after all.",
+      "passed": true
+    },
+    {
+      "name": "explicit No revokes direct adoption with incomplete candidate",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Reopen $h$.",
+      "passed": true
+    },
+    {
+      "name": "reopening does not revive earlier direct adoption",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Use $a_i$ for $x+x$ with i in {1,2,3}.",
+      "passed": true
+    },
+    {
+      "name": "finite family survives shared registration",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Compare the direct estimate.",
+      "passed": true
+    },
+    {
+      "name": "topic saved without source rewrite",
+      "passed": true
+    },
+    {
+      "name": "explicit local GitHub settings save",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Discuss a separate candidate for GitHub review.",
+      "passed": true
+    },
+    {
+      "name": "UI shares exact candidate versions without approval",
+      "passed": true
+    },
+    {
+      "name": "proposal batch published on existing topic issue",
+      "passed": true
+    },
+    {
+      "name": "verified designated reply produces visible evidence",
+      "passed": true
+    },
+    {
+      "name": "provider claude is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "claude uses shared adopted q in source and visible chat",
+      "passed": true
+    },
+    {
+      "name": "provider codex is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "codex uses shared adopted q in source and visible chat",
+      "passed": true
+    },
+    {
+      "name": "provider deepcode is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "deepcode uses shared adopted q in source and visible chat",
+      "passed": true
+    },
+    {
+      "name": "provider codex is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Discuss an existing family member.",
+      "passed": true
+    },
+    {
+      "name": "Codex resumed conversation uses selected model and shared family",
+      "passed": true
+    },
+    {
+      "name": "actual GitSync receives source without granting notation",
+      "passed": true
+    },
+    {
+      "name": "received notation question is visible with original source",
+      "passed": true
+    },
+    {
+      "name": "provider fixture is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Approve $r$.",
+      "passed": true
+    },
+    {
+      "name": "ordinary received confirmation preserves received source",
+      "passed": true
+    },
+    {
+      "name": "provider deepcode is selected",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "deepcode uses shared adopted r in source and visible chat",
+      "passed": true
+    },
+    {
+      "name": "reload restores initialized policy",
+      "passed": true
+    },
+    {
+      "name": "reload retains decisions refusals family and one topic",
+      "passed": true
+    },
+    {
+      "name": "fresh designated GitHub No withdraws the current approved version",
+      "passed": true
+    },
+    {
+      "name": "new refusal retains the original verified approval receipt",
+      "passed": true
+    },
+    {
+      "name": "Turn completes: Continue the current estimate.",
+      "passed": true
+    },
+    {
+      "name": "GitHub withdrawal blocks subsequent native-adapter source use",
+      "passed": true
+    },
+    {
+      "name": "withdrawal survives visible reload",
+      "passed": true
+    }
+  ],
+  "server_restart_checks": [
+    {
+      "name": "server restart restores initialized visible baseline",
+      "passed": true
+    },
+    {
+      "name": "server restart retains exact author decisions",
+      "passed": true
+    },
+    {
+      "name": "server restart retains family and original topic identity",
+      "passed": true
+    },
+    {
+      "name": "editor and GitHub refusals persist without reapproval",
+      "passed": true
+    },
+    {
+      "name": "restart and unchanged checks preserve exact manuscript bytes",
+      "passed": true
+    },
+    {
+      "name": "unchanged GitHub checks do not duplicate issues comments or decisions",
+      "passed": true
+    },
+    {
+      "name": "restart lifecycle checks invoke no model",
+      "passed": true
+    }
+  ],
+  "completed": true,
+  "passed": true,
+  "scope": "Real editor UI and actual adapters with local Python protocol programs, local scripted API, FakeIssueAdapter, and local bare Git. Earlier source candidate; research/frontend files unchanged by the subsequent output-folder and fixture-only changes. Browser was not rerun for that follow-up."
+}

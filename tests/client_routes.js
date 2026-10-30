@@ -15,6 +15,10 @@ const Q = Client.create(api);
 const ARGS = {
   tree: [], config: [], symbols: [], pdfstat: [], home: [], restart: [], renameProject: ["Paper"],
   snippets: [],
+  research: [], initializeResearch: [{ project_key: "p", question: "", notation: "", provider: "api" }],
+  correctResearch: [{ project_key: "p", term_updates: [], excluded_symbols: [], notes: "" }],
+  configureDiscussion: [{ project_key: "p", mode: "markdown", approvers: [] }],
+  shareGitHubProposals: [{ project_key: "p", topic_id: "topic", subjects: [{ id: "proposal", revision: 1, content_hash: "hash" }] }],
   file: ["sec/a b.tex"], texts: [["a.tex", "b.tex"]], saveFile: [{ path: "a.tex", content: "x", base_mtime: 1, force: false }],
   upload: [{ name: "p.png", data: "", destination: "" }], uploadSync: [["a.png", "b.png"]], uploadCancel: ["u1"], diff: ["a.tex"],
   build: [{ mode: "latexmk", clean: false, active: "a.tex" }], buildStop: [],
