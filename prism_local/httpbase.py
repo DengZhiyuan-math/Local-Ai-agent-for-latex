@@ -28,6 +28,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from socketserver import TCPServer
 from urllib.parse import parse_qs, urlparse
 
 from errors import Conflict, LockBusy, NotInstalled, Params, Refused, say
@@ -51,7 +52,10 @@ class Server(ThreadingHTTPServer):
     def server_bind(self):
         if os.name == "nt":
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+        # The listener uses a numeric loopback address; reverse DNS can block an
+        # offline startup and is not needed for requests or Host validation.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def handle_error(self, request, client_address):
         # A page that goes away in the middle of an answer (a reload, a closed tab) is

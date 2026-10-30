@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
 
@@ -25,6 +25,7 @@ import agent  # noqa: E402
 import backends  # noqa: E402
 import backend_claude  # noqa: E402
 import mcp_compile  # noqa: E402
+import httpbase  # noqa: E402
 from backend_claude import ClaudeCode  # noqa: E402
 from backend_codex import Codex  # noqa: E402
 from backend_openai import OpenAICompat  # noqa: E402
@@ -1361,7 +1362,7 @@ def wait_done(job, timeout=10):
     raise AssertionError("turn did not finish")
 
 
-class FakeAPI(ThreadingHTTPServer):
+class FakeAPI(httpbase.Server):
     """Answers /chat/completions with the next scripted list of SSE chunks."""
 
     def __init__(self, script, *, port=0):
