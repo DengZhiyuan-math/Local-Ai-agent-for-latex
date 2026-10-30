@@ -146,6 +146,9 @@ def _read_plain(root: Path, rel: str, limit=MAX_FILE) -> bytes:
             or "\\" in rel or any(p.is_symlink() for p in (path, *path.parents))
             or not path.resolve().is_relative_to(root)):
         raise ValueError("A compiler file is not a plain project file: " + rel)
+    if os.name == "nt":
+        from fsutil import read_windows_file
+        return read_windows_file(path, limit)[0]
     # A detached sandboxed child could still change the copy. Open each directory
     # without following links, so a rename after the check cannot redirect a host read.
     directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)

@@ -4,6 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
+DIRECTORY_DESCRIPTORS = (hasattr(os, 'O_DIRECTORY') and hasattr(os, 'O_NOFOLLOW')
+                         and os.open in os.supports_dir_fd and os.scandir in os.supports_fd)
+
 
 class ClaudeSandbox(unittest.TestCase):
     def test_environment_uses_private_temporary_files_without_changing_home(self):
@@ -30,9 +33,13 @@ class ClaudeSandbox(unittest.TestCase):
             root, profile, scratch, state = [top / name for name in ('project', 'profile', 'scratch', 'state')]
             for path in (root, profile, scratch, state):path.mkdir()
             command = [sys.executable, '-I', '-c', 'print("fixture")']
-            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}):
+            # This case tests policy serialization. Descriptor traversal has
+            # separate capability-bound tests below.
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}), \
+                    mock.patch.object(claude_sandbox, '_verify_unlinked_trees') as verify:
                 wrapped = claude_sandbox.wrap(command, root, profile, scratch)
-            self.assertEqual(wrapped[:2], ['/usr/bin/sandbox-exec', '-p'])
+            verify.assert_called_once_with([root, profile, scratch])
+            self.assertEqual(wrapped[:2], [str(claude_sandbox.SANDBOX), '-p'])
             self.assertEqual(wrapped[3:], command)
             self.assertIn('(deny default)', wrapped[2])
             self.assertIn('(deny file-write* (subpath ' + json.dumps(str(root)), wrapped[2])
@@ -73,6 +80,7 @@ class ClaudeSandbox(unittest.TestCase):
         try:
             with mock.patch.object(claude_sandbox.sys, 'platform', 'darwin'), \
                     mock.patch.object(claude_sandbox, 'SANDBOX') as sandbox, \
+                    mock.patch.object(claude_sandbox, '_verify_unlinked_trees'), \
                     mock.patch.object(claude_sandbox, 'run_bounded', side_effect=subprocess.TimeoutExpired('fixture', 10)) as run:
                 sandbox.is_file.return_value = True
                 first = claude_sandbox.availability()
@@ -83,6 +91,7 @@ class ClaudeSandbox(unittest.TestCase):
         finally:
             claude_sandbox.availability.cache_clear()
 
+    @unittest.skipUnless(DIRECTORY_DESCRIPTORS, 'Hardlink scan requires POSIX directory descriptors.')
     def test_scan_limits_fail_closed_before_launch(self):
         import claude_sandbox
         import sys
@@ -101,6 +110,7 @@ class ClaudeSandbox(unittest.TestCase):
                     with self.assertRaisesRegex(ValueError, 'directory limit'):
                         claude_sandbox.wrap([sys.executable], root, profile, scratch)
 
+    @unittest.skipUnless(DIRECTORY_DESCRIPTORS, 'Hardlink scan requires POSIX directory descriptors.')
     def test_scan_does_not_follow_symlinks_or_repair_user_files(self):
         import claude_sandbox
         import sys
@@ -114,11 +124,12 @@ class ClaudeSandbox(unittest.TestCase):
             link = profile / 'external'; link.symlink_to(outside, target_is_directory=True)
             with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}):
                 wrapped = claude_sandbox.wrap([sys.executable], root, profile, scratch)
-            self.assertEqual(wrapped[0], '/usr/bin/sandbox-exec')
+            self.assertEqual(wrapped[0], str(claude_sandbox.SANDBOX))
             self.assertTrue(link.is_symlink())
             self.assertEqual(source.read_text(), 'outside')
             self.assertEqual(source.stat().st_nlink, 2)
 
+    @unittest.skipUnless(DIRECTORY_DESCRIPTORS, 'Hardlink scan requires POSIX directory descriptors.')
     def test_unreadable_tree_is_not_treated_as_verified(self):
         import claude_sandbox
         import sys
@@ -143,6 +154,7 @@ class ClaudeSandbox(unittest.TestCase):
             private = state / 'decision-evidence'; private.write_text('editor-private-evidence')
             alias = home / '.claude.json'; os.link(private, alias)
             with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}), \
+                    mock.patch.object(claude_sandbox, '_verify_unlinked_trees'), \
                     mock.patch.object(claude_sandbox.Path, 'home', return_value=home):
                 with self.assertRaisesRegex(ValueError, 'hardlink'):
                     claude_sandbox.wrap([sys.executable], root, profile, scratch)

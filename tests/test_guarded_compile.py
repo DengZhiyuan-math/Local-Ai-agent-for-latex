@@ -182,6 +182,9 @@ class Protocol(CompileCase):
                 path = self.write(name, "construct mathematical output")
                 self.assert_diagnostics_only(self.run_guarded(), "Script or executable input")
                 path.unlink()
+
+    @unittest.skipIf(os.name == "nt", "Windows chmod does not provide Unix executable mode bits.")
+    def test_unix_executable_mode_input_never_publishes(self):
         path = self.write("payload.txt", "construct mathematical output")
         path.chmod(0o700)
         self.assert_diagnostics_only(self.run_guarded(), "Script or executable input")
@@ -273,15 +276,22 @@ class Protocol(CompileCase):
         (scratch / "folder").mkdir(parents=True)
         (scratch / "folder/data").write_text("safe")
         (self.state / "data").write_text("private")
-        real_open = os.open
-        def swap(path, flags, **kwargs):
-            if path == scratch:
+        real_resolve = Path.resolve
+        swapped = False
+        def swap(path, *args, **kwargs):
+            nonlocal swapped
+            resolved = real_resolve(path, *args, **kwargs)
+            if path == scratch / "folder/data" and not swapped:
+                swapped = True
                 (scratch / "folder").rename(scratch / "old")
                 (scratch / "folder").symlink_to(self.state, target_is_directory=True)
-            return real_open(path, flags, **kwargs)
-        with mock.patch.object(guarded.os, "open", side_effect=swap):
-            with self.assertRaises(OSError):
+            return resolved
+        # Replace the directory after the initial path check. Both native
+        # handle readers and POSIX directory-descriptor readers must refuse it.
+        with mock.patch.object(Path, "resolve", swap):
+            with self.assertRaises((OSError, ValueError)):
                 guarded._read_plain(scratch, "folder/data")
+        self.assertTrue(swapped)
 
     def test_publication_holds_existing_project_files_lock(self):
         replace = guarded.replace_file
@@ -338,9 +348,9 @@ class Protocol(CompileCase):
         profile = guarded._profile(scratch, denied=[self.root])
         self.assertIn("(deny default)", profile)
         self.assertIn("(deny network*)", profile)
-        self.assertIn(f'(allow file-write* (subpath "{scratch}")', profile)
-        self.assertIn(f'(subpath "{self.root}")', profile.split("(deny file-read*")[1])
-        self.assertIn(f'(subpath "{self.state}")', profile.split("(deny file-read*")[1])
+        self.assertIn('(allow file-write* (subpath ' + json.dumps(str(scratch), ensure_ascii=False) + ')', profile)
+        self.assertIn('(subpath ' + json.dumps(str(self.root), ensure_ascii=False) + ')', profile.split("(deny file-read*")[1])
+        self.assertIn('(subpath ' + json.dumps(str(self.state), ensure_ascii=False) + ')', profile.split("(deny file-read*")[1])
         self.assertNotIn("(allow process*)", profile)
 
 

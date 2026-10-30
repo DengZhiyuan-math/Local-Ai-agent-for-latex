@@ -161,14 +161,31 @@ def _time(v) -> float:
 
 
 def read_settings(path: Path, *, strict=False, nofollow=False) -> dict:
+    path = Path(path)
+    limit = 2 * 1024 * 1024
     try:
-        descriptor = os.open(path,os.O_RDONLY|os.O_NONBLOCK|(os.O_NOFOLLOW if nofollow else 0))
-        with os.fdopen(descriptor,'rb') as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_size>2*1024*1024:
-                raise ValueError('Deep Code metadata is not a bounded regular JSON file.')
-            raw = stream.read(2*1024*1024+1)
-        if len(raw)>2*1024*1024:
+        if nofollow and os.name == 'nt':
+            from fsutil import read_windows_file
+            raw = read_windows_file(path, limit)[0]
+        else:
+            nonblocking = getattr(os, 'O_NONBLOCK', 0)
+            if not nonblocking:
+                info = path.lstat() if nofollow else path.stat()
+                if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+                    raise ValueError('Deep Code metadata is not a bounded regular JSON file.')
+            flags = os.O_RDONLY | nonblocking | getattr(os, 'O_BINARY', 0)
+            if nofollow:
+                nofollow_flag = getattr(os, 'O_NOFOLLOW', 0)
+                if not nofollow_flag:
+                    raise ValueError('No-follow metadata reads are unavailable on this platform.')
+                flags |= nofollow_flag
+            descriptor = os.open(path, flags)
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+                    raise ValueError('Deep Code metadata is not a bounded regular JSON file.')
+                raw = stream.read(limit + 1)
+        if len(raw)>limit:
             raise ValueError('Deep Code metadata exceeded the checking limit.')
         data = json.loads(raw)
         if not isinstance(data,dict):

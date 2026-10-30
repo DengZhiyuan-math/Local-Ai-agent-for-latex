@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import unittest
 from unittest import mock
 
@@ -28,6 +29,33 @@ class ResearchProvenance(unittest.TestCase):
         raw = (json.dumps(data, ensure_ascii=False, indent=2) + "\n").encode()
         path.write_bytes(raw)
         return raw
+
+    def test_windows_read_does_not_compare_creation_time_to_handle_change_time(self):
+        import fsutil
+        import research_provenance
+        path = self.state / "metadata.json"
+        raw = b'{"valid": true}\r\n'
+        path.write_bytes(raw)
+        expected = path.stat()
+        changed_view = SimpleNamespace(**{name: getattr(expected, name) for name in
+            ("st_mode", "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_ctime_ns")})
+        changed_view.st_ctime_ns += 1_000_000_000
+
+        class WindowsOS:
+            name = "nt"
+
+            def __getattr__(self, name):
+                if name in ("O_DIRECTORY", "O_NOFOLLOW"):
+                    raise AttributeError(name)
+                return getattr(os, name)
+
+        # Windows 3.14 gives path stat creation time and fstat change time.
+        # The native opener pins the path; the read's two fstat observations
+        # must still compare every metadata field, including change time.
+        with mock.patch.object(research_provenance, "os", WindowsOS()), \
+                mock.patch.object(fsutil, "_windows_file", side_effect=lambda p: p.open("rb")), \
+                mock.patch.object(Path, "lstat", return_value=changed_view):
+            self.assertEqual(research_provenance.read_plain(path, 1000), raw)
 
     def test_rehashed_received_baseline_and_explicit_notation_do_not_grant_permission(self):
         self.knowledge.initialize()

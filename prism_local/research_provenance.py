@@ -10,7 +10,7 @@ import stat
 import uuid
 
 from errors import Conflict, Refused
-from fsutil import replace_file
+from fsutil import read_windows_file, replace_file
 from guarded_compile import _read_plain
 import registry
 from research_edits import sign_receipt, verify_receipt
@@ -36,6 +36,8 @@ def _record_object(pairs):
 def read_plain(path, limit):
     """Read one bounded regular file without following a substituted leaf."""
     path = Path(path)
+    if os.name == "nt":
+        return read_windows_file(path, limit)[0]
     if path.is_absolute() and hasattr(os, "O_DIRECTORY") and hasattr(os, "O_NOFOLLOW"):
         return _read_plain(Path(path.anchor), path.relative_to(path.anchor).as_posix(), limit)
     before = path.lstat()
