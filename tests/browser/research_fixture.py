@@ -9,6 +9,10 @@ import os
 from pathlib import Path
 import sys
 
+if os.environ.get("CI") == "true":
+    import faulthandler
+    faulthandler.dump_traceback_later(5, repeat=True)
+
 work = Path(sys.argv[1]).resolve()
 work.mkdir(parents=True, exist_ok=True)
 root = work / "project"
@@ -88,6 +92,8 @@ url = f"http://127.0.0.1:{srv.server_address[1]}/"
 server.AGENT.server_url = url
 (work / "ready.json").write_text(json.dumps({"url": url, "root": str(root),
                                            "api_url": f"http://127.0.0.1:{api.server_port}"}), encoding="utf-8")
+if os.environ.get("CI") == "true":
+    faulthandler.cancel_dump_traceback_later()
 print(url, flush=True)
 try:
     srv.serve_forever()

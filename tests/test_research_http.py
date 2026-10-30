@@ -24,6 +24,8 @@ class ResearchHTTP(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.work = Path(self.temp.name)
         self.process = None
+        self.addCleanup(self.temp.cleanup)
+        self.addCleanup(self.stop)
         self.start()
 
     def tearDown(self):
@@ -52,18 +54,22 @@ class ResearchHTTP(unittest.TestCase):
     def stop(self):
         if self.process is not None:
             self.process.terminate()
-            self.process.wait(timeout=5)
+            try:
+                self.process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.process.kill()
+                self.process.wait(timeout=5)
             self.process = None
             self.log.close()
 
-    def request(self, path, body=None, project=None):
+    def request(self, path, body=None, project=None, *, timeout=5):
         headers = {"Content-Type": "application/json", "X-Prism-Local": "1"}
         if project is not None:
             headers["X-Prism-Project"] = project
         req = urllib.request.Request(self.url + path, headers=headers,
             data=json.dumps(body).encode() if body is not None else None)
         try:
-            with self.opener.open(req, timeout=5) as response:
+            with self.opener.open(req, timeout=timeout) as response:
                 return response.status, json.load(response)
         except urllib.error.HTTPError as error:
             with error:

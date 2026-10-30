@@ -18,6 +18,12 @@ PRs, including Draft PRs, run the full suite on Ubuntu, Intel macOS and Windows,
 with Python 3.9 and 3.14 and Node 24. The workflow uses a read-only repository
 token, does not persist checkout credentials, and uploads the JSON report even
 when tests fail. It also runs on pushes to `main` and by manual dispatch.
+A quick real HTTP startup check precedes full discovery, so a broken fixture
+cannot produce hundreds of readiness failures before its first diagnostic.
+Its `.ci-results/startup/results.json` is uploaded separately from the full
+suite's report; a startup pass never substitutes for complete test execution.
+CI startup and long-running process diagnostics include bounded thread dumps;
+failed setup also cleans up its server and temporary directory.
 
 Each run uses private temporary PRISM/XDG/home defaults, clears inherited provider
 credentials, and limits Git transport and Python HTTP fixtures to local hosts.

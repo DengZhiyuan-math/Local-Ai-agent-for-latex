@@ -1,6 +1,7 @@
 """Run the full offline fixture suite with private state and a JSON report."""
 import argparse
 from contextlib import ExitStack
+import faulthandler
 import hashlib
 import json
 import os
@@ -60,6 +61,9 @@ def main():
     parser.add_argument("--native-app-fixtures", action="store_true",
                         help="Allow temporary macOS app compile/sign/AppleScript fixtures.")
     args = parser.parse_args()
+    if os.environ.get("GITHUB_ACTIONS") == "true":
+        # Keep native fixture/cleanup stalls diagnosable before the job deadline.
+        faulthandler.dump_traceback_later(600, repeat=True)
     output = args.output_dir.resolve()
     output.mkdir(parents=True, exist_ok=True)
     before = snapshot()

@@ -1,4 +1,4 @@
-"""Joined same-project research journeys through real HTTP and all adapters."""
+"""Joined same-project research journeys through real HTTP and supported adapters."""
 import json
 import os
 from pathlib import Path
@@ -14,6 +14,8 @@ import test_research_guard_http as guard
 import test_research_http as base
 import test_research_topics_http as topics
 from test_agent import call_chunks
+
+NATIVE_CLI = sys.platform == "darwin" and Path("/usr/bin/sandbox-exec").is_file()
 
 
 @unittest.skipUnless(shutil.which("git"), "needs Git for joined local transport")
@@ -103,7 +105,7 @@ class ResearchIntegration(unittest.TestCase):
             events = self.finish(self.turn([
                 call_chunks("known", "write_file", {"path": "main.tex", "content": text}),
                 [base.say("The estimate uses $" + name + "$.")]], mode="edit", provider=provider,
-                model="fixture-model" if model == "default" else model))
+                model="fixture-model" if model == "default" else model, session=session))
         else:
             events = self.cli(provider, [{"type": "mcp", "name": "write_file", "arguments": {
                 "path": "main.tex", "content": text}}, {"type": "text", "text": "The estimate uses $" + name + "$."}],
@@ -171,20 +173,28 @@ class ResearchIntegration(unittest.TestCase):
         self.assertEqual({row["canonical"]: row["status"] for row in self.state()["proposals"]}, {"z": "approved", "w": "rejected"})
         self.author("Use $a_i$ for $x+x$ with i in {1,2,3}.")
         sessions = {}
-        for provider in ("fixture-2", "claude", "codex", "deepcode"):
+        native_providers = ("claude", "codex", "deepcode") if NATIVE_CLI else ()
+        for provider in ("fixture-2", *native_providers):
             sessions[provider] = self.known_use(provider, "z")
             self.held_use(provider, "w", session=sessions[provider] if not provider.startswith("fixture") else None)
-        self.known_use("codex", "z", session=self.transport()["legacy_session"])
+        if NATIVE_CLI:
+            self.known_use("codex", "z", session=self.transport()["legacy_session"])
         saved = self.state()
         calls = self.inference_counts()
         self.stop(); self.start(); self.open_page()
         self.assertEqual(self.inference_counts(), calls)
         self.assertEqual(self.state()["decisions"], saved["decisions"])
         self.assertEqual(self.state()["families"], saved["families"])
-        self.known_use("codex", "a_2", session=sessions["codex"], model="fast")
-        native = [json.loads(line) for line in (self.profiles["codex"] / "cli-requests.jsonl").read_text().splitlines()]
-        self.assertTrue(any(row.get("kind") == "thread" and row.get("session_id") == sessions["codex"]
-                            and row.get("params", {}).get("model") == "fast" for row in native))
+        if NATIVE_CLI:
+            self.known_use("codex", "a_2", session=sessions["codex"], model="fast")
+            native = [json.loads(line) for line in (self.profiles["codex"] / "cli-requests.jsonl").read_text().splitlines()]
+            self.assertTrue(any(row.get("kind") == "thread" and row.get("session_id") == sessions["codex"]
+                                and row.get("params", {}).get("model") == "fast" for row in native))
+        else:
+            self.assertTrue(sessions["fixture-2"])
+            resumed = self.known_use("fixture-2", "a_2", session=sessions["fixture-2"], model="fixture-model-2")
+            self.assertEqual(resumed, sessions["fixture-2"])
+            self.assertEqual(self.requests()[-1]["body"]["model"], "fixture-model-2")
         before_receive = self.inference_counts()
         transport = self.receive("r")
         self.assertEqual(self.inference_counts(), before_receive)
@@ -192,12 +202,15 @@ class ResearchIntegration(unittest.TestCase):
         state = self.state()
         self.assertNotIn("r", {row["canonical"] for row in state["symbols"]})
         question = next(row for row in state["received_confirmations"] if row["canonical"] == "r")
-        self.held_use("deepcode", "r", session=sessions["deepcode"])
+        self.held_use("deepcode" if NATIVE_CLI else "fixture", "r", session=sessions.get("deepcode"))
         self.assertFalse(any(row["canonical"] == "r" for row in self.state()["proposals"]))
-        self.cli("claude", [{"type": "text", "text": "The author decision is saved."}],
-                 human="Yes", received_subjects=[question["id"]])
+        if NATIVE_CLI:
+            self.cli("claude", [{"type": "text", "text": "The author decision is saved."}],
+                     human="Yes", received_subjects=[question["id"]])
+        else:
+            self.author("Yes", received_subjects=[question["id"]])
         self.assertEqual((self.root / "main.tex").read_bytes(), original)
-        for provider in ("fixture", "claude", "codex", "deepcode"):
+        for provider in ("fixture", *native_providers):
             self.known_use(provider, "r")
         final = self.state()
         self.assertEqual({row["canonical"]: row["status"] for row in final["proposals"]}, {"z": "approved", "w": "rejected"})
@@ -207,7 +220,8 @@ class ResearchIntegration(unittest.TestCase):
         self.assertEqual(len({row["id"] for row in decisions}), len(decisions))
         self.capture("all-providers", {"topic": topic_id, "proposals": proposals, "batch": batch,
                      "sessions": sessions, "transport": transport, "final": final,
-                     "legacy_codex": self.transport()["legacy_session"]})
+                     "native_cli_exercised": NATIVE_CLI,
+                     "legacy_codex": self.transport()["legacy_session"] if NATIVE_CLI else None})
 
     def test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering(self):
         self.initialize(); self.configure(); self.open_page()
@@ -269,13 +283,13 @@ class ResearchIntegration(unittest.TestCase):
         self.control("tick")
         self.assertEqual(next(row for row in self.state()["proposals"] if row["canonical"] == "z")["status"], "pending")
         original = (self.root / "main.tex").read_bytes()
-        self.held_use("codex", "z")
+        self.held_use("codex" if NATIVE_CLI else "fixture", "z")
         self.assertEqual((self.root / "main.tex").read_bytes(), original)
         (self.work / "fail-github-mirror").unlink()
         count = len(self.requests())
         self.control("tick")
         self.assertEqual(len(self.requests()), count)
-        self.known_use("deepcode", "z")
+        self.known_use("deepcode" if NATIVE_CLI else "fixture", "z")
         self.sync_control("reject_upload", value=True)
         self.sync(True)
         code, failed_sync = self.request("/api/git/sync", {"project_key": self.key, "action": "commit"})

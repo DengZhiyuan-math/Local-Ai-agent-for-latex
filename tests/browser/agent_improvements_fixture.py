@@ -1,4 +1,4 @@
-"""Isolated UI fixture using the real server/Claude adapter and a local protocol double.
+"""Isolated UI fixture using the real server/legacy Claude protocol and a local double.
 
 Run: python tests/browser/agent_improvements_fixture.py /tmp/prism-agent-ui
 All settings, CLI state and sources stay under that folder. No model/network tools run.
@@ -52,6 +52,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "prism_local"))
 import server
 from backend_claude import ClaudeCode
 class FixtureClaude(ClaudeCode):
+    # Catalog, web-grant and usage coverage uses the legacy protocol double.
+    # It cannot provide the native sandbox required for protected research.
+    research_support = False
+
     def check_session(self, root, session_id):
         return None  # fixture has no native transcript files
 server.set_root(root)

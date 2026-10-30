@@ -59,8 +59,12 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         return state
 
     def control(self, action, **data):
+        # A synchronous GitSync tick can make five local push attempts, with
+        # three seconds of retry waits alone, plus Git and snapshot commands.
+        # Keep ordinary editor requests at five seconds; budget this transport
+        # control separately so its response can assert the completed outcome.
         code, result = self.request("/__fixture/gitsync", {
-            "project_key": self.key, "action": action, **data})
+            "project_key": self.key, "action": action, **data}, timeout=30)
         self.assertEqual(code, 200, result)
         return result
 

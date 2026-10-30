@@ -87,7 +87,8 @@ TOOLS = ("mkdir", "ls", "dirname")
 
 
 def cygpath(p) -> str:
-    return subprocess.run([str(Path(SH).with_name("cygpath")), "-u", str(p)],
+    # Git Bash can expose bin/sh.exe while cygpath.exe lives in usr/bin.
+    return subprocess.run([SH, "-c", 'exec /usr/bin/cygpath -u "$1"', "fixture", str(p)],
                           capture_output=True, text=True, check=True).stdout.strip()
 
 
