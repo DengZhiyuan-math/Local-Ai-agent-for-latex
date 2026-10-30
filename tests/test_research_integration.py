@@ -70,7 +70,9 @@ class ResearchIntegration(unittest.TestCase):
         return result
 
     def sync_control(self, action, **data):
-        code, result = self.request("/__fixture/integration", {"project_key": self.key, "action": action, **data})
+        timeout = 30 if action in ("tick", "pull", "remote_commit") else 5
+        code, result = self.request("/__fixture/integration", {
+            "project_key": self.key, "action": action, **data}, timeout=timeout)
         self.assertEqual(code, 200, result)
         return result
 
@@ -131,7 +133,8 @@ class ResearchIntegration(unittest.TestCase):
 
     def receive(self, name):
         self.sync(True)
-        code, saved = self.request("/api/git/sync", {"project_key": self.key, "action": "commit"})
+        code, saved = self.request("/api/git/sync", {
+            "project_key": self.key, "action": "commit"}, timeout=30)
         self.assertEqual(code, 200, saved)
         self.assertIsNone(saved["error"])
         before = self.sync_control("tick")
@@ -292,14 +295,18 @@ class ResearchIntegration(unittest.TestCase):
         self.known_use("deepcode" if NATIVE_CLI else "fixture", "z")
         self.sync_control("reject_upload", value=True)
         self.sync(True)
-        code, failed_sync = self.request("/api/git/sync", {"project_key": self.key, "action": "commit"})
+        # A rejected upload retains all five GitSync attempts and their retry
+        # waits. Give only synchronous Git operations the transport budget.
+        code, failed_sync = self.request("/api/git/sync", {
+            "project_key": self.key, "action": "commit"}, timeout=30)
         self.assertEqual(code, 200, failed_sync)
         failed = {**self.transport(), "sync": failed_sync}
         self.assertIsNotNone(failed["sync"]["error"])
         saved = self.state()
         self.assertEqual(next(row for row in saved["proposals"] if row["canonical"] == "z")["status"], "approved")
         self.sync_control("reject_upload", value=False)
-        code, retried_sync = self.request("/api/git/sync", {"project_key": self.key, "action": "commit"})
+        code, retried_sync = self.request("/api/git/sync", {
+            "project_key": self.key, "action": "commit"}, timeout=30)
         self.assertEqual(code, 200, retried_sync)
         retried = {**self.transport(), "sync": retried_sync}
         self.assertEqual(retried["receiver_head"], retried["remote_head"])
@@ -322,7 +329,8 @@ class ResearchIntegration(unittest.TestCase):
         self.control("tick")
         original_issue = self.remote()["issues"][0]
         original_adoption = self.state()["adoptions"][0]
-        code, uploaded = self.request("/api/git/sync", {"project_key": self.key, "action": "commit"})
+        code, uploaded = self.request("/api/git/sync", {
+            "project_key": self.key, "action": "commit"}, timeout=30)
         self.assertEqual(code, 200, uploaded)
         self.assertIsNone(uploaded["error"])
         original_record = (self.root / "research/knowledge.json").read_bytes()
