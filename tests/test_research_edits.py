@@ -165,7 +165,7 @@ class EditorEvidence(unittest.TestCase):
         witnesses = json.loads((self.state / WITNESS_FILE).read_text())["receipts"]
         upper, lower = self.state / "Authority", self.state / "authority"
         def material():
-            return (key, witnesses) if evidence.registry.state_dir() == upper else (None, {})
+            return (key, witnesses) if str(evidence.registry.state_dir()) == str(upper) else (None, {})
         # Windows normcase also folds names in case-sensitive directories.
         with mock.patch.object(evidence.registry, "norm", side_effect=lambda path: str(path).lower()), \
                 mock.patch.object(evidence, "_verification_material", side_effect=material), \
