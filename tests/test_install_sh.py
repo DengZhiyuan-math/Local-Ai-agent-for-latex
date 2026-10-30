@@ -124,7 +124,7 @@ class InstallSh(unittest.TestCase):
 
     def tools_dir(self) -> str:
         if WIN:     # Git's usr/bin: coreutils, and neither git nor python3
-            return posix(Path(SH).parent)
+            return "/usr/bin"   # bin/sh.exe can be a wrapper beside the real git.exe.
         d = self.tmp / "tools"
         if not d.exists():
             d.mkdir()

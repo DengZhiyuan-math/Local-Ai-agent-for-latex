@@ -13,11 +13,18 @@ The report includes failures, exact skip reasons, discovered test names, source
 drift and blocked process/network attempts. Any failure, drift or blocked attempt
 fails the run. Use `--modules test_projectconfig test_research_language` for a
 focused diagnosis, or `--output-dir PATH` to choose the report directory.
+Failures print their traceback immediately, so a later deadline cannot hide an
+earlier failure. `--shard 1/2` and `--shard 2/2` split sorted modules into two
+disjoint groups. Together they execute every discovered test; module and class
+fixtures remain together. Reports record the shard and total discovery count.
 
 PRs, including Draft PRs, run the full suite on Ubuntu, Intel macOS and Windows,
 with Python 3.9 and 3.14 and Node 24. The workflow uses a read-only repository
 token, does not persist checkout credentials, and uploads the JSON report even
 when tests fail. It also runs on pushes to `main` and by manual dispatch.
+Each environment runs two module shards, for twelve full-suite jobs. Windows
+also checks known portability regressions before the full suite and uploads
+that compatibility report separately. No quick check replaces full execution.
 A quick real HTTP startup check precedes full discovery, so a broken fixture
 cannot produce hundreds of readiness failures before its first diagnostic.
 Its `.ci-results/startup/results.json` is uploaded separately from the full

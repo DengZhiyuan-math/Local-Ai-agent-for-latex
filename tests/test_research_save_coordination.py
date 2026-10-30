@@ -105,7 +105,7 @@ class SourceCoordinationHTTP(unittest.TestCase):
         self.assertEqual(code, 503, saved)
         # The editor queues its own edits during this Turn. Another program can
         # still save a file, so the model's earlier read must not overwrite it.
-        source.write_text(human)
+        source.write_bytes(human.encode("utf-8"))
         samples, stop = [], threading.Event()
         def observe():
             while not stop.wait(.001):
@@ -223,7 +223,7 @@ class SourceCoordinationSchedule(unittest.TestCase):
         self.root = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
         self.source = self.root / "main.tex"
         self.original = "An original proof description.\n"
-        self.source.write_text(self.original)
+        self.source.write_bytes(self.original.encode("utf-8"))
         self.project = Project(self.root)
         self.knowledge = ResearchKnowledge(self.project)
         self.knowledge.initialize()

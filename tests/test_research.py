@@ -18,7 +18,7 @@ def project_with(files=None):
     for rel, text in (files or {}).items():
         path = root / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(text, encoding="utf-8")
+        path.write_bytes(text.encode("utf-8"))
     return Project(root)
 
 

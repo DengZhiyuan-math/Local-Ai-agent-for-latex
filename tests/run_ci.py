@@ -54,13 +54,46 @@ def enter_context(case, context):
     return value
 
 
+class CIResult(unittest.TextTestResult):
+    """Keep a failing case's trace even if a later case hits the job deadline."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.passed = 0
+
+    def addSuccess(self, test):
+        super().addSuccess(test)
+        self.passed += 1
+
+    def addError(self, test, error):
+        super().addError(test, error)
+        self.stream.writeln(self.errors[-1][1])
+
+    def addFailure(self, test, error):
+        super().addFailure(test, error)
+        self.stream.writeln(self.failures[-1][1])
+
+    def addSubTest(self, test, subtest, error):
+        super().addSubTest(test, subtest, error)
+        if error is not None:
+            self.stream.writeln(self._exc_info_to_string(error, subtest))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=ROOT / ".ci-results")
     parser.add_argument("--modules", nargs="+", help="Run selected unittest names for diagnosis.")
+    parser.add_argument("--shard", help="Run one module shard, for example 1/2.")
     parser.add_argument("--native-app-fixtures", action="store_true",
                         help="Allow temporary macOS app compile/sign/AppleScript fixtures.")
     args = parser.parse_args()
+    shard_index, shard_count = 1, 1
+    if args.shard:
+        try:
+            shard_index, shard_count = map(int, args.shard.split("/"))
+            if not 1 <= shard_index <= shard_count:
+                raise ValueError
+        except ValueError:
+            parser.error("--shard must be INDEX/COUNT with 1 <= INDEX <= COUNT")
     if os.environ.get("GITHUB_ACTIONS") == "true":
         # Keep native fixture/cleanup stalls diagnosable before the job deadline.
         faulthandler.dump_traceback_later(600, repeat=True)
@@ -179,21 +212,30 @@ def main():
             suite = (loader.loadTestsFromNames(args.modules) if args.modules
                      else loader.discover(str(ROOT / "tests"), pattern="test*.py"))
             cases = list(flatten(suite))
+            discovered_count = len(cases)
+            if shard_count > 1:
+                modules = sorted({type(case).__module__ for case in cases})
+                selected = set(modules[shard_index - 1::shard_count])
+                cases = [case for case in cases if type(case).__module__ in selected]
+                if not cases:
+                    parser.error("--shard selected no tests")
+                suite = unittest.TestSuite(cases)
             if not args.native_app_fixtures:
                 for case in cases:
                     if case.id() in APP_TESTS:
                         method = getattr(type(case), case._testMethodName)
                         setattr(type(case), case._testMethodName,
                                 unittest.skip("Temporary native app fixtures require --native-app-fixtures.")(method))
-            result = unittest.TextTestRunner(verbosity=2).run(suite)
+            result = unittest.TextTestRunner(verbosity=2, resultclass=CIResult).run(suite)
     after = snapshot()
     drift = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
-    report = {"tests": result.testsRun, "passed": result.testsRun - len(result.skipped) - len(result.failures) - len(result.errors),
+    report = {"tests": result.testsRun, "passed": result.passed,
               "seconds": round(time.monotonic() - started, 3), "python": platform.python_version(), "platform": sys.platform,
               "failures": [{"test": case.id(), "traceback": detail} for case, detail in result.failures],
               "errors": [{"test": case.id(), "traceback": detail} for case, detail in result.errors],
               "skipped": [{"test": case.id(), "reason": reason} for case, reason in result.skipped],
               "discovered_tests": [case.id() for case in cases], "source_drift": drift,
+              "shard": f"{shard_index}/{shard_count}", "total_discovered_tests": discovered_count,
               "blocked_processes": blocked_processes, "blocked_connections": blocked_connections,
               "native_app_fixtures": args.native_app_fixtures,
               "isolation": "Private PRISM/XDG/home defaults; local-only Git/HTTP fixtures; Python audit hooks. Not an OS sandbox for native descendants."}

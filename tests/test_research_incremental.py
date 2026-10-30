@@ -49,7 +49,7 @@ class IncrementalKnowledge(unittest.TestCase):
         return value
 
     def write(self, text, path="main.tex"):
-        (self.project.root / path).write_text(text, encoding="utf-8")
+        (self.project.root / path).write_bytes(text.encode("utf-8"))
 
     def test_uninitialized_refresh_does_not_read_or_write_research(self):
         with mock.patch.object(self.project, "resolve", side_effect=AssertionError("must not extract")):
