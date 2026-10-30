@@ -9,6 +9,8 @@ execute host code (custom commands, shell escape, Lua, or build scripts).
 from __future__ import annotations
 
 from collections import OrderedDict
+from contextlib import contextmanager
+from contextvars import ContextVar
 import copy
 import hashlib
 import hmac
@@ -25,6 +27,39 @@ import registry
 KEY_FILE = "research-evidence.key"
 WITNESS_FILE = "research-edit-receipts.json"
 MAX_ADDITIONS = 20000
+_EVIDENCE_SNAPSHOT = ContextVar("research_evidence_snapshot", default=None)
+
+
+@contextmanager
+def evidence_snapshot():
+    """Reuse verification material within one status read, never verdicts."""
+    current = _EVIDENCE_SNAPSHOT.get()
+    if current is None or current[0] is not threading.current_thread():
+        current = (threading.current_thread(), {})
+    token = _EVIDENCE_SNAPSHOT.set(current)
+    try:
+        yield
+    finally:
+        _EVIDENCE_SNAPSHOT.reset(token)
+
+
+def _authority():
+    # Aliases may duplicate a read; they cannot reuse another authority's data.
+    return str(registry.state_dir().absolute())
+
+
+def _verification_material():
+    key = _key()
+    path = registry.state_dir() / WITNESS_FILE
+    if not path.exists():
+        return key, {}
+    if path.is_symlink():
+        raise Refused("The research receipt witness must be a regular local state file.")
+    with registry.FileLock(path.with_suffix(".lock"), timeout=3):
+        data = registry.read_state(path, tries=1)
+        if data.get("version") != 1 or not isinstance(data.get("receipts"), dict):
+            raise Refused("The research receipt witness is damaged; no receipt was trusted.")
+        return key, data["receipts"].copy()
 
 
 def _key(*, create=False):
@@ -88,11 +123,21 @@ def verify_receipt(receipt, project_key: str) -> bool:
             or not isinstance(receipt.get("signature"), str)):
         return False
     try:
+        current = _EVIDENCE_SNAPSHOT.get()
+        if current is not None and current[0] is threading.current_thread():
+            material = current[1]
+            root = _authority()
+            if root not in material:
+                material[root] = _verification_material()
+            key, witnesses = material[root]
+            return key is not None and hmac.compare_digest(
+                receipt["signature"], hmac.new(key, _payload(receipt), hashlib.sha256).hexdigest()) \
+                and witnesses.get(receipt["id"]) == _fingerprint(receipt)
         key = _key()
         return key is not None and hmac.compare_digest(
             receipt["signature"], hmac.new(key, _payload(receipt), hashlib.sha256).hexdigest()) \
             and _witness(receipt)
-    except (OSError, ValueError, TypeError, KeyError):
+    except (OSError, ValueError, TypeError, KeyError, RuntimeError):
         return False
 
 
@@ -102,10 +147,20 @@ def sign_receipt(payload: dict) -> dict:
             or not isinstance(payload.get("id"), str) or not payload["id"]
             or not isinstance(payload.get("project_key"), str) or not payload["project_key"]):
         raise Refused("A research receipt must identify its editor event and project.")
-    receipt = copy.deepcopy(payload)
-    receipt["signature"] = hmac.new(_key(create=True), _payload(receipt), hashlib.sha256).hexdigest()
-    _witness(receipt, create=True)
-    return receipt
+    current = _EVIDENCE_SNAPSHOT.get()
+    material = current[1] if current is not None and current[0] is threading.current_thread() else None
+    if material is not None:
+        material.clear()
+    try:
+        receipt = copy.deepcopy(payload)
+        receipt["signature"] = hmac.new(_key(create=True), _payload(receipt), hashlib.sha256).hexdigest()
+        _witness(receipt, create=True)
+        return receipt
+    finally:
+        # Nested scopes share this container. Neither successful nor failed
+        # signing can restore an outer scope's or path alias's old witness map.
+        if material is not None:
+            material.clear()
 
 
 def make_receipt(project_key: str, path: str, before: bytes, after: bytes):

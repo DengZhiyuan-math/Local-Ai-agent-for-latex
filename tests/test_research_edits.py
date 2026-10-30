@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 
@@ -82,6 +83,161 @@ class EditorEvidence(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(self.state / "another-machine")}):
             self.assertFalse(verify_receipt(receipt, "p"))
             self.assertFalse((self.state / "another-machine").exists())
+
+    def test_evidence_snapshot_reads_material_once_and_checks_each_payload(self):
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        forged = {**receipt, "id": "not-an-editor-event"}
+        forged["signature"] = hmac.new((self.state / KEY_FILE).read_bytes(),
+            evidence._payload(forged), hashlib.sha256).hexdigest()
+        with mock.patch.object(evidence, "_key", wraps=evidence._key) as key_reads, \
+                mock.patch.object(evidence.registry, "read_state", wraps=evidence.registry.read_state) as witness_reads, \
+                mock.patch.object(evidence.hmac, "new", wraps=evidence.hmac.new) as signatures:
+            with evidence.evidence_snapshot():
+                for _ in range(5):
+                    self.assertTrue(verify_receipt(receipt, "p"))
+                self.assertFalse(verify_receipt({**receipt, "path": "changed.tex"}, "p"))
+                self.assertFalse(verify_receipt(forged, "p"))
+                self.assertFalse(verify_receipt(receipt, "other-project"))
+            self.assertEqual(key_reads.call_count, 1)
+            self.assertEqual(witness_reads.call_count, 1)
+            self.assertEqual(signatures.call_count, 7)
+
+    def test_snapshot_nested_signing_invalidates_outer_and_failed_witness_is_not_visible(self):
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        (self.state / "alias").mkdir()
+        with evidence.evidence_snapshot():
+            self.assertTrue(verify_receipt(receipt, "p"))
+            with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(self.state / "alias" / "..")}), \
+                    evidence.evidence_snapshot():
+                newer = make_receipt("p", "b.tex", b"$x$", b"$x+q$")
+                self.assertTrue(verify_receipt(newer, "p"))
+            self.assertTrue(verify_receipt(newer, "p"))
+            payload = {"id": "failed-witness", "project_key": "p", "actor": "human"}
+            with mock.patch.object(evidence.registry, "write_state", side_effect=OSError("fixture witness failure")):
+                with self.assertRaisesRegex(OSError, "witness failure"):
+                    evidence.sign_receipt(payload)
+            forged = {**payload, "signature": hmac.new((self.state / KEY_FILE).read_bytes(),
+                evidence._payload(payload), hashlib.sha256).hexdigest()}
+            self.assertFalse(verify_receipt(forged, "p"))
+            self.assertTrue(verify_receipt(receipt, "p"))
+
+    def test_snapshot_exit_and_exception_observe_authority_revocation_on_next_read(self):
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        with self.assertRaisesRegex(RuntimeError, "fixture end"):
+            with evidence.evidence_snapshot():
+                self.assertTrue(verify_receipt(receipt, "p"))
+                raise RuntimeError("fixture end")
+        witness = self.state / WITNESS_FILE
+        witness.unlink()
+        self.assertFalse(verify_receipt(receipt, "p"))
+        with evidence.evidence_snapshot():
+            self.assertFalse(verify_receipt(receipt, "p"))
+
+    def test_snapshot_authority_roots_and_request_threads_are_independent(self):
+        from contextvars import copy_context
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        with evidence.evidence_snapshot():
+            self.assertTrue(verify_receipt(receipt, "p"))
+            with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(self.state / "other-root")}):
+                with evidence.evidence_snapshot():
+                    self.assertFalse(verify_receipt(receipt, "p"))
+            self.assertTrue(verify_receipt(receipt, "p"))
+            (self.state / WITNESS_FILE).unlink()
+            result = []
+            def another_request():
+                with evidence.evidence_snapshot():
+                    result.append(verify_receipt(receipt, "p"))
+            thread = threading.Thread(target=copy_context().run, args=(another_request,))
+            thread.start(); thread.join(3)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(result, [False])
+            self.assertTrue(verify_receipt(receipt, "p"))
+        self.assertFalse(verify_receipt(receipt, "p"))
+
+    def test_snapshot_does_not_merge_case_distinct_authority_paths(self):
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        key = (self.state / KEY_FILE).read_bytes()
+        witnesses = json.loads((self.state / WITNESS_FILE).read_text())["receipts"]
+        upper, lower = self.state / "Authority", self.state / "authority"
+        def material():
+            return (key, witnesses) if evidence.registry.state_dir() == upper else (None, {})
+        # Windows normcase also folds names in case-sensitive directories.
+        with mock.patch.object(evidence.registry, "norm", side_effect=lambda path: str(path).lower()), \
+                mock.patch.object(evidence, "_verification_material", side_effect=material), \
+                mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(upper)}), \
+                evidence.evidence_snapshot():
+            self.assertTrue(verify_receipt(receipt, "p"))
+            with mock.patch.dict(os.environ, {"PRISM_STATE_DIR": str(lower)}):
+                self.assertFalse(verify_receipt(receipt, "p"))
+
+    def test_copied_context_cannot_reuse_authority_after_thread_identifier_reuse(self):
+        from contextvars import copy_context
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        first, later = object(), object()
+        with mock.patch.object(evidence.threading, "get_ident", return_value=123), \
+                mock.patch.object(evidence.threading, "current_thread", return_value=first):
+            with evidence.evidence_snapshot():
+                self.assertTrue(verify_receipt(receipt, "p"))
+                copied = copy_context()
+        (self.state / WITNESS_FILE).unlink()
+        with mock.patch.object(evidence.threading, "get_ident", return_value=123), \
+                mock.patch.object(evidence.threading, "current_thread", return_value=later):
+            self.assertFalse(copied.run(verify_receipt, receipt, "p"))
+
+    def test_snapshot_missing_or_damaged_material_never_grants_authority(self):
+        import research_edits as evidence
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        for name in (KEY_FILE, WITNESS_FILE):
+            path = self.state / name
+            saved = path.read_bytes()
+            with self.subTest(name=name):
+                path.write_bytes(b"damaged")
+                with evidence.evidence_snapshot():
+                    self.assertFalse(verify_receipt(receipt, "p"))
+                path.write_bytes(saved)
+                with evidence.evidence_snapshot():
+                    self.assertTrue(verify_receipt(receipt, "p"))
+
+    def test_research_status_route_reuses_material_and_releases_it_before_response(self):
+        from types import SimpleNamespace
+        from repository import FilesLock
+        import research_edits as evidence
+        import server
+        receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")
+        project = SimpleNamespace(root=self.state, files_lock=FilesLock(lambda: None))
+        knowledge = mock.Mock()
+        knowledge.refresh.return_value = {"initialized": True}
+        knowledge.status.return_value = {"initialized": True}
+        handler = mock.Mock()
+        handler._foreign_project.return_value = False
+
+        def render(*args):
+            self.assertTrue(project.files_lock.held())
+            with mock.patch.object(evidence, "_key", wraps=evidence._key) as keys, \
+                    mock.patch.object(evidence.registry, "read_state", wraps=evidence.registry.read_state) as witnesses:
+                for _ in range(20):
+                    self.assertTrue(verify_receipt(receipt, "p"))
+                self.assertEqual((keys.call_count, witnesses.call_count), (1, 1))
+            return {"ready": True}
+
+        def respond(view):
+            self.assertFalse(project.files_lock.held())
+            (self.state / WITNESS_FILE).unlink()
+            self.assertFalse(verify_receipt(receipt, "p"))
+            return view
+
+        handler._json.side_effect = respond
+        with mock.patch.object(server, "PROJECT", project), \
+                mock.patch.object(server, "ResearchKnowledge", return_value=knowledge), \
+                mock.patch.object(server.research_topics, "retry"), \
+                mock.patch.object(server, "research_view", side_effect=render):
+            self.assertEqual(server.Handler._get(handler, "/api/research", {}), {"ready": True})
 
     def test_readable_signing_key_cannot_forge_an_editor_witness(self):
         receipt = make_receipt("p", "a.tex", b"$x$", b"$x+z$")

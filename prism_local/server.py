@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
 from gitsync import GitSync  # noqa: E402
-from project import UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
+from project import SAVE_WAIT, UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
 import repoview  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES  # noqa: E402
@@ -46,7 +46,7 @@ import build_results  # noqa: E402
 import settings  # noqa: E402
 import tools  # noqa: E402
 from research import ResearchKnowledge  # noqa: E402
-from research_edits import EditTokens  # noqa: E402
+from research_edits import EditTokens, evidence_snapshot  # noqa: E402
 from research_github import GitHubDiscussions  # noqa: E402
 import research_topics  # noqa: E402
 import research_confirmation  # noqa: E402
@@ -403,8 +403,14 @@ class Handler(httpbase.Handler):
             state = knowledge.refresh()
             if state.get("initialized"):
                 research_topics.retry(knowledge)
-                state = knowledge.status()
-            return self._json(research_view(knowledge, state))
+            if not PROJECT.files_lock.acquire(timeout=SAVE_WAIT):
+                raise Conflict("The project files are busy; retry reading the research record.")
+            try:
+                with evidence_snapshot():
+                    view = research_view(knowledge, knowledge.status())
+            finally:
+                PROJECT.files_lock.release()
+            return self._json(view)
         if path == "/api/config":
             cfg = PROJECT.config
             return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
