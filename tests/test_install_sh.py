@@ -21,6 +21,10 @@ SCRIPT = ROOT / "install.sh"
 REPO = "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex.git"
 WIN = os.name == "nt"
 SH = shutil.which("sh")
+if WIN and SH:
+    # Git's bin/sh.exe wrapper prepends real programs ahead of the fixture PATH.
+    SH = subprocess.run([SH, "-c", "exec /usr/bin/cygpath -w /usr/bin/sh.exe"],
+                        capture_output=True, text=True, check=True).stdout.strip()
 # Shells to try the script with: always sh, and the strict small ones when present.
 SHELLS = [s for s in (SH, shutil.which("dash")) if s]
 if shutil.which("busybox"):

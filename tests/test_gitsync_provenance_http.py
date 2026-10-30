@@ -158,7 +158,7 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         self.assertFalse(held["sync"]["enabled"])
         self.assertEqual(held["receiver_head"], before["receiver_head"])
         self.assertNotEqual(held["receiver_head"], remote["remote_head"])
-        self.assertEqual((self.root / "main.tex").read_text(), before["files"]["main.tex"]["text"])
+        self.assertEqual((self.root / "main.tex").read_bytes().decode("utf-8"), before["files"]["main.tex"]["text"])
         self.sync("on")
         received = self.control("tick")
         self.assertTrue(received["sync"]["enabled"])
@@ -208,7 +208,7 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         held = self.control("pull")
         self.assertEqual(held["outcome"]["state"], "local")
         self.assertIn("agent", held["outcome"]["message"].lower())
-        self.assertEqual((self.root / "main.tex").read_text(), before["files"]["main.tex"]["text"])
+        self.assertEqual((self.root / "main.tex").read_bytes().decode("utf-8"), before["files"]["main.tex"]["text"])
         self.finish(job)
         received = self.control("tick")
         self.assertEqual(received["receiver_head"], remote["remote_head"])
@@ -610,6 +610,9 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         remote = self.control("remote_commit", files={"research/knowledge.json": raw})
         pulled = self.control("pull")
         self.assertEqual(pulled["receiver_head"], remote["remote_head"])
+        # Source authority binds the exact checkout bytes, including CRLF.
+        received_raw = record.read_bytes()
+        self.assertEqual(json.loads(received_raw), incoming)
         state = self.state()
         self.assertNotIn("z", {row["canonical"] for row in state["symbols"]})
         self.assertTrue(any(row["canonical"] == "z" for row in state["provenance"]["received_symbols"]))
@@ -622,7 +625,7 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         self.assertEqual(next(event for event in events if event["t"] == "done")["changed"], [])
         self.assertFalse(any(event["t"] == "notation_proposal" for event in events), events)
         self.assertEqual((self.root / "main.tex").read_text(), source)
-        self.assertEqual(record.read_text(), raw)
+        self.assertEqual(record.read_bytes(), received_raw)
         self.assertEqual(len(self.requests()), 1)
         self.assertEqual(self.state()["proposals"], [])
         question = self.question()
@@ -631,14 +634,14 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         entry_sha = hashlib.sha256(json.dumps(incoming["symbols"][-1], ensure_ascii=False,
             sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         self.assertTrue(all(row["path"] == "research/knowledge.json"
-                            and row["sha256"] == hashlib.sha256(raw.encode()).hexdigest()
+                            and row["sha256"] == hashlib.sha256(received_raw).hexdigest()
                             and row.get("kind") == "received_library"
                             and row.get("json_pointer") == pointer and row.get("entry_sha256") == entry_sha
                             and "line" not in row
                             for row in question["sources"]), question)
         archive = self.work / "state/research-provenance" / hashlib.sha256(
-            str(self.root.resolve()).encode()).hexdigest() / "received" / (hashlib.sha256(raw.encode()).hexdigest() + ".record")
-        self.assertEqual(archive.read_text(), raw)
+            str(self.root.resolve()).encode()).hexdigest() / "received" / (hashlib.sha256(received_raw).hexdigest() + ".record")
+        self.assertEqual(archive.read_bytes(), received_raw)
         archive_mtime = archive.stat().st_mtime_ns
         code, started = self.answer("Yes, I approve.", [question["id"]])
         self.assertEqual(code, 200, started)
@@ -652,11 +655,12 @@ class GitSyncProvenanceHTTP(unittest.TestCase):
         self.assertTrue(any(row.get("json_pointer") == pointer and row.get("entry_sha256") == entry_sha
                             and "line" not in row for row in sources), sources)
         self.assertFalse(any(row["evidence"] == "human_edit" for row in sources), sources)
-        self.assertEqual(archive.read_text(), raw)
+        self.assertEqual(archive.read_bytes(), received_raw)
         self.assertEqual(archive.stat().st_mtime_ns, archive_mtime)
         self.assertEqual((self.root / "main.tex").read_text(), source)
         self.capture("http-library-only-question", {"remote": remote, "pulled": pulled,
-            "question": question, "received_record": raw, "adoption_id": adoption["id"], "sources": sources})
+            "question": question, "received_record": received_raw.decode("utf-8"),
+            "adoption_id": adoption["id"], "sources": sources})
         self.use_saved_name()
 
 

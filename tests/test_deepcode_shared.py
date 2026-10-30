@@ -43,7 +43,7 @@ class DeepCodeMetadata(unittest.TestCase):
     def test_strict_nofollow_metadata_reads_regular_json_but_refuses_links(self):
         from backend_deepcode import read_settings
         with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / 'settings.json'
+            path = Path(directory).resolve() / 'settings.json'
             path.write_text('{"model":"fixture"}', encoding='utf-8')
             self.assertEqual(read_settings(path, strict=True, nofollow=True), {'model': 'fixture'})
             link = path.with_name('linked.json')
