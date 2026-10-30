@@ -133,11 +133,14 @@ class Relay:
         self.active.clear()
         self.stopped.set()
         self.thread.join(.1)
-        if self.thread.is_alive() and self.busy.is_set():
-            self.error = 'The protected MCP Turn ended with an unfinished operation.'
-            if not self.guard.job.cancel.is_set():
-                self.forced_cancel = True
-                self.guard.job.cancel.set()
+        if self.thread.is_alive():
+            if self.busy.is_set():
+                self.error = 'The protected MCP Turn ended with an unfinished operation.'
+                if not self.guard.job.cancel.is_set():
+                    self.forced_cancel = True
+                    self.guard.job.cancel.set()
+            # An idle reader may not have been scheduled during the short grace
+            # period. Give it the same bounded shutdown wait as a busy reader.
             self.thread.join(1)
         if self.thread.is_alive():
             self.error = 'The protected MCP transport did not stop in time.'

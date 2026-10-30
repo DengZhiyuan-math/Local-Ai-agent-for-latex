@@ -70,6 +70,31 @@ class CodexMCP(unittest.TestCase):
         self.assertEqual(result.stdout, '')
         self.assertNotIn('tools/list', result.stderr)
 
+    def test_idle_close_waits_for_the_reader_to_finish_without_cancelling_the_turn(self):
+        import threading
+        from unittest import mock
+        from codex_mcp import _Reader, TransportError
+        entered = threading.Event()
+
+        def delayed_stop(reader, stopped, **kwargs):
+            entered.set()
+            stopped.wait(1)
+            time.sleep(.2)
+            raise TransportError('The protected MCP transport stopped.')
+
+        with mock.patch.object(_Reader, 'read', delayed_stop):
+            relay = self.relay()
+            self.assertTrue(entered.wait(1))
+            try:
+                relay.close()
+                error = relay.error
+            finally:
+                relay.thread.join(2)
+            self.assertIsNone(error)
+            self.assertFalse(relay.thread.is_alive())
+            self.assertFalse(relay.forced_cancel)
+            self.assertFalse(self.case.job.cancel.is_set())
+
     def test_unknown_draft_is_pending_and_later_calls_cannot_write(self):
         relay = self.relay(); relay.active.set()
         child = self.client(relay)
