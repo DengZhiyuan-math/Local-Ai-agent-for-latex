@@ -1,0 +1,105 @@
+EEF{"event": "git_target", "project_key": "prism-test-di2zqru5-21e40fc5f9", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-di2zqru5", "git_top": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-di2zqru5", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "push_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "repository_identity": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "configuration_fingerprint": "e9c46af7ae56c5f2c7eb14d3f790b943b9199aa42bd4d3494504f37c777457b1"}, "stage": "validation", "blocked_reason": null}
+{"event": "git_sync", "git_top": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-di2zqru5", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "push_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "repository_identity": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-a8u2fbjg", "configuration_fingerprint": "e9c46af7ae56c5f2c7eb14d3f790b943b9199aa42bd4d3494504f37c777457b1"}, "stage": "fetch", "result": "passed", "error": null}
+F{"event": "git_target", "project_key": "prism-test-dg4wyjfc-42c2ae882f", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-dg4wyjfc", "git_top": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-dg4wyjfc", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "push_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "repository_identity": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "configuration_fingerprint": "80985965548f044b47fffa23395f02319503b156a61cf24659ec8b84c1483a99"}, "stage": "validation", "blocked_reason": null}
+{"event": "git_sync", "git_top": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-dg4wyjfc", "target": {"remote": "origin", "branch_ref": "refs/heads/main", "fetch_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "push_url": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "repository_identity": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-wid15wop", "configuration_fingerprint": "80985965548f044b47fffa23395f02319503b156a61cf24659ec8b84c1483a99"}, "stage": "fetch", "result": "passed", "error": null}
+FFFF
+======================================================================
+ERROR: test_waits_for_changes_filters_build_output_and_closes (test_diskprojects.NativeNotifications.test_waits_for_changes_filters_build_output_and_closes)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/prism-pr-main-baseline/tests/test_diskprojects.py", line 255, in test_waits_for_changes_filters_build_output_and_closes
+    watch = factory(root, event.set)
+  File "/private/tmp/prism-pr-main-baseline/prism_local/diskwatch.py", line 149, in __init__
+    self.watch = Watch(root, changed, excluded, accept)
+                 ~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/prism-pr-main-baseline/prism_local/macdiskwatch.py", line 57, in __init__
+    raise OSError('Cannot start FSEvents stream')
+OSError: Cannot start FSEvents stream
+
+======================================================================
+ERROR: test_a_program_installed_meanwhile_is_found_without_a_restart (test_tools.Tools.test_a_program_installed_meanwhile_is_found_without_a_restart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_tools.py", line 58, in test_a_program_installed_meanwhile_is_found_without_a_restart
+    self.assertEqual(Path(tools.find("gh")).resolve(), installed.resolve(), "where its installer puts it")
+                     ~~~~^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/pathlib/__init__.py", line 150, in __init__
+    raise TypeError(
+    ...<2 lines>...
+        f"not {type(path).__name__!r}")
+TypeError: argument should be a str or an os.PathLike object where __fspath__ returns a str, not 'NoneType'
+
+======================================================================
+FAIL: test_http_poll_follows_explorer_move_and_discovers_new_project (test_diskprojects.ExplorerChanges.test_http_poll_follows_explorer_move_and_discovers_new_project)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/prism-pr-main-baseline/tests/test_diskprojects.py", line 228, in test_http_poll_follows_explorer_move_and_discovers_new_project
+    self.assertEqual(len(response["projects"]), 2, "new-only change needs a real OS notification")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 2 : new-only change needs a real OS notification
+
+======================================================================
+FAIL: test_external_edit_is_pushed_by_the_real_timer_without_a_manual_action (test_gitsync.GitSyncTest.test_external_edit_is_pushed_by_the_real_timer_without_a_manual_action)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_gitsync.py", line 430, in test_external_edit_is_pushed_by_the_real_timer_without_a_manual_action
+    self.assert_external_autosave()
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^
+  File "/private/tmp/prism-pr-main-baseline/tests/test_gitsync.py", line 445, in assert_external_autosave
+    self.assertTrue(self.g.status()['external_watch'])
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_worker_syncs_external_edits_without_an_editor_save (test_gitsync.GitSyncTest.test_worker_syncs_external_edits_without_an_editor_save)
+Edits by Codex/Explorer must enter the same automatic schedule as browser saves.
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_gitsync.py", line 423, in test_worker_syncs_external_edits_without_an_editor_save
+    self.assert_external_autosave(lambda: self.clock.advance(gitsync.IDLE + 1))
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/prism-pr-main-baseline/tests/test_gitsync.py", line 445, in assert_external_autosave
+    self.assertTrue(self.g.status()['external_watch'])
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_a_failed_install_says_what_to_do_and_keeps_winget_apart (test_tools.Tools.test_a_failed_install_says_what_to_do_and_keeps_winget_apart)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_tools.py", line 113, in test_a_failed_install_says_what_to_do_and_keeps_winget_apart
+    self.assertEqual(done["state"], "failed")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'done' != 'failed'
+- done
++ failed
+
+
+======================================================================
+FAIL: test_install_runs_winget_and_says_when_it_is_there (test_tools.Tools.test_install_runs_winget_and_says_when_it_is_there)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_tools.py", line 70, in test_install_runs_winget_and_says_when_it_is_there
+    self.assertEqual(self.wait("git")["state"], "done")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'failed' != 'done'
+- failed
++ done
+
+
+======================================================================
+FAIL: test_two_clicks_at_once_start_one_install (test_tools.Tools.test_two_clicks_at_once_start_one_install)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/private/tmp/prism-pr-main-baseline/tests/test_tools.py", line 103, in test_two_clicks_at_once_start_one_install
+    self.assertEqual(self.wait("git")["state"], "done")
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'failed' != 'done'
+- failed
++ done
+
+
+----------------------------------------------------------------------
+Ran 8 tests in 7.306s
+
+FAILED (failures=6, errors=2)

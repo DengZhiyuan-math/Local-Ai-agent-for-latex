@@ -22,6 +22,7 @@ from backend_claude import claude_bin  # noqa: F401 — re-exported
 from backends import NO_WINDOW, SYSTEM_APPEND, Backend, Job, kill_tree, load_backends  # noqa: F401
 from fsutil import metadata_paths, project_path
 import registry
+import settings
 from errors import say
 import snapshot
 
@@ -101,7 +102,12 @@ class AgentManager:
         # A page loaded during a turn (a reload) follows its events and can stop it.
         active = {"job": job.id, "mode": job.mode, "provider": job.provider} \
             if job and not job.done else None
-        return {"default": self.default, "config_error": self.config_error,
+        try:
+            defaults = settings.load().get("agent_defaults", {})
+        except registry.StateUnreadable:
+            defaults = {}
+        return {"default": defaults.get("provider") or self.default, "defaults": defaults,
+                "config_error": self.config_error,
                 "project_key": registry.project_key(root), "root": str(root),
                 "providers": [b.info() for b in self.backends.values()], "active": active}
 
@@ -143,7 +149,7 @@ class AgentManager:
         why = backend.unavailable()
         if why:
             return {"error": why}
-        model = model or backend.default_model
+        model = model or backend.default_model or backend._catalog_default_model
         if model and not MODEL_RE.fullmatch(model):
             return {"error": f"Not a model name: {model}"}
         root = self.root_fn().resolve()
@@ -246,6 +252,7 @@ class AgentManager:
             self._finish(job, backend, res, t0)
         except Exception as e:  # noqa: BLE001 — the turn ends whatever happens
             job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
+            self._refresh_rate(job, backend)
             job.emit({"t": "done", "turn": job.id, "provider": job.provider, "changed": [],
                       "outcome": "stopped" if job.cancel.is_set() else "failed", "error": None,
                       "is_error": True, "session_id": res.get("session_id") or job.session_id})
@@ -253,6 +260,14 @@ class AgentManager:
             with job.cond:
                 job.done = True
                 job.cond.notify_all()
+
+    def _refresh_rate(self, job: Job, backend: Backend) -> None:
+        if backend.usage_limits:
+            try:
+                result = self.probe_rate(backend.id, force=True)
+            except Exception as e:  # usage failure must not leave the turn running
+                result = {"rate": None, "stale": True, "error": str(e)}
+            job.emit({"t": "rate", **result})
 
     def _finish(self, job: Job, backend: Backend, res: dict, t0: float) -> None:
         """After the backend: what the turn changed, reverted where it may not, reported."""
@@ -315,24 +330,61 @@ class AgentManager:
                 self.on_changed([c["path"] for c in changed], job.prompt)
             except Exception:  # noqa: BLE001
                 pass
+        self._refresh_rate(job, backend)
         job.emit(ev)
 
     # ------------------------------------------------------------ backend extras
+    def models(self, provider: str | None, refresh: bool = False) -> dict:
+        backend = self.backend(provider)
+        if backend is None:
+            return {"error": f"Unknown provider: {provider}"}
+        return backend.model_catalog(self.root_fn(), refresh=refresh)
+
+    def configure(self, provider: str, model: str | None, effort: str | None) -> dict:
+        backend = self.backend(provider)
+        if backend is None:
+            return {"error": f"Unknown provider: {provider}"}
+        if model is not None and (not isinstance(model, str) or not MODEL_RE.fullmatch(model)):
+            return {"error": "Not a model name"}
+        bad = backend.check(model or backend.default_model, effort)
+        if bad:
+            return {"error": bad}
+        settings.save({"agent_defaults": {"provider": provider,
+                      "providers": {provider: {"model": model, "effort": effort}}}})
+        return {"ok": True, "provider": provider, "model": model, "effort": effort}
+
+    def permission(self, jid: int, request_id: str, decision: str, scope: str) -> dict:
+        job = self.jobs.get(jid)
+        if not job or job.done or job.cancel.is_set() or job is not self.active \
+                or job.root != self.root_fn().resolve():
+            return {"error": "This permission request is no longer active."}
+        backend = self.backends.get(job.provider)
+        broker = getattr(backend, "permissions", None)
+        if broker is None:
+            return {"error": "This provider has no pending Web permissions."}
+        return broker.resolve(job, request_id, decision, scope)
+
     def commands(self, provider: str | None, refresh: bool = False) -> dict:
         backend = self.backend(provider)
         if backend is None:
             return {"error": f"Unknown provider: {provider}"}
         return backend.commands(self.root_fn(), refresh)
 
-    def probe_rate(self, provider: str | None = None) -> dict:
+    def probe_rate(self, provider: str | None = None, force: bool = True) -> dict:
         backend = self.backend(provider)
         if backend is None or not backend.usage_limits:
             return {"error": "This provider reports no usage limits."}
-        # The probe is a (tiny) model call, so it passes the same check as a turn.
+        if backend.kind == "claude":
+            from backend_claude import auth_overrides, use_config_dir
+            use_config_dir()
+            if auth_overrides(self.root_fn()):
+                return {"error": "Subscription usage is unavailable for API or cloud authentication.",
+                        "rate": None, "last_success": None, "stale": True}
+        # Even read-only usage checks must use the account allowed for this project.
         bad = backend.preflight(self.root_fn())
         if bad:
-            return {"error": bad, "rate": backend.rate}
-        return backend.probe_rate()
+            return {"error": bad, "rate": None, "last_success": None, "stale": True}
+        return backend.probe_rate(force=force)
 
     def account(self, provider: str | None, root: Path, fresh: bool = False) -> dict:
         """Which account the provider would use, where it has one (Claude); else none."""

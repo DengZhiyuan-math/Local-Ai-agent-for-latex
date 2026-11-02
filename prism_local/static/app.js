@@ -1228,8 +1228,14 @@ $("#btn-refresh-outline").onclick = () => loadSymbols();
 let symbolsSeq = 0;
 async function loadSymbols() {
   const seq = ++symbolsSeq;
-  const r = await Q.symbols();
-  if (seq === symbolsSeq && r._status === 200) { S.symbols = r; renderOutline(); redrawReplies(); }
+  const [r, labels] = await Promise.all([Q.symbols(), Q.labels()]);
+  if (seq === symbolsSeq && r._status === 200) {
+    S.symbols = r; renderOutline();
+    if (labels._status === 200) S.labelVersion = labels.version;
+    redrawReplies();
+    // Re-link older replies when a new label appears in project sources.
+    for (const el of $("#chat-log").querySelectorAll(".msg.assistant")) linkLabels(el);
+  }
 }
 // The replies are drawn again when the project's macros change: the first time they are
 // known (a restored log was drawn before them, and before the files its links point to)
@@ -1926,7 +1932,7 @@ window.addEventListener("beforeunload", (e) => { if (S.tabs.some(isDirty)) { e.p
 // The agent runs on one provider at a time (Claude Code, Codex CLI, DeepSeek or another
 // OpenAI-compatible API; see backends.py). Conversation, model and effort are kept per
 // provider. P holds what /api/agent/info reports about each provider.
-const P = { list: [], byId: {}, projectKey: null };
+const P = { list: [], byId: {}, projectKey: null, defaults: {} };
 const C = { provider: store.get("chat.provider", null), job: null };
 const prov = () => P.byId[C.provider] || { id: C.provider, label: "Agent", models: [], efforts: [] };
 const provLabel = () => prov().label || "the agent";
@@ -1954,7 +1960,9 @@ async function loadAccount() {
     : "The account Claude Code is logged in to. Home → Settings can allow only this one.";
 }
 function loadProvider() {
-  C.session = provGet("session"); C.model = provGet("model"); C.effort = provGet("effort");
+  const choice = (P.defaults.providers || {})[C.provider];
+  C.session = provGet("session"); C.model = choice ? choice.model : provGet("model");
+  C.effort = choice ? choice.effort : provGet("effort");
   const c = provGet("context");                    // how full this conversation's context is
   renderContext(c && c.session === C.session ? c : null);
   C.snips = provGet("snips") || {};
@@ -1962,6 +1970,65 @@ function loadProvider() {
   restoreChatLog(saved || "");
   if (!saved) chatIntro();
 }
+
+function modelEfforts() {
+  const p = prov(), models = (p.catalog || {}).models || [];
+  const model = models.find((m) => m.id === (C.model || p.default_model || (p.catalog || {}).default_model));
+  return model ? model.efforts || [] : [];
+}
+function renderModelControls() {
+  const p = prov(), models = (p.catalog || {}).models || (p.models || []).map((id) => ({ id }));
+  const choices = [...models];
+  if (C.model && !choices.some((m) => m.id === C.model)) choices.push({ id: C.model });
+  $("#chat-model").innerHTML = `<option value="">Provider default${p.default_model ? " (" + esc(p.default_model) + ")" : ""}</option>`
+    + choices.map((m) => `<option value="${esc(m.id)}">${esc(m.label || m.id)}</option>`).join("");
+  $("#chat-model").value = C.model || "";
+  const efforts = modelEfforts();
+  $("#chat-effort").innerHTML = `<option value="">${efforts.length ? "Default" : "No effort setting"}</option>`
+    + efforts.map((e) => `<option value="${esc(e)}">${esc(e)}</option>`).join("");
+  $("#chat-effort").value = C.effort || "";
+  $("#chat-model").disabled = !!C.job || !!C.configSaving;
+  $("#chat-effort").disabled = !!C.job || !!C.configSaving || !efforts.length;
+  $("#chat-model-refresh").disabled = !!C.job || !!C.configSaving;
+  $("#chat-config-status").textContent = p.catalogError || "";
+  $("#chat-config-status").hidden = !p.catalogError;
+}
+async function loadModels(refresh = false) {
+  const provider = C.provider, p = prov();
+  if (!p.available) return renderModelControls();
+  const serial = p.modelRequest = (p.modelRequest || 0) + 1;
+  const pending = p.modelsPending = Q.models(provider, refresh);
+  const r = await pending;
+  if (p.modelsPending === pending) p.modelsPending = null;
+  if (p.modelRequest !== serial) return;
+  if (Array.isArray(r.models)) p.catalog = r;
+  p.catalogError = r.error || (r.stale ? "Model list is stale" : "");
+  if (C.provider === provider) renderModelControls();
+}
+async function saveAgentChoice(model, effort) {
+  if (C.job || C.configSaving) return;
+  const provider = C.provider, old = { model: C.model, effort: C.effort };
+  C.model = model; C.effort = effort;
+  const request = C.configSaving = Q.configure(provider, model, effort);
+  renderModelControls();
+  const r = await request;
+  C.configSaving = null;
+  if (r.error || r._status !== 200) {
+    C.model = old.model; C.effort = old.effort;
+    toast(r.error || "Could not save Agent configuration");
+  } else {
+    provSet("model", model); provSet("effort", effort);
+    P.defaults = { provider, providers: { ...(P.defaults.providers || {}), [provider]: { model, effort } } };
+  }
+  renderModelControls();
+}
+$("#chat-model").onchange = (e) => {
+  const model = e.target.value || null;
+  const meta = ((prov().catalog || {}).models || []).find((m) => m.id === (model || prov().default_model || (prov().catalog || {}).default_model));
+  return saveAgentChoice(model, meta && (meta.efforts || []).includes(C.effort) ? C.effort : null);
+};
+$("#chat-effort").onchange = (e) => saveAgentChoice(C.model, e.target.value || null);
+$("#chat-model-refresh").onclick = () => loadModels(true);
 
 /* How full the conversation's context window is, as a ring by the Send button (like the
    Claude desktop app); the details open on hover or click. From Claude Code's usage of
@@ -2010,6 +2077,35 @@ $("#chat-mode").onchange = (e) => store.set("chat.mode", e.target.value);
 // (mathtext.js), so _ * \\ | in it stay TeX. Raw HTML in a reply is shown as text, links
 // open only http(s)/mailto in a new tab, and file.tex:12 becomes a link into the editor.
 const FILE_REF = /((?:[\w.-]+\/)*[\w.-]+\.(?:tex|bib|md))(?::(\d+))?/g;
+function labelLink(label) {
+  return `<a data-label="${esc(label)}" tabindex="0" role="link" title="Open LaTeX label in source">${esc(label)}</a>`;
+}
+function mathLabelLinks(html, formula) {
+  const labels = [...new Set(ChatLogic.labelReferences(formula.tex).map((ref) => ref.label))];
+  return html + (labels.length ? `<span class="label-links"> ${labels.map(labelLink).join(" · ")}</span>` : "");
+}
+function linkLabels(root) {
+  const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+    acceptNode: (n) => n.parentElement.closest("a, .katex, .label-links") ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,
+  });
+  const nodes = [];
+  while (walk.nextNode()) nodes.push(walk.currentNode);
+  for (const node of nodes) {
+    const refs = ChatLogic.labelReferences(node.data, (S.symbols.labels || []).map((l) => l.label));
+    if (!refs.length) continue;
+    const fragment = document.createDocumentFragment();
+    let at = 0;
+    for (const ref of refs) {
+      fragment.appendChild(document.createTextNode(node.data.slice(at, ref.from)));
+      const a = document.createElement("a");
+      a.dataset.label = ref.label; a.tabIndex = 0; a.setAttribute("role", "link");
+      a.title = "Open LaTeX label in source"; a.textContent = node.data.slice(ref.from, ref.to);
+      fragment.appendChild(a); at = ref.to;
+    }
+    fragment.appendChild(document.createTextNode(node.data.slice(at)));
+    node.replaceWith(fragment);
+  }
+}
 const MD = typeof marked === "undefined" || typeof katex === "undefined" ? null
   : new marked.Marked({ gfm: true, breaks: true }).use({
     renderer: {
@@ -2037,14 +2133,16 @@ function linkFiles(root) {
 function renderMd(text) {
   if (!MD) return renderPlain(text);
   const box = document.createElement("div");
-  box.innerHTML = MathText.render(String(text), { markdown: (s) => MD.parse(s), katex, macros: S.symbols.katex_macros });
+  box.innerHTML = MathText.render(String(text), { markdown: (s) => MD.parse(s), katex,
+    macros: S.symbols.katex_macros, afterMath: mathLabelLinks });
   linkFiles(box);
+  linkLabels(box);
   return box.innerHTML;
 }
 // Without the vendored libraries: escape first, then code fences, inline code, bold, file links.
 function renderPlain(text) {
   const parts = String(text).split(/```[a-zA-Z]*\n?/);
-  return parts.map((p, i) => {
+  const rendered = parts.map((p, i) => {
     if (i % 2) return `<pre>${esc(p.replace(/\n$/, ""))}</pre>`;
     let h = esc(p);
     h = h.replace(/`([^`\n]+)`/g, "<code>$1</code>");
@@ -2055,6 +2153,8 @@ function renderPlain(text) {
     });
     return h;
   }).join("");
+  const box = document.createElement("div"); box.innerHTML = rendered; linkLabels(box);
+  return box.innerHTML;
 }
 
 function chatAppend(html, cls) {
@@ -2468,6 +2568,8 @@ async function chatSend() {
   try { return await sendMessage(); } finally { C.sending = false; }
 }
 async function sendMessage() {
+  if (C.configSaving) await C.configSaving;
+  if (prov().modelsPending) await prov().modelsPending;
   const text = $("#chat-input").value.trim();
   if (!text) return;
   const activeFile = S.active;                 // capture before saving or fetching references
@@ -2509,6 +2611,7 @@ async function sendMessage() {
 // What each event shows is turn.js's; here it is drawn.
 async function followTurn(job, provider, mode) {
   C.job = job; C.follow = true; C.followOpened = openAsked; C.stopping = false; setUndoBusy(true); AV.hidden = false; AH.clear();   // last turn's marks go
+  renderModelControls();
   C.editTurn = mode === "edit"; TABS.turnStarted();       // saves wait for the turn (tabs.js)
   $("#chat-send").textContent = "Stop"; $("#chat-send").classList.remove("primary");
   $("#chat-status").className = "status busy"; $("#chat-status").textContent = "working…";
@@ -2593,6 +2696,14 @@ async function followTurn(job, provider, mode) {
         const x = live.get(s.id);
         if (x) { draw(false); x.box.open = false; live.delete(s.id); }
       } else if (s.draw === "build") showBuild(s.event.result);         // the agent compiled
+      else if (s.draw === "permission") showPermission(job, s.event);
+      else if (s.draw === "permission_resolved") resolvePermissionCard(job, s.event);
+      else if (s.draw === "rate") {
+        const p = P.byId[provider];
+        // An event supersedes any HTTP query already in flight for this provider.
+        if (p) { p.usageRequest = (p.usageRequest || 0) + 1; p.usage = ChatLogic.mergeUsage(p.usage, s.event); }
+        if (C.provider === provider) renderQuota(p ? p.usage : s.event);
+      }
       else if (s.draw === "error") chatAppend(`<div class="err">${esc(s.event.message)}</div>`, "card");
       else if (s.draw === "context") {                                   // grows with each message
         if (C.provider === provider) renderContext({ ...s.event, window: s.event.window || (provGet("context") || {}).window });
@@ -2636,6 +2747,8 @@ async function followTurn(job, provider, mode) {
     clearInterval(timer);
     show(t.end(), false); replies.flush(); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
     C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
+    renderModelControls();
+    for (const b of log.querySelectorAll(".permission-actions button")) b.disabled = true;
     $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
     $("#chat-status").className = "status"; $("#chat-status").textContent = "";
     saveChatLog();
@@ -2648,75 +2761,105 @@ async function followTurn(job, provider, mode) {
   }
 }
 
-// Usage limits as reported by Claude Code's rate_limit_event (utilization 0–1 per window).
-let lastRate = null;
-function renderQuota(rate) {
-  const q = $("#quota");
-  lastRate = rate;
+function permissionCard(job, request) {
+  return [...$("#chat-log").querySelectorAll(".permission")]
+    .find((el) => el.dataset.job === String(job) && el.dataset.request === request);
+}
+function showPermission(job, e) {
+  let el = permissionCard(job, e.request_id);
+  if (!el) el = chatAppend("", "card permission");
+  el.dataset.job = job; el.dataset.request = e.request_id;
+  delete el.dataset.resolved;
+  el.innerHTML = `<b>${esc(e.tool)} permission</b><div class="permission-target">${esc(e.target || "")}</div>`
+    + `<pre>${esc(JSON.stringify(e.input || {}, null, 2))}</pre>`
+    + `<small>WebFetch grants cover this origin. Session grants last for this conversation. Saved grants apply only to this project and profile.</small>`
+    + `<div class="permission-actions">`
+    + (e.scopes || ["once"]).map((scope) => `<button data-decision="allow" data-scope="${esc(scope)}">${esc({ once: "Allow once", session: "Allow for session", persistent: "Always allow" }[scope] || scope)}</button>`).join("")
+    + `<button data-decision="deny" data-scope="once">Deny</button></div><small class="permission-status" role="status">Waiting for your decision</small>`;
+}
+function resolvePermissionCard(job, e) {
+  const el = permissionCard(job, e.request_id);
+  if (!el) return;
+  el.dataset.resolved = "1";
+  el.querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  el.querySelector(".permission-status").textContent = e.decision === "allow" ? `Approved (${e.scope}) · Agent continues` : "Denied";
+}
+$("#chat-log").addEventListener("click", async (e) => {
+  const b = e.target.closest(".permission-actions button");
+  if (!b) return;
+  const card = b.closest(".permission");
+  if (card.dataset.resolved || Number(card.dataset.job) !== C.job) return;
+  card.querySelectorAll("button").forEach((button) => { button.disabled = true; });
+  const r = await Q.permission(C.job, card.dataset.request, b.dataset.decision, b.dataset.scope);
+  if (r.error || r._status !== 200) {
+    card.querySelector(".permission-status").textContent = r.error || "Could not send permission decision";
+    if (Number(card.dataset.job) === C.job && !card.dataset.resolved)
+      card.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+  } else resolvePermissionCard(C.job, { request_id: card.dataset.request, decision: b.dataset.decision, scope: b.dataset.scope });
+});
+
+// Quotas stay in server memory, scoped to the CLI profile; never restore a different
+// account's percentages from browser storage.
+let lastUsage = { rate: null, stale: true };
+function renderQuota(result = lastUsage) {
+  if (result && result.unifiedWindows) result = { rate: result, last_success: result.at, stale: false };
+  lastUsage = result || { rate: null, stale: true };
+  if (P.byId[C.provider]) P.byId[C.provider].usage = lastUsage;
+  const rate = lastUsage.rate, q = $("#quota");
   const hidden = store.get("chat.quotaHidden", false);
   q.classList.toggle("collapsed", hidden);
-  const refresh = `<button class="tiny icon ghost" id="quota-refresh" title="Check usage now (a tiny Haiku call, which counts toward your plan's usage limits)">${icon("refresh")}</button>`;
-  const hide = `<button class="tiny icon ghost" id="quota-toggle" title="Hide usage limits">${icon("up")}</button>`;
-  if (!rate || !rate.unifiedWindows) {
-    q.innerHTML = hidden
-      ? `<span class="note q-sum" id="quota-toggle" title="Show usage limits">Usage: not checked yet <span class="q-open">${icon("down")}</span></span>`
-      : `<span class="note">Usage limits: not checked yet ${refresh}${hide}</span>`;
+  const refresh = `<button class="tiny icon ghost" id="quota-refresh" title="Query current usage limits" aria-label="Refresh usage limits">${icon("refresh")}</button>`;
+  const toggle = `<button class="tiny icon ghost" id="quota-toggle" title="${hidden ? "Show" : "Hide"} usage limits">${icon(hidden ? "down" : "up")}</button>`;
+  const success = lastUsage.last_success || (rate || {}).at;
+  const expired = success && Date.now() / 1000 - success > 60;
+  const resetPassed = Object.values((rate || {}).unifiedWindows || {}).some((w) => w.resetsAt && w.resetsAt <= Date.now() / 1000);
+  const stale = lastUsage.stale || expired || resetPassed;
+  const stamp = success ? new Date(success * 1000).toLocaleString() : "never";
+  const note = `<span class="note ${lastUsage.error ? "err" : ""}">Last successful sync: ${esc(stamp)}${stale ? " · stale" : ""}${lastUsage.cached ? " · cached" : ""}${lastUsage.error ? " · " + esc(lastUsage.error) : ""} ${refresh}${toggle}</span>`;
+  if (!rate || !rate.unifiedWindows || !Object.keys(rate.unifiedWindows).length) {
+    q.innerHTML = `<span class="note">Usage limits unavailable</span>` + note;
     return;
   }
-  const prev = store.get("chat.rate", null);
-  if (!prev || !prev.at || (rate.at || 0) >= prev.at) store.set("chat.rate", rate);
-  const fmtReset = (ts) => {
-    if (!ts) return "";
-    const d = new Date(ts * 1000), now = new Date();
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return d.toDateString() === now.toDateString() ? time : d.toLocaleDateString([], { weekday: "short" }) + " " + time;
-  };
+  const fmtReset = (ts) => ts ? new Date(ts * 1000).toLocaleString() : "unknown";
   const names = { five_hour: "5h", seven_day: "7d", seven_day_opus: "7d Opus", seven_day_sonnet: "7d Sonnet" };
-  if (hidden) {                           // one line: "Usage · 5h 41% left · 7d 90% left ▾"
-    const limited = rate.status && rate.status !== "allowed";
-    const parts = Object.entries(rate.unifiedWindows).map(([k, w]) => {
-      const used = Math.max(0, Math.min(1, w.utilization || 0));
-      const cls = used >= 0.9 ? "err" : used >= 0.7 ? "warn" : "";
-      return `<span class="${cls}">${esc(names[k] || k)} ${100 - Math.round(used * 100)}% left</span>`;
-    });
-    q.innerHTML = `<span class="note q-sum" id="quota-toggle" title="Show usage limits">`
-      + (limited ? `<span class="err">Rate limited until ${esc(fmtReset(rate.resetsAt))}</span>` : "Usage · " + parts.join(" · "))
-      + ` <span class="q-open">${icon("down")}</span></span>`;
-    return;
-  }
   let h = "";
-  for (const [k, w] of Object.entries(rate.unifiedWindows)) {
-    const used = Math.max(0, Math.min(1, w.utilization || 0)), pct = Math.round(used * 100);
+  for (const [key, window] of Object.entries(rate.unifiedWindows)) {
+    const used = Number.isFinite(window.utilization) ? Math.max(0, Math.min(1, window.utilization)) : null;
+    const pct = used === null ? null : Math.round(used * 100);
     const cls = used >= 0.9 ? "err" : used >= 0.7 ? "warn" : "";
-    h += `<span>${esc(names[k] || k)}</span><div class="bar" title="${pct}% used"><i class="${cls}" style="width:${Math.max(pct, 1)}%"></i></div>
-      <span class="num">${100 - pct}% left · resets ${esc(fmtReset(w.resetsAt))}</span>`;
+    if (hidden) h += `<span class="note">${esc(names[key] || key)} ${pct === null ? "unknown" : 100 - pct + "% left"} · </span>`;
+    else h += `<span>${esc(names[key] || key)}</span><div class="bar" title="${pct === null ? "unknown" : pct + "% used"}"><i class="${cls}" style="width:${pct === null ? 0 : Math.max(pct, 1)}%"></i></div><span class="num">${pct === null ? "unknown" : 100 - pct + "% left"} · resets ${esc(fmtReset(window.resetsAt))}</span>`;
   }
-  const age = rate.at ? new Date(rate.at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "?";
-  if (rate.status && rate.status !== "allowed")
-    h += `<span class="note err">Rate limited (${esc(rate.rateLimitType || "")}) until ${esc(fmtReset(rate.resetsAt))}</span>`;
-  else
-    h += `<span class="note">as of ${esc(age)} · updated by each message and ${refresh}${hide}</span>`;
-  q.innerHTML = h;
-  q.title = "Claude usage limits reported by Claude Code. Usage from other sessions (e.g. the terminal) shows up after the next message sent from this panel.";
+  if (rate.status && rate.status !== "allowed") h += `<span class="note err">Rate limited until ${esc(fmtReset(rate.resetsAt))}</span>`;
+  q.innerHTML = h + note;
+  q.title = "Read-only usage query. Old percentages remain marked stale when synchronization fails.";
 }
-
-// `auto`: the check on page load, which stays quiet when refused (the account line says why).
-async function checkUsage(auto = false) {
-  const provider = C.provider, seq = ++providerSeq.usage;
+async function checkUsage(auto = false, force = true) {
+  const provider = C.provider, p = prov();
+  if (!p.usage_limits) return;
+  const sequence = p.usageRequest = (p.usageRequest || 0) + 1;
   const b = $("#quota-refresh");
   if (b) { b.disabled = true; b.textContent = "…"; }
-  const r = await Q.usage(provider);
-  if (provider !== C.provider || seq !== providerSeq.usage) return;
-  renderQuota(r.rate || store.get("chat.rate", null));
+  const r = await Q.usage(provider, force);
+  if (p.usageRequest !== sequence) return;
+  const result = r._status === 0 ? { ...p.usage, stale: true, error: r.error } : r;
+  p.usage = ChatLogic.mergeUsage(p.usage, result);
+  if (C.provider === provider) renderQuota(p.usage);
   if (r.error && !auto) toast(r.error, true);
 }
 $("#quota").addEventListener("click", (e) => {
-  if (e.target.id === "quota-refresh") return checkUsage();
+  if (e.target.closest("#quota-refresh")) return checkUsage();
   if (e.target.closest("#quota-toggle")) {
     store.set("chat.quotaHidden", !store.get("chat.quotaHidden", false));
-    renderQuota(lastRate);
+    renderQuota();
   }
 });
+setInterval(() => {
+  if (document.visibilityState === "visible" && prov().usage_limits) {
+    renderQuota();
+    if (!C.job) checkUsage(true, false);
+  }
+}, 60000);
 
 
 function setUndoBusy(busy) {
@@ -2784,8 +2927,34 @@ function renderTurnCard(e) {
 }
 
 $("#chat-log").addEventListener("click", async (ev) => {
+  const label = ev.target.closest("a[data-label]");
+  if (label) {
+    ev.preventDefault();
+    if (S.tabs.some(isDirty) && !(await TABS.saveAll()).ok) return toast("Save your source edits before navigating to a label.");
+    const r = await Q.resolveLabel(label.dataset.label, S.labelVersion);
+    if (r.error || r._status !== 200) return toast(r.error || "Could not resolve LaTeX label");
+    S.labelVersion = r.version;
+    if (r.status === "ok") {
+      const tab = TABS.get(r.file);
+      if (tab) {
+        await reloadFromDisk(tab);
+        if (isDirty(tab) || tab.conflict) return toast("Resolve the source conflict before navigating to this label.");
+      }
+      return openFile(r.file, r.line);
+    }
+    if (r.status === "duplicate") {
+      chatAppend(`<b>Duplicate label: ${esc(label.dataset.label)}</b><div>Choose a source location:</div>`
+        + r.matches.map((m) => `<div><a class="src" role="link" tabindex="0" data-file="${esc(m.file)}" data-line="${m.line}">${esc(m.file)}:${m.line}</a></div>`).join(""), "card");
+    } else toast(`Label not found: ${label.dataset.label}${r.stale ? " (source index refreshed)" : ""}`);
+    scheduleSymbols();
+    return;
+  }
   const a = ev.target.closest("a[data-file]");
-  if (a) return openFile(a.dataset.file, a.dataset.line ? +a.dataset.line : undefined);
+  if (a) {
+    const tab = TABS.get(a.dataset.file);
+    if (tab && !isDirty(tab)) await reloadFromDisk(tab);
+    return openFile(a.dataset.file, a.dataset.line ? +a.dataset.line : undefined);
+  }
   const tg = ev.target.closest("[data-toggle]");
   if (tg) { const pre = tg.closest(".row").nextElementSibling; pre.hidden = !pre.hidden; return; }
   if (ev.target.closest("[data-compile]")) return compile();
@@ -2799,6 +2968,9 @@ $("#chat-log").addEventListener("click", async (ev) => {
     u.textContent = `undone (${(r.restored || []).length})` + ((r.skipped || []).length ? `; kept ${r.skipped.length} unavailable or changed since` : "");
     u.disabled = true; saveChatLog(); AH.clear("changed"); await poll();
   }
+});
+$("#chat-log").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && e.target.matches("a[data-label], a.src[data-file]")) { e.preventDefault(); e.target.click(); }
 });
 
 /* ------------------------------------------------------------------ slash commands */
@@ -2853,15 +3025,15 @@ async function runLocal(name, arg) {
   if (name === "model") {
     const models = prov().models || [];
     if (!arg) return sysNote(`Current: ${settingsLine()}\nUsage: <code>/model &lt;name&gt;</code> (any model name ${esc(provLabel())} accepts). ${chipList(["default", ...models].map((m) => "model " + m))}`);
-    C.model = arg === "default" ? null : arg; provSet("model", C.model);
+    await saveAgentChoice(arg === "default" ? null : arg, null);
     return sysNote(`Model for the next messages: <b>${esc(C.model || prov().default_model || "default")}</b>`);
   }
   if (name === "effort") {
-    const efforts = prov().efforts || [];
+    const efforts = modelEfforts();
     if (!efforts.length) return sysNote(`${esc(provLabel())} has no effort setting.`);
     if (!arg) return sysNote(`Current: ${settingsLine()}\nUsage: <code>/effort &lt;level&gt;</code>. ${chipList(["default", ...efforts].map((e) => "effort " + e))}`);
     if (arg !== "default" && !efforts.includes(arg)) return sysNote(`<span class="err">Effort must be one of: default, ${efforts.join(", ")}</span>`);
-    C.effort = arg === "default" ? null : arg; provSet("effort", C.effort);
+    await saveAgentChoice(C.model, arg === "default" ? null : arg);
     return sysNote(`Effort for the next messages: <b>${esc(C.effort || "default")}</b>`);
   }
   if (name === "skills") {
@@ -2885,12 +3057,14 @@ async function runLocal(name, arg) {
 function setProvider(id, quiet) {
   const p = P.byId[id];
   if (!p) return sysNote(`<span class="err">Unknown provider: ${esc(id)}. Try <code>/provider</code>.</span>`);
-  if (C.job) return toast("Wait for the current turn to finish.");
+  if (C.job || C.configSaving) return toast("Wait for the current turn or configuration save to finish.");
   C.provider = id; store.set("chat.provider", id); loadProvider(); loadAccount();
   catalog = null;
   $("#chat-provider").value = id;
   $("#quota").hidden = !p.usage_limits;
-  if (p.usage_limits) renderQuota(p.rate || store.get("chat.rate", null));
+  if (p.usage_limits) { renderQuota(p.usage || { rate: null, stale: true }); checkUsage(true, false); }
+  renderModelControls(); loadModels();
+  if (!quiet) saveAgentChoice(C.model, C.effort);
   if (!quiet) sysNote(p.available
     ? `Now using <b>${esc(p.label)}</b> (${settingsLine()}). It continues its own conversation; <b>New chat</b> starts over.`
     : `<span class="err">${esc(p.label)} is not available: ${esc(p.reason || "")}</span>`);
@@ -2898,6 +3072,7 @@ function setProvider(id, quiet) {
 function renderProviders(info) {
   if (!bindProject(info.project_key)) return;
   P.projectKey = projectKey;
+  P.defaults = info.defaults || {};
   P.list = info.providers || [];
   P.byId = Object.fromEntries(P.list.map((p) => [p.id, p]));
   // A server started before this page's code was updated sends no provider list. Hide the
@@ -2910,7 +3085,7 @@ function renderProviders(info) {
   }
   $("#chat-provider").innerHTML = P.list.map((p) =>
     `<option value="${esc(p.id)}"${p.available ? "" : " disabled"} title="${esc(p.reason || "")}">${esc(p.label)}${p.available ? "" : " (not set up)"}</option>`).join("");
-  let id = C.provider;
+  let id = info.active ? info.active.provider : P.defaults.provider || C.provider;
   if (!P.byId[id] || !P.byId[id].available) id = info.default;
   if (!P.byId[id] || !P.byId[id].available) id = (P.list.find((p) => p.available) || P.list[0] || {}).id;
   if (id) setProvider(id, true);
@@ -3044,7 +3219,7 @@ async function loadAgentInfo() {
 {
   chatIntro();
   $("#chat-log").scrollTop = $("#chat-log").scrollHeight;
-  renderQuota(store.get("chat.rate", null));
+  renderQuota();
   loadAgentInfo().then((r) => {
     renderProviders(r);
     if (r.active && !C.job && r.project_key === P.projectKey) {
@@ -3053,8 +3228,6 @@ async function loadAgentInfo() {
     }
     const p = prov();
     if (!p.available) return chatAppend(`<div class="err">${esc(p.reason || "No AI provider is set up.")}</div>`, "card");
-    const known = p.rate || store.get("chat.rate", null);
-    if (p.usage_limits && (!known || !known.at || Date.now() / 1000 - known.at > 600)) checkUsage(true);
   });
 }
 

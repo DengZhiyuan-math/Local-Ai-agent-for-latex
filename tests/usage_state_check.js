@@ -1,0 +1,14 @@
+'use strict';
+const assert = require('assert');
+const Chat = require('../prism_local/static/chatlogic.js');
+const current = {identity:'a',rate:{at:200,unifiedWindows:{five_hour:{utilization:.4}}},last_success:200,stale:false};
+const older = {identity:'a',rate:{at:100,unifiedWindows:{five_hour:{utilization:.1}}},last_success:100,stale:false};
+assert.deepStrictEqual(Chat.mergeUsage(current,older),current,'an older response cannot overwrite a newer snapshot');
+const partial = Chat.mergeUsage(current,{rate:{at:300,rateLimitType:'five_hour',utilization:.5}});
+assert.strictEqual(partial.rate,current.rate,'partial rate events do not erase complete windows');
+assert.strictEqual(partial.last_success,200,'partial events cannot claim a successful full sync');
+assert.strictEqual(partial.stale,true);
+const different = {...older,identity:'b'};
+assert.deepStrictEqual(Chat.mergeUsage(current,different),different,'a changed profile must replace the previous account');
+assert.strictEqual(Chat.mergeUsage(current,{rate:null,last_success:null,stale:true,error:'unavailable'}).rate,null);
+console.log('usage state ok');

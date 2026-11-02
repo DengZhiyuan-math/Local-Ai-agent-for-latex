@@ -1,0 +1,59 @@
+FF..
+======================================================================
+FAIL: test_browser_selection_scripts_compile_natively (test_macos_app.MacApp.test_browser_selection_scripts_compile_natively) (browser='com.apple.Safari')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/prism-agent-baseline/tests/test_macos_app.py", line 40, in test_browser_selection_scripts_compile_natively
+    launcher.open_page("http://127.0.0.1:8790/", "default")
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/prism-agent-baseline/launcher/prism_launcher.pyw", line 215, in open_page
+    if sys.platform == "darwin" and mode == "default" and macos_focus_page(url):
+                                                          ~~~~~~~~~~~~~~~~^^^^^
+  File "/private/tmp/prism-agent-baseline/launcher/prism_launcher.pyw", line 205, in macos_focus_page
+    r = subprocess.run(["/usr/bin/osascript", "-e", script, url], capture_output=True,
+                       text=True, timeout=10)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1247, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/tmp/prism-agent-baseline/tests/test_macos_app.py", line 34, in native
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : compilation error: Can’t get application id "com.apple.Safari". (-1728)
+
+
+======================================================================
+FAIL: test_browser_selection_scripts_compile_natively (test_macos_app.MacApp.test_browser_selection_scripts_compile_natively) (browser='com.google.Chrome')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/tmp/prism-agent-baseline/tests/test_macos_app.py", line 40, in test_browser_selection_scripts_compile_natively
+    launcher.open_page("http://127.0.0.1:8790/", "default")
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/private/tmp/prism-agent-baseline/launcher/prism_launcher.pyw", line 215, in open_page
+    if sys.platform == "darwin" and mode == "default" and macos_focus_page(url):
+                                                          ~~~~~~~~~~~~~~~~^^^^^
+  File "/private/tmp/prism-agent-baseline/launcher/prism_launcher.pyw", line 205, in macos_focus_page
+    r = subprocess.run(["/usr/bin/osascript", "-e", script, url], capture_output=True,
+                       text=True, timeout=10)
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1176, in __call__
+    return self._mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1180, in _mock_call
+    return self._execute_mock_call(*args, **kwargs)
+           ~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/lib/python3.14/unittest/mock.py", line 1247, in _execute_mock_call
+    result = effect(*args, **kwargs)
+  File "/tmp/prism-agent-baseline/tests/test_macos_app.py", line 34, in native
+    self.assertEqual(result.returncode, 0, result.stderr)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : compilation error: Can’t get application id "com.google.Chrome". (-1728)
+
+
+----------------------------------------------------------------------
+Ran 3 tests in 2.805s
+
+FAILED (failures=2)

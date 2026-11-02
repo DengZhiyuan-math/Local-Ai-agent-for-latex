@@ -15,16 +15,41 @@ async function usageAndCatalog() {
   for (const kind of ["usage", "catalog"]) {
     let finish;
     const C = { provider: "old" }, drawn = [];
-    const answer = (p) => p === "old" ? new Promise(r => { finish = r; }) : Promise.resolve({ _status: 200, rate: { id: "new" }, skills: ["new"] });
-    const ctx = { C, providerSeq: { usage: 0, catalog: 0 }, catalog: null, Q: { usage: answer, commands: answer },
+    const providers = { old: { usage_limits: true }, new: { usage_limits: true } };
+    const answer = (p) => p === "old" ? new Promise(r => { finish = r; }) : Promise.resolve({ _status: 200, rate: { id: "new", unifiedWindows: {}, at: 200 }, skills: ["new"] });
+    const ctx = { C, prov: () => providers[C.provider], ChatLogic: require("../prism_local/static/chatlogic.js"),
+      providerSeq: { usage: 0, catalog: 0 }, catalog: null, Q: { usage: answer, commands: answer },
       $: () => ({}), renderQuota: r => drawn.push(r), store: { get: () => null }, toast: () => {} };
     const name = kind === "usage" ? "checkUsage" : "loadCatalog";
     const end = kind === "usage" ? '\n$("#quota").addEventListener' : "\nfunction sysNote";
     const run = vm.runInNewContext(section("async function " + name + "(", end) + ";" + name, ctx);
     const old = run(); C.provider = "new"; await run();
-    finish({ _status: 200, rate: { id: "old" }, skills: ["old"] }); await old;
-    assert.strictEqual(kind === "usage" ? drawn.at(-1).id : ctx.catalog.skills[0], "new", "late " + kind);
+    finish({ _status: 200, rate: { id: "old", unifiedWindows: {}, at: 100 }, skills: ["old"] }); await old;
+    assert.strictEqual(kind === "usage" ? drawn.at(-1).rate.id : ctx.catalog.skills[0], "new", "late " + kind);
   }
+}
+async function providerQuota() {
+  const C = { provider: "old" }, queried = [], elements = {};
+  const P = { byId: { old: { usage_limits: true }, fresh: { usage_limits: true } } };
+  const ctx = { C, P, catalog: null,
+    $: (id) => elements[id] ||= { classList: { toggle() {} } },
+    store: { get: () => false, set() {} }, esc: x => x, icon: () => "",
+    loadProvider() {}, loadAccount() {}, renderModelControls() {}, loadModels() {},
+    checkUsage: (...args) => queried.push([C.provider, ...args]) };
+  const run = vm.runInNewContext(section("let lastUsage =", "\nasync function checkUsage(") +
+    section("function setProvider(", "\nfunction renderProviders(") + ";({renderQuota, setProvider})", ctx);
+  const old = { identity: "old", rate: { at: Date.now() / 1000,
+    unifiedWindows: { five_hour: { utilization: .5 } } }, stale: false };
+  run.renderQuota(old);
+  run.setProvider("fresh", true);
+  assert.strictEqual(P.byId.fresh.usage.rate, null, "a provider without usage cannot inherit the previous snapshot");
+  assert.strictEqual(P.byId.fresh.usage.stale, true);
+  assert.ok(elements["#quota"].innerHTML.includes("Usage limits unavailable"));
+  assert.ok(!elements["#quota"].innerHTML.includes("50% left"));
+  assert.strictEqual(P.byId.old.usage, old, "switching providers keeps the previous provider's own snapshot");
+  run.setProvider("old", true);
+  assert.ok(elements["#quota"].innerHTML.includes("50% left"));
+  assert.deepStrictEqual(queried, [["fresh", true, false], ["old", true, false]]);
 }
 async function syncToggle() {
   const SyncState = require("../prism_local/static/syncstate.js");
@@ -141,4 +166,4 @@ async function manualSave() {
     $: () => ({ checked: true }), compile: () => builds++, toast: () => {}, Tabs: require("../prism_local/static/tabs.js") });
   await run(); assert.strictEqual(builds, 0, "a failed manual save must not trigger auto-compile");
 }
-account().then(usageAndCatalog).then(syncToggle).then(attachments).then(projectBound).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+account().then(usageAndCatalog).then(providerQuota).then(syncToggle).then(attachments).then(projectBound).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });

@@ -23,6 +23,8 @@ const ARGS = {
   theirs: ["a.tex"], log: ["a.tex"], show: ["abc", "a.tex"],
   agent: [{ prompt: "hi" }], events: [7, 3], stop: [7], undo: [7], info: [], usage: ["claude"],
   account: ["claude"], commands: ["claude", true],
+  models: ["claude", true], configure: ["claude", "sonnet", "high"], permission: [7, "r1", "allow", "once"],
+  labels: [], resolveLabel: ["eq:one", "v1"],
 };
 const missing = Object.keys(Q).filter((k) => k !== "fileAction" && !(k in ARGS));
 if (missing.length) { console.error("no ARGS for: " + missing.join(", ")); process.exit(1); }

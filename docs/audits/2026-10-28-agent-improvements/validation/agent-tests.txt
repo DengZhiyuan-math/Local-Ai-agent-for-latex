@@ -1,0 +1,40 @@
+{"event": "agent_start", "job": 1, "provider": "slow", "project_key": "tmprg2rbdg5-dbefbe342e", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmprg2rbdg5", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "busy", "project_key": "tmp4jyr4q6p-9769e5af0a", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp4jyr4q6p", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "wild", "project_key": "tmpmatdvoxu-88d27a49d6", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpmatdvoxu", "session_id": null}
+{"event": "agent_start", "job": 1, "provider": "wild", "project_key": "tmpmatdvoxu-88d27a49d6", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpmatdvoxu", "session_id": null}
+................{"event": "agent_start", "job": 1, "provider": "claude", "project_key": "prism-local-cb53a8a928", "cwd": "/Volumes/Codex-Workspace/Projects/prism-local", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "claude", "project_key": "prism-local-cb53a8a928", "cwd": "/Volumes/Codex-Workspace/Projects/prism-local", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "claude", "project_key": "prism-local-cb53a8a928", "cwd": "/Volumes/Codex-Workspace/Projects/prism-local", "session_id": null}
+...........{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "prism-test-7r1lylsa-439e5a2385", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-7r1lylsa", "session_id": null}
+..{"event": "agent_start", "job": 1, "provider": "deepcode", "project_key": "prism-test-maodncrj-027124ae68", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-maodncrj", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "deepcode", "project_key": "prism-test-maodncrj-027124ae68", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/prism-test-maodncrj", "session_id": "eae4933e-ee2d-4829-b037-66c0c82ba06c"}
+.....{"event": "agent_start", "job": 1, "provider": "ds", "project_key": "tmp17r1vtc4-bcc56d5af9", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp17r1vtc4", "session_id": null}
+...{"event": "agent_start", "job": 1, "provider": "ds", "project_key": "tmpexm6t8or-45039228ad", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpexm6t8or", "session_id": null}
+{"event": "agent_start", "job": 1, "provider": "ds", "project_key": "tmpexm6t8or-45039228ad", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpexm6t8or", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "ds", "project_key": "tmp6bp0_k5a-61981bbc29", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp6bp0_k5a", "session_id": null}
+{"event": "agent_start", "job": 1, "provider": "ds", "project_key": "tmp6bp0_k5a-61981bbc29", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp6bp0_k5a", "session_id": "a49894fc0b0c4dce8cc4e6515c345133"}
+...{"event": "agent_start", "job": 1, "provider": "plant", "project_key": "tmpixx2urli-3e24e75868", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpixx2urli", "session_id": null}
+{"event": "agent_start", "job": 1, "provider": "quiet", "project_key": "tmpixx2urli-3e24e75868", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpixx2urli", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "wild", "project_key": "tmpubr_wh_w-450a7efd6c", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpubr_wh_w", "session_id": null}
+....{"event": "agent_start", "job": 1, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 2, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 3, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 4, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 5, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 6, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 7, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 8, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 9, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 10, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+{"event": "agent_start", "job": 11, "provider": "write", "project_key": "tmpssmsbxlz-213a2e36aa", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpssmsbxlz", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmp__h9_kll-4f5149006d", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmp__h9_kll", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmpwon9dfwh-6f9e2ae521", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpwon9dfwh", "session_id": null}
+....{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmpr5phgjw9-40f5e68959", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpr5phgjw9", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmpa5pfp4js-50a394d15a", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpa5pfp4js", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "edit", "project_key": "tmpoms_ps_h-ddd5a311b7", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpoms_ps_h", "session_id": null}
+.{"event": "agent_start", "job": 1, "provider": "ask", "project_key": "tmpd9cost7g-34e7496474", "cwd": "/private/var/folders/13/jgb8c061583ggg622pgv9l0c0000gp/T/tmpd9cost7g", "session_id": null}
+.
+----------------------------------------------------------------------
+Ran 60 tests in 16.817s
+
+OK
