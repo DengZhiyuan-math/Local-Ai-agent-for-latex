@@ -13,6 +13,16 @@ The report includes failures, exact skip reasons, discovered test names, source
 drift and blocked process/network attempts. Any failure, drift or blocked attempt
 fails the run. Use `--modules test_projectconfig test_research_language` for a
 focused diagnosis, or `--output-dir PATH` to choose the report directory.
+For manual edits during Agent Turns, use `--modules test_frontend test_conflict_http`.
+These checks delay the final file refresh, preserve manual drafts through changed or
+deleted files and refresh failures, compare drafts through real HTTP, and exercise
+Agent commits and later-save protection during Undo in a temporary Git repository.
+For actual Chrome UI acceptance, start an isolated Chrome profile with a CDP port,
+then run `python tests/browser/manual_edits.py --cdp-url http://127.0.0.1:9223
+--output-dir /tmp/prism-manual-edits-results`. This requires `agent-browser` and uses
+trusted keyboard input, real editor HTTP and a temporary Git repository with scripted
+model responses. The report and screenshot cover narrow-pane conflict actions,
+turn-end saving, comparison and Undo. It does not run a live model or the installed app.
 Failures print their traceback immediately, so a later deadline cannot hide an
 earlier failure. `--shard 1/2` and `--shard 2/2` split sorted modules into two
 disjoint groups. Together they execute every discovered test; module and class

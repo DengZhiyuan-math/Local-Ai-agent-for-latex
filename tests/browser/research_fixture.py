@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 
 if os.environ.get("CI") == "true":
     import faulthandler
@@ -46,6 +47,13 @@ import server
 
 class ScriptQueue:
     def pop(self, index):
+        # Browser checks can hold an actual API request while typing in the
+        # editor, then release it without relying on a machine-speed delay.
+        deadline = time.monotonic() + 30
+        while (work / "pause-api").exists():
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Browser fixture API gate was not released")
+            time.sleep(.01)
         path = work / "api-script.json"
         chunks = json.loads(path.read_text(encoding="utf-8")) if path.exists() else []
         if not chunks:

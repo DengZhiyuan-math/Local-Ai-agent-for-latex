@@ -818,7 +818,10 @@ Consequences:
   - For durable history, use git.
 - While a turn runs in Edit mode, what you type is saved when the turn ends, so it never
   becomes part of the agent's diff or its Undo. If the agent changed the same file, you get
-  the conflict banner instead.
+  the conflict banner instead. Saving stays paused until the editor checks the turn's
+  final files. **Compare my edits with disk** compares your unsaved draft with the current
+  file without saving either version. The **Diff** tab continues to show Git changes and history.
+  If that final check fails, the draft stays in the editor for comparison before saving.
 - **Cost**: each message is a full Claude Code run, billed to your Claude plan or API account
   like any other Claude Code usage.
 - **Usage limits**: the bars show the 5-hour and 7-day utilization that Claude Code reports.

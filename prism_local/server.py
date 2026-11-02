@@ -17,6 +17,7 @@ from __future__ import annotations
 import gitenv
 
 import argparse
+import difflib
 import hashlib
 import json
 import os
@@ -33,6 +34,7 @@ from gitsync import GitSync  # noqa: E402
 from project import SAVE_WAIT, UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
 import repoview  # noqa: E402
+import snapshot  # noqa: E402
 from fsutil import EDITABLE_SUFFIXES  # noqa: E402
 import desktop  # noqa: E402
 from errors import Conflict, NotFound, Refused  # noqa: E402
@@ -584,6 +586,32 @@ class Handler(httpbase.Handler):
             if not isinstance(paths, list) or not all(isinstance(f, str) for f in paths):
                 return self._err(400, "paths: a list of the project's files")
             return self._json({"files": PROJECT.texts(paths)})
+        if path == "/api/file/compare":
+            p = PROJECT.resolve(body["path"])
+            content = body.get("content")
+            if not isinstance(content, str):
+                return self._err(400, "content must be text")
+            if len(content.encode("utf-8")) > snapshot.DIFF_BYTES:
+                return self._err(413, "This draft is too large to compare here.")
+            if not SAVE_LOCK.acquire(timeout=3):
+                return self._err(503, "The source files are busy; compare again in a moment.")
+            try:
+                if p.stat().st_size > snapshot.DIFF_BYTES:
+                    return self._err(413, "This file is too large to compare here.")
+                disk = p.read_text(encoding="utf-8")
+            finally:
+                SAVE_LOCK.release()
+            content = content.replace("\r\n", "\n").replace("\r", "\n")
+            old, new = disk.splitlines(keepends=True), content.splitlines(keepends=True)
+            if max(len(old), len(new)) > snapshot.DIFF_LINES:
+                return self._err(413, "This file has too many lines to compare here.")
+            chunks = difflib.unified_diff(old, new, fromfile=f"{body['path']} (disk)",
+                                          tofile=f"{body['path']} (my unsaved edits)", n=2)
+            text = "".join(chunk if chunk.endswith("\n") else chunk + "\n\\ No newline at end of file\n"
+                           for chunk in chunks)
+            if len(text) > snapshot.DIFF_MAX:
+                text = text[:snapshot.DIFF_MAX] + "\n… (the rest of this diff is not shown)\n"
+            return self._json({"diff": text})
         if path == "/api/file":
             # A save calls GITSYNC.touched: an autosave commit follows once you stop editing.
             if not SAVE_LOCK.acquire(timeout=3):

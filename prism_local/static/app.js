@@ -995,13 +995,13 @@ function showBanner(t) {
     };
     return;
   }
-  b.innerHTML = `<b>${esc(t.path)}</b> was changed on disk (e.g. by Claude Code) while you have unsaved edits.
+  b.innerHTML = `<b>${esc(t.path)}</b> changed on disk while you have unsaved edits. Both versions are kept.
     <button id="bn-reload">Load disk version (discard mine)</button>
     <button id="bn-keep">Keep mine (overwrite disk)</button>
-    <button id="bn-diff">Show git diff</button>`;
+    <button id="bn-diff">Compare my edits with disk</button>`;
   $("#bn-reload").onclick = () => reloadFromDisk(t, true);
   $("#bn-keep").onclick = () => TABS.save(t, true);
-  $("#bn-diff").onclick = () => showDiff(t.path);
+  $("#bn-diff").onclick = () => showConflictDiff(t);
 }
 
 /* ------------------------------------------------------------------ file tree & outline */
@@ -1325,18 +1325,18 @@ const poll = poller(pollOnce, 2000, 30000);
 const UNREACHABLE = "server not reachable";
 async function pollOnce() {
   // The build settings come with the first poll (at startup, or until the server answers).
-  if (foreignProject) return;
+  if (foreignProject) return false;
   const asked = TABS.stamp(), syncAsked = SYNC_TOGGLE.stamp();
   const r = await Q.tree();
   const st = $("#build-status");
-  if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return; }
+  if (r._status !== 200) { st.textContent = UNREACHABLE; st.className = "status err"; return false; }
   if (st.textContent === UNREACHABLE) { st.textContent = ""; st.className = "status"; }   // it answers again
   showProjectName(r.name || r.root, r.root);
   if (r.move_error && !S.moveErrorShown) { S.moveErrorShown = true; toast(r.move_error, true); }
-  if (!bindProject(r.project_key)) return;
+  if (!bindProject(r.project_key)) return false;
   if (!BUILD.loaded) await loadConfig();
   const action = Watch.reconcile(S.watch, r, S.tabs.map((t) => ({ ...t, dirty: isDirty(t) })), asked);
-  if (action.foreign) return stopForProject();
+  if (action.foreign) { stopForProject(); return false; }
   S.ready = true; S.watch = r;
   S.files = r.files; S.order = r.order || []; S.folders = r.folders || []; S.document = r.document || [];
   if (action.treeChanged) renderTree();
@@ -1360,6 +1360,7 @@ async function pollOnce() {
   S.server = r.server;
   if (r.sync && SYNC_TOGGLE.fresh(syncAsked)) renderSync(r.sync);   // not one older than a switch
   if (PS.open && psQ.value && psStamp() !== PS.stamp) psSchedule(0);   // a file changed: search it again
+  return true;
 }
 
 /* ------------------------------------------------------------------ GitHub sync */
@@ -1757,6 +1758,18 @@ $("#panel-toggle").onclick = () => {
 };
 // The diff view shows the answer to the latest request only (also GitHub's version, above).
 let diffSeq = 0;
+async function showConflictDiff(t) {
+  const seq = ++diffSeq, content = t.doc.getValue();
+  const r = await Q.compareFile(t.path, content);
+  if (seq !== diffSeq) return;
+  let text;
+  if (t.doc.getValue() !== content) text = "Your draft changed during comparison. Click Compare again to see the current draft.";
+  else if (r._status !== 200) text = `Could not compare ${t.path} with disk: ${r.error || "HTTP " + r._status}`;
+  else text = `Comparing ${t.path}: − current disk version, + my unsaved edits.\nNothing is saved by this comparison.\n\n`
+    + (r.diff || "Your draft and the disk version have the same text.");
+  $("#diff").innerHTML = diffHtml(text);
+  openPanel("diff");
+}
 async function showDiff(path) {
   const seq = ++diffSeq;
   const r = await Q.diff(path || undefined);
@@ -3434,18 +3447,28 @@ async function followTurn(job, provider, mode) {
   } finally {            // whatever happened above, the panel and saving work again
     clearInterval(timer);
     show(t.end(), false); replies.flush(); draw(false); AV.end(null, false); AH.on(null); AH.clear("read");
-    C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
-    loadResearch();
-    renderModelControls();
-    for (const b of log.querySelectorAll(".permission-actions button")) b.disabled = true;
-    $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
-    $("#chat-status").className = "status"; $("#chat-status").textContent = "";
-    saveChatLog();
-    await poll();        // first take in the agent's changes (a file it changed under your edits gets the banner) …
-    if (changes && !C.job) AH.complete(changes);
-    flushSaves();        // … then save what you typed meanwhile
+    let reconciled = false;
+    try {
+      // Keep the turn and its save hold until changed/deleted files have their
+      // conflict banner. A queued autosave or a new message must wait too.
+      reconciled = await poll() === true;
+      if (!reconciled) {
+        for (const tab of S.tabs) if (isDirty(tab) && !tab.conflict) TABS.loaded(tab, tab.doc.getValue());
+        toast("Could not refresh files after the agent's turn. Your edits are kept. Compare with disk before saving.", true);
+      }
+      if (changes) AH.complete(changes);
+    } finally {
+      C.job = null; C.editTurn = false; C.stopping = false; setUndoBusy(false);
+      loadResearch();
+      renderModelControls();
+      for (const b of log.querySelectorAll(".permission-actions button")) b.disabled = true;
+      $("#chat-send").textContent = "Send"; $("#chat-send").classList.add("primary");
+      $("#chat-status").className = "status"; $("#chat-status").textContent = "";
+      saveChatLog();
+    }
+    if (reconciled) flushSaves();        // … then save what you typed meanwhile
     // Auto-compile the agent's changes too, unless its own last build already has them.
-    if ($("#auto-compile").checked && Turn.needsCompile(t.changed, S.files, S.pdfMtime))
+    if (reconciled && $("#auto-compile").checked && Turn.needsCompile(t.changed, S.files, S.pdfMtime))
       scheduleCompile(null);     // the document the agent edited, whichever tab is open
   }
 }

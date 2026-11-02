@@ -13,6 +13,11 @@ STATIC = HERE.parent / "prism_local" / "static"
 
 @unittest.skipUnless(shutil.which("node"), "needs Node.js")
 class Frontend(unittest.TestCase):
+    def test_unsaved_conflict_comparison(self):
+        r = subprocess.run([shutil.which("node"), str(HERE / "conflict_check.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=30)
+        self.assertEqual(r.returncode, 0, r.stderr or r.stdout)
+
     def test_received_notation_confirmation(self):
         r = subprocess.run([shutil.which("node"), str(HERE / "received_confirmation_check.js")],
                            capture_output=True, text=True, encoding="utf-8", timeout=30)

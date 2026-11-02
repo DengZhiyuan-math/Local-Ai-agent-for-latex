@@ -312,7 +312,8 @@ button.flip .ico { transform: rotate(180deg); }
 }
 .tab .close:hover { opacity: 1; background: var(--panel2); }
 .tab.dirty .name::after { content: " ●"; color: var(--accent); }
-#banner { padding: 6px 10px; background: var(--hl); display: flex; gap: 10px; align-items: center; flex: none; }
+#banner { padding: 6px 10px; background: var(--hl); display: flex; flex-wrap: wrap; gap: 10px; align-items: center; flex: none; }
+#banner button { max-width: 100%; height: auto; min-height: var(--ctl-h); padding: 4px 10px; white-space: normal; }
 #editor { flex: 1; min-height: 0; }
 /* Below the editor (app.js status line): the cursor's place. */
 #statusbar { display: flex; align-items: center; gap: 14px; height: 22px; flex: none; padding: 0 8px; font-size: 11.5px; color: var(--muted);

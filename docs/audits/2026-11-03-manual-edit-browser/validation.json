@@ -1,0 +1,47 @@
+{
+  "date": "2026-11-03",
+  "issue": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/30",
+  "source_sha256": {
+    "README.md": "b2e66c50e121c1b86801d22ad9772982fa68b1ff9a50330d5c138a300bf0e8a1",
+    "prism_local/server.py": "1f50c7f45a665b48674e420de1d6225a36f09d03f95ed6948e5c4fcc4ac37fef",
+    "prism_local/static/app.css": "57517397d19df14318c0ef7012e575b938dfde2c61b53ccb92240df1388b363e",
+    "prism_local/static/app.js": "a6ad575fb88e56b1dce228b192377b9d8b2f0f0ff2c3ea2923f905e7865639ae",
+    "prism_local/static/client.js": "fe2be3b9ff7c896da7da196d108b12f17e0de87ea034a4d8b358be64667a124c",
+    "tests/README.md": "8d7c04b015a3b998173868b10756e3c8fb08691736fb2ed8e35c3939a10e4623",
+    "tests/async_check.js": "ab59e7d76e4c789d93903fbf2815a148bc7f32cff8d984b6ecfa9fbeaa5c3d3f",
+    "tests/client_routes.js": "c84d60ed6d550257403414266e45a0fc244057ad971611b68a4ea6246c8fc15f",
+    "tests/test_frontend.py": "d1134b107689a98aa84b100e38c43ce510de4a7ec94ba0a3b7cc5509d52ae652",
+    "tests/conflict_check.js": "43998f5e79909ebbaad9cdb1d3accbb90c3b7cf1128cbf440f5692571ba9f331",
+    "tests/test_conflict_http.py": "078c130349bd68449a79e9a9e5afa89a698dd3a0e64e5e086e35aba27a1a2b32",
+    "tests/browser/research_fixture.py": "ad284d401efd6f4030bc5fd7545da9a14816c47bdf010b6fdb88ad604e4cca45",
+    "tests/browser/manual_edits.py": "fa852b41c06172263bfad8221891c9e52a2f3369514e622128c3bd4c1a4335a6"
+  },
+  "checks": {
+    "regression": {
+      "tests": 130,
+      "passed": 129,
+      "successful": true,
+      "source_drift": [],
+      "skipped": [
+        {
+          "test": "test_server.Files.test_save_while_another_program_reads_the_file",
+          "reason": "Windows file sharing"
+        }
+      ],
+      "blocked_processes": [],
+      "blocked_connections": []
+    },
+    "final-focused": {
+      "tests": 18,
+      "passed": 18,
+      "successful": true,
+      "source_drift": [],
+      "skipped": [],
+      "blocked_processes": [],
+      "blocked_connections": []
+    }
+  },
+  "scope": "Real Chrome UI, editor HTTP and temporary Git repository; scripted model responses. No live provider or installed-app acceptance.",
+  "historical_event": "The original event still lacks source/turn/Git evidence. This new reproduction does not establish its cause.",
+  "environment_limit": "Two earlier native watcher cases failed; independent probe returned Cannot start FSEvents stream. No watcher implementation was changed."
+}

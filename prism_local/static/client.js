@@ -52,6 +52,7 @@ const Client = (() => {
       uploadCancel: (upload_id) => post("/api/upload/cancel", { upload_id }),
       uploadSync: (paths) => get("/api/upload/sync", { paths: paths.join("\n") }),
       diff: (path) => get("/api/diff", { path }),
+      compareFile: (path, content) => post("/api/file/compare", { path, content }),
       // the build and the PDF
       build: ({ mode, clean, active }) => post("/api/build", { mode, clean, active }),
       buildStop: () => post("/api/build/stop"),

@@ -166,4 +166,81 @@ async function manualSave() {
     $: () => ({ checked: true }), compile: () => builds++, toast: () => {}, Tabs: require("../prism_local/static/tabs.js") });
   await run(); assert.strictEqual(builds, 0, "a failed manual save must not trigger auto-compile");
 }
-account().then(usageAndCatalog).then(providerQuota).then(syncToggle).then(attachments).then(projectBound).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
+async function turnEndSaves() {
+  const Tabs = require("../prism_local/static/tabs.js");
+  const common = fs.readFileSync(require.resolve("../prism_local/static/common.js"), "utf8");
+  for (const outcome of ["changed", "deleted", "unchanged", "unreachable", "exception", "unreachable-gone", "exception-gone"]) {
+    const preexistingGone = outcome.endsWith("-gone"), gone = outcome === "deleted" || preexistingGone;
+    const exception = outcome.startsWith("exception"), failed = exception || outcome.startsWith("unreachable");
+    const deferred = () => { let resolve, reject; const promise = new Promise((r, j) => { resolve = r; reject = j; }); return { promise, resolve, reject }; };
+    const events = deferred(), tree = deferred(), treeStarted = deferred();
+    const C = { provider: "fixture" }, writes = [], notices = [], elements = {}, errors = [];
+    const doc = { text: "Original paragraph.\n", generation: 0,
+      getValue() { return this.text; }, changeGeneration() { return this.generation; },
+      isClean(g) { return g === this.generation; } };
+    const TABS = Tabs.createTabStore({ isHeld: () => C.editTurn, notify: text => notices.push(text),
+      saveFile: async body => { writes.push(body); return outcome === "unchanged"
+        ? { _status: 200, mtime: 2 } : { _status: 409, conflict: true, gone }; } });
+    const tab = TABS.add("main.tex", doc, 1);
+    const S = { tabs: TABS.tabs, files: [{ path: tab.path, mtime: 1 }], pdfMtime: null, pdfMain: null };
+    const context = { C, S, TABS, Tabs, openAsked: 0, foreignProject: false, BUILD: { loaded: true },
+      RESEARCH: {}, PS: { open: false }, UNREACHABLE: "server not reachable",
+      Watch: require("../prism_local/static/watch.js"), Turn: require("../prism_local/static/turn.js"),
+      Q: { events: () => events.promise, tree: () => { treeStarted.resolve(); return tree.promise; } },
+      $: selector => elements[selector] ||= { classList: { add() {}, remove() {} }, querySelectorAll: () => [],
+        scrollHeight: 0, scrollTop: 0, clientHeight: 0, checked: false },
+      document: { visibilityState: "visible" }, setInterval: () => 1, clearInterval() {}, clearTimeout() {},
+      AV: { render() {}, end() {} }, AH: { clear() {}, on() {}, complete() {} },
+      Util: { frameBatch: () => ({ flush() {}, set() {} }) }, SYNC_TOGGLE: { stamp: () => 0 },
+      isDirty: TABS.dirty, activeTab: () => tab, toast: text => notices.push(text), bindProject: () => true,
+      setUndoBusy() {}, renderModelControls() {}, loadResearch() {}, saveChatLog() {}, renderTurnCard() {},
+      loadAccount() {}, showProjectName() {}, renderTree() {}, loadSymbols() {},
+      console: { error: error => errors.push(error) },
+    };
+    // Use the real poller: a call made during an existing poll waits for another
+    // run. The delayed tree response below therefore blocks turn reconciliation.
+    const pollerSource = common.slice(common.indexOf("function poller("), common.indexOf("\n/* theme */"));
+    const run = vm.runInNewContext('"use strict";\n' + pollerSource + "\n" +
+      section("async function pollOnce()", "\n/* ------------------------------------------------------------------ GitHub sync */") +
+      "\nconst poll = poller(pollOnce, 2000, 30000);\n" +
+      section("async function saveActive()", '\nwindow.addEventListener("blur"') +
+      section("async function followTurn(", "\nfunction permissionCard(") +
+      ";({followTurn, autosave, saveActive})", context);
+    const turn = run.followTurn("turn-1", "fixture", "edit");
+    doc.text += "My manual addition.\n"; doc.generation++;
+    if (preexistingGone) TABS.diskSeen(tab, null);
+    await run.autosave(tab);
+    assert.strictEqual(writes.length, 0, "manual edits wait while the Agent is editing");
+    events.resolve({ _status: 200, events: [{ t: "done", changed: outcome === "unchanged" || failed
+      ? [] : [{ path: tab.path, deleted: gone }] }], done: true });
+    await treeStarted.promise;
+    // An already scheduled autosave, Cmd/Ctrl+S, or window blur can occur while
+    // the final disk poll is in flight. None may write the old editor version.
+    await run.autosave(tab);
+    await run.saveActive();
+    const beforeReconcile = [...writes], jobWhileReconciling = C.job;
+    if (exception) tree.reject(new Error("fixture tree failure"));
+    else tree.resolve(failed ? { _status: 0, error: "fixture offline" }
+      : { _status: 200, project_key: "paper", files: gone ? [] : [{ path: tab.path, mtime: outcome === "unchanged" ? 1 : 2 }],
+        pdf_mtime: null, pdf_main: null });
+    await turn;
+    await new Promise(r => setImmediate(r));
+    assert.strictEqual(beforeReconcile.length, 0,
+      "turn-end autosave must stay held until the Agent's changed/deleted files are reconciled");
+    assert.strictEqual(jobWhileReconciling, "turn-1", "a new turn waits until the old turn has reconciled its files");
+    assert.strictEqual(C.job, null, "cleanup releases the turn even when its final tree refresh fails");
+    assert.strictEqual(C.editTurn, false, "cleanup always releases the save hold");
+    assert.strictEqual(writes.length, outcome === "unchanged" ? 1 : 0,
+      "only a reconciled, unchanged file may save the queued manual text automatically");
+    assert.strictEqual(tab.conflict, outcome === "unchanged" ? null : gone ? "gone" : "disk",
+      "a failed refresh must preserve the deleted-file conflict and its Save as action");
+    assert.strictEqual(doc.getValue(), "Original paragraph.\nMy manual addition.\n", "manual text remains available");
+    assert.strictEqual(TABS.dirty(tab), outcome !== "unchanged");
+    assert.ok(!notices.some(text => text.includes("not saved") || text.includes("Save failed")),
+      "normal turn reconciliation must not send a stale save and report a save error");
+    if (failed) assert.strictEqual(notices.filter(text => text.includes("Compare with disk")).length, 1,
+      "a failed final refresh explains how to resolve the held manual edits once");
+    assert.strictEqual(errors.length, exception ? 1 : 0);
+  }
+}
+account().then(usageAndCatalog).then(providerQuota).then(syncToggle).then(attachments).then(projectBound).then(compilePreview).then(heldClose).then(errorNotice).then(localChip).then(manualSave).then(turnEndSaves).then(() => console.log("ok")).catch(e => { console.error(e); process.exitCode = 1; });
