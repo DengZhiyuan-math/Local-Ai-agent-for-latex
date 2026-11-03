@@ -112,20 +112,32 @@ def _profile(cmd, root, profile, scratch, *, private=(), provider='claude', runt
         raise ValueError("The controlled CLI project must be outside editor private state.")
     _verify_unlinked_trees([root, profile, scratch])
     global_config = Path.home() / ".claude.json" if provider == 'claude' else None
-    if global_config is not None:
+    # The native security helper needs both this database and SecurityServer.
+    # Keep the exception to the default file, without granting directory access.
+    login_keychain = Path.home() / "Library/Keychains/login.keychain-db" if provider == 'claude' else None
+    for auth_file in (global_config, login_keychain):
+        if auth_file is None:
+            continue
+        resolved = auth_file.resolve()
+        if any(resolved == folder or resolved.is_relative_to(folder)
+               for folder in (state, *(Path(p).resolve() for p in private))):
+            raise ValueError("The Claude authentication file overlaps editor private state.")
         try:
-            global_info = global_config.lstat()
+            info = auth_file.stat()
         except FileNotFoundError:
-            global_info = None
+            continue
         except OSError as error:
-            raise ValueError("The global Claude config could not be verified before launch: " + str(error)) from error
-        if global_info is not None and stat.S_ISREG(global_info.st_mode) and global_info.st_nlink > 1:
-            raise ValueError("Claude cannot read a global config with a pre-existing hardlink: " + str(global_config))
+            raise ValueError("The Claude authentication file could not be verified before launch: " + str(error)) from error
+        if stat.S_ISREG(info.st_mode) and info.st_nlink > 1:
+            raise ValueError("Claude cannot read an authentication file with a pre-existing hardlink: " + str(auth_file))
     executable = Path(shutil.which(str(cmd[0])) or cmd[0]).expanduser().resolve()
     code = Path(__file__).resolve().parent
     reads = [root, profile, scratch, code, executable.parent, Path(sys.prefix), Path(sys.base_prefix),
              Path(sys.executable).resolve().parent, Path("/System"), Path("/Library"),
-             Path("/usr"), Path("/opt"), Path("/private/etc"), Path("/etc")]
+             Path("/usr"), Path("/opt"), Path("/private/etc"), Path("/etc"),
+             # /etc/localtime resolves outside /etc on macOS. CLI date handling
+             # must be able to read this public system database.
+             Path("/private/var/db/timezone")]
     reads += [Path(path).expanduser().resolve() for path in runtime_paths]
     quote = lambda path: json.dumps(str(path), ensure_ascii=False)
     rules = ["(version 1)", "(deny default)",
@@ -134,6 +146,7 @@ def _profile(cmd, root, profile, scratch, *, private=(), provider='claude', runt
              "(allow file-read* " + " ".join(f"(subpath {quote(p)})" for p in reads) + ")",
              '(allow file-read* (literal "/dev/null") (literal "/dev/urandom") (literal "/dev/random"))',
              *([f"(allow file-read* (literal {quote(global_config)}))"] if global_config is not None else []),
+             *([f"(allow file-read* (literal {quote(login_keychain)}))"] if login_keychain is not None else []),
              f"(allow file-write* (subpath {quote(profile)}) (subpath {quote(scratch)}) (literal \"/dev/null\"))",
              f"(deny file-write* (subpath {quote(root)}))",
              # Claude's normal auth/session profile is distinct from editor-issued
@@ -153,6 +166,7 @@ def _profile(cmd, root, profile, scratch, *, private=(), provider='claude', runt
              # CFPreferences also reads its system shared-memory cache. Without
              # it, Codex cannot synchronize mandatory managed preferences.
              '(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))',
+             *(['(allow mach-lookup (global-name "com.apple.SecurityServer"))'] if provider == 'claude' else []),
              '(allow mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.trustd") '
              '(global-name "com.apple.trustd.agent") (global-name "com.apple.cfprefsd.agent") '
              '(global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.networkd") '

@@ -182,8 +182,101 @@ class ClaudeSandbox(unittest.TestCase):
             self.assertTrue(alias.exists())
             self.assertEqual(alias.stat().st_ino, private.stat().st_ino)
 
+    def test_login_keychain_cannot_be_a_preexisting_private_hardlink(self):
+        import claude_sandbox
+        import sys
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary).resolve()
+            root, profile, scratch, state, home = [top / name for name in ('project', 'profile', 'scratch', 'state', 'home')]
+            for folder in (root, profile, scratch, state, home):folder.mkdir()
+            private = state / 'decision-evidence'; private.write_text('editor-private-evidence')
+            alias = home / 'Library/Keychains/login.keychain-db'; alias.parent.mkdir(parents=True)
+            os.link(private, alias)
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}), \
+                    mock.patch.object(claude_sandbox, '_verify_unlinked_trees'), \
+                    mock.patch.object(claude_sandbox.Path, 'home', return_value=home):
+                with self.assertRaisesRegex(ValueError, 'hardlink'):
+                    claude_sandbox.wrap([sys.executable], root, profile, scratch)
+            self.assertEqual(private.read_text(), 'editor-private-evidence')
+
+    def test_login_keychain_cannot_point_into_editor_private_state(self):
+        import claude_sandbox
+        import sys
+        from unittest import mock
+        if not DIRECTORY_DESCRIPTORS:
+            self.skipTest('Directory descriptors are unavailable')
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary).resolve()
+            root, profile, scratch, state, home = [top / name for name in ('project', 'profile', 'scratch', 'state', 'home')]
+            for folder in (root, profile, scratch, state, home):folder.mkdir()
+            private = state / 'decision-evidence'; private.write_text('editor-private-evidence')
+            alias = home / 'Library/Keychains/login.keychain-db'; alias.parent.mkdir(parents=True)
+            alias.symlink_to(private)
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}), \
+                    mock.patch.object(claude_sandbox.Path, 'home', return_value=home):
+                with self.assertRaisesRegex(ValueError, 'private state'):
+                    claude_sandbox.wrap([sys.executable], root, profile, scratch)
+
 
 class NativeClaudeSandbox(unittest.TestCase):
+    def test_system_timezone_database_is_readable(self):
+        import claude_sandbox
+        import subprocess
+        import sys
+        from unittest import mock
+        if sys.platform != 'darwin' or not claude_sandbox.SANDBOX.is_file():
+            self.skipTest('The native CLI boundary requires macOS sandbox-exec.')
+        localtime = Path('/etc/localtime').resolve()
+        if not localtime.is_relative_to('/private/var/db/timezone'):
+            self.skipTest('The system timezone is outside the macOS timezone database.')
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary).resolve()
+            root, profile, scratch, state = [top / name for name in ('project', 'profile', 'scratch', 'state')]
+            for folder in (root, profile, scratch, state):folder.mkdir()
+            command = [sys.executable, '-I', '-B', '-c',
+                       "from pathlib import Path; assert Path('/etc/localtime').read_bytes().startswith(b'TZif')"]
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}):
+                wrapped = claude_sandbox.wrap(command, root, profile, scratch)
+                result = subprocess.run(wrapped, cwd=root, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_claude_login_keychain_is_read_only_and_file_scoped(self):
+        import claude_sandbox
+        import subprocess
+        import sys
+        from unittest import mock
+        if sys.platform != 'darwin' or not claude_sandbox.SANDBOX.is_file():
+            self.skipTest('The native CLI boundary requires macOS sandbox-exec.')
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary).resolve()
+            root, profile, scratch, state, home = [top / name for name in ('project', 'profile', 'scratch', 'state', 'home')]
+            for folder in (root, profile, scratch, state, home):folder.mkdir()
+            keychains = home / 'Library/Keychains'; keychains.mkdir(parents=True)
+            login = keychains / 'login.keychain-db'; login.write_text('synthetic login store')
+            other = keychains / 'other.keychain-db'; other.write_text('other private store')
+            code = '''import errno,pathlib,sys
+login,other=map(pathlib.Path,sys.argv[1:])
+assert login.read_text() == 'synthetic login store'
+for operation in [lambda: login.write_text('bad'), lambda: other.read_bytes()]:
+    try: operation()
+    except OSError as error: assert error.errno in (errno.EACCES,errno.EPERM)
+    else: raise AssertionError('Unexpected keychain access')
+'''
+            command = [sys.executable, '-I', '-B', '-c', code, str(login), str(other)]
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}), \
+                    mock.patch.object(claude_sandbox.Path, 'home', return_value=home):
+                wrapped = claude_sandbox.wrap(command, root, profile, scratch)
+                result = subprocess.run(wrapped, cwd=root, capture_output=True, text=True, timeout=10)
+                for provider in ('codex', 'deepcode'):
+                    other_provider = claude_sandbox.wrap(command, root, profile, scratch, provider=provider)
+                    self.assertNotIn('com.apple.SecurityServer', other_provider[2])
+                    denied = subprocess.run(other_provider, cwd=root, capture_output=True, text=True, timeout=10)
+                    self.assertNotEqual(denied.returncode, 0)
+                    self.assertIn('PermissionError', denied.stderr)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(login.read_text(), 'synthetic login store')
+
     def test_system_preference_cache_is_read_only_and_name_scoped(self):
         import claude_sandbox
         import ctypes
