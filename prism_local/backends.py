@@ -233,6 +233,7 @@ class Job:
         # The request, filled in by AgentManager.start.
         self.provider = ""
         self.prompt = ""
+        self.human_text: str | None = None       # original editor input, never the assembled prompt
         self.session_id: str | None = None
         self.mode = "ask"
         self.model: str | None = None
@@ -253,6 +254,9 @@ class Job:
         self.metadata_before: set[str] = set()   # .git, .codex… present when it started
         self.attachments: list[str] = []
         self.errors_shown = 0                    # error events the page has had (emit)
+        self.research_access = None              # editor-owned initialization boundary
+        self.controlled_cli = False             # writes use a parent gate; other saves are external
+        self.controlled_writes: dict = {}        # exact snapshots after successful parent writes
 
     def emit(self, ev: dict) -> None:
         if ev.get("t") == "error":
@@ -457,7 +461,8 @@ class Backend:
                 "models": list(self.models), "default_model": self.default_model,
                 "efforts": list(self.efforts), "model_efforts": dict(self.model_efforts), "skills": self.skills,
                 "usage_limits": self.usage_limits, "enforces_scope": self.enforces_scope,
-                "read_only_ask": self.read_only_ask, "input_types": list(self.input_types)}
+                "read_only_ask": self.read_only_ask, "input_types": list(self.input_types),
+                "research_initialization": False, "notation_protection": False}
 
 
 def attachment_type(path: Path) -> str:

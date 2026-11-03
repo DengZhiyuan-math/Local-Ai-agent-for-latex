@@ -39,7 +39,7 @@ def has_package(name: str) -> bool:
     exe = shutil.which("kpsewhich")
     if not exe:
         return False
-    r = subprocess.run([exe, name], capture_output=True, text=True)
+    r = subprocess.run([exe, name], capture_output=True)
     return bool(r.stdout.strip())
 
 

@@ -614,7 +614,9 @@ const Snippets = (() => {
     }
     cm.on("inputRead", (ed, ch) => {
       if (!settings.enabled() || ch.origin !== "+input" || ch.text.length !== 1) return;
-      typedAt(ch.from, ch.text[0]);
+      const expand = () => typedAt(ch.from, ch.text[0]);
+      if (settings.aroundExpand) settings.aroundExpand(ch, expand);
+      else expand();
     });
     // Typed through an input method (Chinese, Japanese, … also in its Latin mode), the text
     // comes as a composition (origin "*compose"), which inputRead leaves alone: expanding in
@@ -660,6 +662,10 @@ const Snippets = (() => {
     // Keys: Tab expands a snippet, jumps to the next tabstop, leaves a bracket or puts & in a
     // matrix; otherwise `fallback`.
     function tab(fallback) {
+      const expand = () => tabImpl(fallback);
+      return settings.aroundExpand ? settings.aroundExpand(null, expand) : expand();
+    }
+    function tabImpl(fallback) {
       if (!settings.enabled()) return fallback(cm);
       if (tryExpand(false) || go(1)) return;
       if (!cm.somethingSelected() && cm.listSelections().length === 1) {

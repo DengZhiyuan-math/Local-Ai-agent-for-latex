@@ -223,6 +223,7 @@ class GitSync:
         self.clash: list[str] = []            # files you and GitHub both changed (project paths)
         self.kept: list[dict] = []            # where both versions were kept: {"path", "line", "who", "mtime"}
         self.stop = threading.Event()
+        self.thread = None
         self.source_events = None
         self.source_generation = 0
 
@@ -896,7 +897,8 @@ class GitSync:
             integrate.finish_crashed(self.repo)
 
     def start(self) -> None:
-        threading.Thread(target=self.run, daemon=True).start()
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
 
     def flush(self) -> None:
         """When the editor closes: commit what is left and push it."""
@@ -904,6 +906,10 @@ class GitSync:
         if self.active():
             self._safe(lambda: self.commit_all("Autosave"))
             self._safe(self.push)
+        # Give native notification cleanup bounded time before Python shuts down.
+        # Do not hold a sync/file lock while the worker releases its watcher.
+        if self.thread is not None and self.thread is not threading.current_thread():
+            self.thread.join(timeout=5)
 
     def now(self, action: str) -> Outcome:
         """A button: commit everything now and push, or pull. During an agent turn it waits:

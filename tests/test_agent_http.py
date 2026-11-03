@@ -43,7 +43,9 @@ class AgentHTTP(unittest.TestCase):
                 self.assertEqual(next(m["efforts"] for m in models["models"] if m["id"] == "deep"), ["low", "high"])
                 self.assertEqual(request("/api/agent/config", {"project_key": key, "provider": "claude", "model": "deep", "effort": "high"})[0], 200)
                 self.assertEqual(request("/api/agent/config", {"project_key": key, "provider": "claude", "model": "fast", "effort": "high"})[0], 400)
-                job = request("/api/agent", {"project_key": key, "prompt": "Research this fixture", "mode": "edit", "provider": "claude", "model": "deep", "effort": "high"})[1]["job"]
+                status, started = request("/api/agent", {"project_key": key, "prompt": "Research this fixture", "mode": "edit", "provider": "claude", "model": "deep", "effort": "high"})
+                self.assertEqual(status, 200, started)
+                job = started["job"]
                 events, after = [], 0
                 def read_events():
                     nonlocal after
@@ -80,6 +82,11 @@ class AgentHTTP(unittest.TestCase):
                 self.assertEqual(failed["last_success"], second["last_success"])
                 self.assertTrue(failed["stale"])
                 self.assertIn("offline", failed["error"])
+                self.assertEqual(request("/api/research/initialize", {"project_key": key})[0], 200)
+                status, refused = request("/api/agent", {"project_key": key, "prompt": "Use a new symbol.",
+                                          "mode": "edit", "provider": "claude", "model": "deep", "effort": "high"})
+                self.assertEqual(status, 409, refused)
+                self.assertIn("does not yet protect the initialized research baseline", refused["error"])
             finally:
                 process.terminate()
                 process.wait(timeout=5)

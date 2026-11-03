@@ -1,0 +1,371 @@
+{
+  "review_start_head": "b32b3a852a739abc915b053b12506e0abdd827b7",
+  "base_commit": "1d7b7c9735cba777d985d635b97eaab8fdf5899a",
+  "repair_commit": "9138891e0c4345db00f965f47ba53d1d56b4de19",
+  "source_sha256": "e997832c9bc8f8839a5533bec080af5552fda298d7549f4736d4dce7e1bf7ee4",
+  "source_files": 458,
+  "runtime": {
+    "platform": "Darwin",
+    "python": "3.14.5",
+    "node": "26.0.0",
+    "git": "2.54.0"
+  },
+  "full_discovery": {
+    "tests": 1570,
+    "passed": 1514,
+    "skipped": [
+      {
+        "test": "test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox",
+        "reason": "Codex CLI is not installed"
+      },
+      {
+        "test": "test_build.Platform.test_ascii_alias_for_names_the_code_page_cannot_spell",
+        "reason": "Windows code pages"
+      },
+      {
+        "test": "test_build.RealBuilds.test_a_broken_aux_from_an_earlier_build_is_repaired",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_biber_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_biblatex_with_biber",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_bibtex_and_cross_references",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_bibtex_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_ctex_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_errors_draft_goes_on_and_strict_stops",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_fontspec_documents_are_built_with_xelatex",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_index_glossary_and_nomenclature",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_stop_and_time_limit",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_the_projects_own_bst_and_included_subfolders",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_gui_finds_bundled_native_cli_and_follows_updates",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_missing_desktop_installation_is_unavailable",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_override_and_path_take_precedence",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_full_project_edit_cannot_patch_a_sibling_outside_the_project",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_global_hooks_do_not_run_in_editor_turns",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_missing_windows_setting_reproduces_policy_rejection",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_native_apply_patch_edits_scoped_file_and_denies_other_files",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_reads_work_and_native_writes_follow_each_turn_scope",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_user_mcp_configuration_is_ignored_without_modifying_it",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_diskprojects.NativeNotifications.test_watcher_survives_the_creating_request_thread",
+        "reason": "Windows I/O belongs to its issuing thread"
+      },
+      {
+        "test": "test_hub.Instances.test_a_pid_given_to_a_new_process_is_not_the_server",
+        "reason": "this system does not say when a process started"
+      },
+      {
+        "test": "test_install_ps1.Install.test_a_file_or_a_bad_name_is_refused_in_a_sentence",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_checkout_of_another_repository_is_refused",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_default_folder_is_under_localappdata",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_existing_checkout_is_updated_fast_forward",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_existing_checkout_that_cannot_update_is_kept",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_failure_piped_into_iex_keeps_the_shell_open",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_foreign_folder_is_refused",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_git_missing_is_installed_with_winget",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_parameters_when_run_as_a_file",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_piped_into_iex",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_and_git_found_fresh_clone",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_missing_is_installed_with_winget_for_the_user",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_missing_without_winget_is_never_installed_for_real",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_store_alias_is_skipped",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_without_git_or_winget_a_zip_is_unpacked",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_parses_in_every_powershell",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_script_is_plain_ascii",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_shortcut_uses_the_python_it_is_given",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_windows_powershell_is_5_1",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_instance_lifecycle.Handover.test_venv_editor_releases_its_redirectors_cwd_before_renaming",
+        "reason": "Windows venv redirector holds the working directory"
+      },
+      {
+        "test": "test_instances.Startup.test_real_windows_venv_startup_uses_the_servers_identity",
+        "reason": "Windows venv redirector"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_browser_selection_scripts_compile_natively",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_bundle_runs_launcher_with_quoted_paths",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_installer_refuses_an_unrelated_existing_app",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_proc.Tree.test_if_the_server_dies_what_it_started_ends_with_it",
+        "reason": "job objects: Windows"
+      },
+      {
+        "test": "test_server.Files.test_save_while_another_program_reads_the_file",
+        "reason": "Windows file sharing"
+      },
+      {
+        "test": "test_synctex.SourceAndBack.test_a_real_build_goes_from_source_to_pdf_and_back",
+        "reason": "needs a TeX distribution"
+      },
+      {
+        "test": "test_tools_download.LaTeXAndClaude.test_claude_code_is_found_in_local_bin_once_installed",
+        "reason": "Claude Code is installed on this computer, where it is looked for too"
+      }
+    ],
+    "failures": [],
+    "errors": [],
+    "seconds": 794.178,
+    "modules": 96,
+    "process_exit": 0,
+    "source_drift": [],
+    "blocked_processes": [],
+    "blocked_connections": [],
+    "source_before_sha256": "e997832c9bc8f8839a5533bec080af5552fda298d7549f4736d4dce7e1bf7ee4",
+    "source_after_sha256": "e997832c9bc8f8839a5533bec080af5552fda298d7549f4736d4dce7e1bf7ee4",
+    "isolation": "temporary PRISM/XDG/user-path defaults; HOME/CODEX_HOME not repurposed; local-only Git protocol; Python process/network audit guards; no claim of a global OS sandbox for native descendants",
+    "runner_sha256": "c94e56701b68d86abadd184243140c5d21ea13f634be4361e2a4a17ef81d7624",
+    "reproduce": "python3 docs/audits/2026-10-29-research-pr/validation/full-regression.py --final"
+  },
+  "new_regressions": {
+    "count": 26,
+    "all_discovered_and_passed": true,
+    "tests": [
+      "test_github_approvals.GitHubApprovals.test_late_older_reply_cannot_undo_a_newer_refusal_after_restart",
+      "test_github_decisions.GitHubDecisions.test_delayed_github_reply_preserves_newer_local_approval_and_unrelated_subjects",
+      "test_github_decisions.GitHubDecisions.test_github_comment_must_be_created_after_a_conflicting_local_decision",
+      "test_github_decisions.GitHubDecisions.test_github_reply_order_uses_comment_id_for_equal_creation_times",
+      "test_github_decisions.GitHubDecisions.test_late_older_comment_cannot_replace_or_reopen_a_newer_expression_refusal",
+      "test_github_decisions.GitHubDecisions.test_older_expression_refusal_cannot_withdraw_a_newer_other_subject_approval",
+      "test_github_decisions.GitHubDecisions.test_older_other_subject_cannot_cancel_a_shared_expression_refusal",
+      "test_github_decisions.GitHubDecisions.test_older_other_subject_cannot_reuse_a_later_refused_name_or_family_member",
+      "test_github_decisions.GitHubDecisions.test_older_reply_can_decide_an_unaffected_subject_in_the_same_batch",
+      "test_notation.CompleteNotation.test_single_token_style_arguments_have_their_parsed_identity",
+      "test_notation.CompleteNotation.test_starred_named_operators_keep_layout_out_of_identifier_names",
+      "test_research.Baseline.test_literal_unbraced_input_and_include_share_baseline_and_refresh_coverage",
+      "test_research.Baseline.test_refused_large_include_does_not_consume_remaining_refresh_budget",
+      "test_research_access.ResearchDraftChecks.test_agent_cannot_write_case_variants_of_the_research_namespace",
+      "test_research_batch_http.ResearchBatchHTTP.test_delayed_direct_instruction_cannot_release_source_or_chat",
+      "test_research_incremental.IncrementalKnowledge.test_excluded_old_manual_receipt_cannot_revive_but_a_new_save_can_adopt",
+      "test_research_incremental.IncrementalKnowledge.test_later_human_adoption_overrides_only_the_extraction_exclusion",
+      "test_research_incremental.IncrementalKnowledge.test_new_manual_adoption_overrides_extraction_exclusion_with_its_own_evidence",
+      "test_research_incremental.IncrementalKnowledge.test_signed_manual_styled_notation_uses_the_parser_canonical",
+      "test_research_incremental.IncrementalKnowledge.test_starred_standard_operator_can_reach_shared_output_and_source_checks",
+      "test_research_incremental.IncrementalKnowledge.test_unbraced_style_does_not_allow_a_mismatched_manual_identity",
+      "test_research_incremental.IncrementalKnowledge.test_unbraced_styled_baseline_keeps_identity_after_refresh_and_reopen",
+      "test_research_incremental.IncrementalKnowledge.test_unbraced_styled_proposal_keeps_approval_and_refusal_bound_to_identity",
+      "test_research_language.ResearchLanguage.test_delayed_decision_keeps_independent_earlier_batch_action",
+      "test_research_language.ResearchLanguage.test_delayed_decisions_do_not_adopt_or_refuse_notation",
+      "test_research_language.ResearchLanguage.test_delimited_meaning_does_not_absorb_an_unexplained_qualification"
+    ]
+  },
+  "independent_review": {
+    "initial_comparison_files": 138,
+    "standards": {
+      "hard_violations": 0,
+      "optional_refactoring_observations": 2,
+      "new_repair_findings": 0
+    },
+    "spec": {
+      "initial_findings": 8,
+      "p1": 2,
+      "p2": 6,
+      "remaining_concrete_findings": 0
+    },
+    "repair_recheck_scope": "Frozen production/test repair bytes, then the two-line HTTP fixture timestamp follow-up.",
+    "selected_bounded_proofs": {
+      "final_language_http": {
+        "checks": 6,
+        "passed": 6
+      },
+      "semantic_github_scope": {
+        "checks": 3,
+        "passed": 3
+      },
+      "github_editor_order": {
+        "checks": 5,
+        "passed": 5
+      },
+      "manual_adoption": {
+        "checks": 10,
+        "passed": 10
+      },
+      "http_replay_fixture_static": {
+        "checks": 7,
+        "passed": 7
+      }
+    }
+  },
+  "compatibility": {
+    "separate_fifo_fixture_finding": 1,
+    "missing_mkfifo_simulation": {
+      "tests": 1,
+      "skipped": 1,
+      "native_windows": false
+    },
+    "python39_grammar_failures": [],
+    "python39_runtime_executed": false
+  },
+  "focused_approvals_http": {
+    "tests": 18,
+    "passed": 18,
+    "failures": 0,
+    "errors": 0,
+    "skips": 0,
+    "process_exit": 0,
+    "source_drift": []
+  },
+  "ci_at_review_start": {
+    "head": "b32b3a852a739abc915b053b12506e0abdd827b7",
+    "check_runs": 0,
+    "statuses": 0,
+    "pull_request_workflow_runs": 0,
+    "workflow_files_in_tree": 0,
+    "ci_pass_claimed": false
+  },
+  "intermediate_attempt": {
+    "full_process_exit": 130,
+    "deliberately_stopped": true,
+    "isolated_red_tests": 1,
+    "isolated_red_failures": 1,
+    "isolated_red_errors": 0,
+    "reason": "A pre-existing HTTP fixture used a historical creation timestamp for a genuinely new reply after a local approval. The new chronology guard held it. Only that new reply timestamp was corrected; historical replay assertions remain intact. This attempt is not counted as passing."
+  },
+  "limits": {
+    "native_windows": false,
+    "real_models_vendor_cli": false,
+    "product_real_github_sync": false,
+    "real_tex": false,
+    "installed_app": false,
+    "human_product_acceptance": false,
+    "fresh_visible_browser": false,
+    "cross_channel_clock_assumption": "Actual GitHub creation timestamps and signed local receipt times assume accurate trusted-host UTC; this is not a causal-order proof under arbitrary host/service clock skew."
+  },
+  "record_source": "Curated scalar results, test names, skip reasons and source fingerprints. No raw diagnostic logs or temporary private receipt state."
+}

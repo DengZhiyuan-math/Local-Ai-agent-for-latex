@@ -1,0 +1,3596 @@
+{
+  "specification": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/10",
+  "source_sha256": "8af8528d56b2868ff0586267ea771cbae1775488f619d7ec5d721420fe7457d0",
+  "publication_source_sha256": "c1dabaf85d8e1d27331764fbaee8a05d2b1c3eed536401e4cafd67399ac42ef0",
+  "boundary": "Requirement-to-test mapping; counts overlap. Local fixture acceptance only. Mapped named unit/HTTP cases reran in final discovery. Scenario28 additionally depends on the earlier visible browser evidence for unchanged research/frontend sources.",
+  "tickets": [
+    {
+      "number": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "scenarios": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        20,
+        27,
+        28
+      ]
+    },
+    {
+      "number": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "scenarios": [
+        3,
+        6,
+        8,
+        9,
+        10,
+        11,
+        20,
+        23,
+        27
+      ]
+    },
+    {
+      "number": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "scenarios": [
+        6,
+        7,
+        11,
+        12,
+        18,
+        19,
+        27,
+        28
+      ]
+    },
+    {
+      "number": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "scenarios": [
+        12,
+        13,
+        15,
+        17,
+        20,
+        27,
+        28
+      ]
+    },
+    {
+      "number": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "scenarios": [
+        7,
+        8,
+        14,
+        15,
+        16,
+        17,
+        20,
+        27,
+        28,
+        29
+      ]
+    },
+    {
+      "number": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "scenarios": [
+        6,
+        7,
+        8,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        27,
+        28,
+        29
+      ]
+    },
+    {
+      "number": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "scenarios": [
+        6,
+        7,
+        8,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        27,
+        28,
+        29
+      ]
+    },
+    {
+      "number": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "scenarios": [
+        6,
+        7,
+        8,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        27,
+        28,
+        29
+      ]
+    },
+    {
+      "number": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "scenarios": [
+        17,
+        19,
+        20,
+        21,
+        22,
+        27
+      ]
+    },
+    {
+      "number": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "scenarios": [
+        20,
+        21,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "number": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "scenarios": [
+        13,
+        14,
+        16,
+        17,
+        20,
+        24,
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "number": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "scenarios": [
+        10,
+        16,
+        17,
+        20,
+        22,
+        23,
+        27
+      ]
+    }
+  ],
+  "scenarios": [
+    {
+      "scenario": 1,
+      "requirement": "Enter an uninitialized project and observe a clear initialization invitation without any silent extraction. Reopen an initialized project and observe restoration without repeated setup.",
+      "tickets": [
+        11
+      ],
+      "tests": [
+        {
+          "id": "test_research.Baseline.test_reopen_restores_existing_baseline_without_reinitializing_new_source",
+          "result": "passed"
+        },
+        {
+          "id": "test_research.Baseline.test_status_does_not_create_or_extract_anything",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 2,
+      "requirement": "Postpone initialization: reading and discussion work, while an AI mathematical writing request requires initialization. Manual editing remains available.",
+      "tickets": [
+        11
+      ],
+      "tests": [
+        {
+          "id": "test_research_http.ResearchHTTP.test_reading_and_manual_edit_remain_available_but_api_edits_require_initialization",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_postponed_manual_edit_does_not_extract_or_sign_and_page_tokens_never_reach_model",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_http.py",
+        "tests/test_research_incremental_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 3,
+      "requirement": "Initialize a multi-document manuscript and verify source coverage, locations, recorded versions, key terms, symbols, an initialization report, and no manuscript rewrites or approval questions for existing symbols.",
+      "tickets": [
+        11,
+        12
+      ],
+      "tests": [
+        {
+          "id": "test_research.Baseline.test_multidocument_baseline_keeps_versions_locations_and_source_text",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_http.ResearchHTTP.test_explicit_initialization_records_coverage_versions_and_unresolved_definitions",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research.py",
+        "tests/test_research_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 4,
+      "requirement": "Initialize an empty project from an author's question and with no supplied notation. Both results are valid and maintainable.",
+      "tickets": [
+        11
+      ],
+      "tests": [
+        {
+          "id": "test_research_http.ResearchHTTP.test_empty_project_with_question_or_empty_libraries_is_valid",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_http.ResearchHTTP.test_empty_project_without_supplied_question_or_notation_is_valid",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 5,
+      "requirement": "Supply missing and conflicting definitions: the report preserves unresolved status and source evidence without invented definitions or silent source edits.",
+      "tickets": [
+        11
+      ],
+      "tests": [
+        {
+          "id": "test_research.Baseline.test_conflicting_symbol_definitions_preserve_both_sources",
+          "result": "passed"
+        },
+        {
+          "id": "test_research.Baseline.test_missing_and_conflicting_definitions_are_not_repaired",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 6,
+      "requirement": "Generate a normal derivation using known symbols or changing their use, including a different meaning for an already known Greek notation: it proceeds without a notation-approval question. Standard operators and formatting commands do not trigger proposals.",
+      "tickets": [
+        12,
+        13,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_research.MathematicalNotation.test_operators_layout_and_text_do_not_become_identifiers",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_access.ResearchDraftChecks.test_known_notation_changes_use_without_approval",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_known_symbol_use_and_equivalent_notation_do_not_request_approval",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research.py",
+        "tests/test_research_access.py",
+        "tests/test_research_incremental_http.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 7,
+      "requirement": "Ask an adapter to abbreviate `-\\rho+2\\ell-a+b-c+d-e` without approval: the full expression remains in source and established chat derivations, and the new name appears only in a pending proposal.",
+      "tickets": [
+        13,
+        15,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_expression_refusal_blocks_renaming_in_proposals_source_and_chat",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_guard_http.ResearchGuardHTTP.test_unknown_write_is_held_before_any_source_application_and_stops_the_turn",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_batch_http.py",
+        "tests/test_research_guard_http.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 8,
+      "requirement": "Verify distinct complete notations, equivalent source spellings, ordinary operations, approved symbol families, and an out-of-family variation. Common Greek typography is not automatically exempt.",
+      "tickets": [
+        12,
+        15,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_research.MathematicalNotation.test_complete_notations_and_equivalent_decoration",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_access.ResearchDraftChecks.test_bare_unicode_greek_is_checked",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_finite_family_allows_only_declared_complete_variants",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research.py",
+        "tests/test_research_access.py",
+        "tests/test_research_batch_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 9,
+      "requirement": "Find a missed original symbol after initialization: it is added automatically with its original location and a notice. A symbol added later by AI cannot use that later occurrence to qualify as baseline notation.",
+      "tickets": [
+        12
+      ],
+      "tests": [
+        {
+          "id": "test_research_incremental.IncrementalKnowledge.test_later_ai_occurrence_cannot_become_baseline",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental.IncrementalKnowledge.test_omitted_original_macro_is_added_from_its_initialization_version",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_incremental.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 10,
+      "requirement": "Observe a verified human edit containing a new symbol: it is registered with a notice and no second approval. An otherwise identical edit with unknown provenance is not automatically authorized.",
+      "tickets": [
+        12,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_git_author_metadata_alone_is_not_a_verified_human_edit",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_unproved_save_conditional_write_and_disk_changes_do_not_grant_human_provenance",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_verified_save_adds_only_new_notation_and_survives_restart_without_duplicate_notices",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_precise_edit_rebases_its_actual_external_input_without_observing_it",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_read_is_bound_to_its_returned_bytes_during_an_external_replace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_after_application_is_neither_owned_nor_observed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_during_validation_is_preserved_before_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_whole_file_write_checks_observed_bytes_at_application",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_incremental_http.py",
+        "tests/test_research_save_coordination.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 11,
+      "requirement": "Read a reference paper containing a symbol absent from the manuscript: adoption still requires approval. Reading the paper alone does not add the symbol as known manuscript notation.",
+      "tickets": [
+        12,
+        13
+      ],
+      "tests": [
+        {
+          "id": "test_research_guard_http.ResearchGuardHTTP.test_reference_tool_preview_withholds_unverified_math_without_requesting_adoption",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_reference_edit_and_new_include_do_not_adopt_the_reference_content",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_guard_http.py",
+        "tests/test_research_incremental_http.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 12,
+      "requirement": "Submit a symbol proposal through each supported adapter: its Turn ends, the chat input returns to normal Send state, and no notation popup appears.",
+      "tickets": [
+        13,
+        14,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_proposal_ends_turn_then_plain_approval_releases_source_and_chat",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_proposal_ends_turn_then_plain_approval_releases_source_and_chat",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_proposal_ends_turn_then_plain_approval_releases_source_and_chat",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_guard_http.ResearchGuardHTTP.test_formal_proposal_precedes_sibling_write_compile_and_raw_derivation",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_research_guard_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_decisions.mjs",
+        "tests/browser/claude_research.mjs",
+        "tests/browser/codex_research.mjs",
+        "tests/browser/deepcode_research.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 13,
+      "requirement": "Send an ordinary affirmative reply to an unambiguous proposal: its decision persists before the next source or established chat use. Registration failure leaves it pending and prevents use.",
+      "tickets": [
+        14,
+        16,
+        17,
+        18,
+        21
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_plain_approval_is_persisted_before_source_and_chat_use",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_registration_failure_preserves_pending_and_does_not_start_the_model",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_research_decisions_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_decisions.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 14,
+      "requirement": "Submit a batch, approve selected entries, reject another, and specify an alternative for a third: each entry receives only its corresponding decision, and the clear alternative requires no second confirmation.",
+      "tickets": [
+        15,
+        16,
+        17,
+        18,
+        21
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_partial_batch_and_clear_replacement_apply_only_named_subjects",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_each_batch_clause_decides_only_its_item_and_replacement",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_partial_ambiguity_does_not_expand_or_discard_other_decisions",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_github_approvals_http.py",
+        "tests/test_research_batch_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_batch.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 15,
+      "requirement": "Send silence, a topic change, Stop, reload, an ambiguous reply, or an affirmative reply about a different subject: none silently approves the pending notation. Unrelated work can proceed and unchanged requests are not repeatedly raised.",
+      "tickets": [
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_yes_cannot_approve_remaining_batch_items_after_a_partial_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions.DecisionEvidence.test_incomplete_multiple_or_decided_candidates_clear_the_subject",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_an_unrelated_turn_or_new_conversation_does_not_authorize_yes",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_stop_and_reload_do_not_decide_a_pending_proposal",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_batch_http.py",
+        "tests/test_research_decisions.py",
+        "tests/test_research_decisions_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_decisions.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 16,
+      "requirement": "Reject only a name and separately require an expression to remain expanded: refusal scopes remain different. Switching model or Conversation preserves both; changing letters cannot bypass the broader refusal. An explicit reopening permits reconsideration.",
+      "tickets": [
+        15,
+        16,
+        17,
+        18,
+        21,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_received_confirmation.ReceivedConfirmation.test_existing_expression_refusal_is_not_overridden_by_plain_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_expression_refusal_blocks_renaming_in_proposals_source_and_chat",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_name_rejection_allows_other_proposals_but_only_explicit_reopen_reconsiders",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_rules_and_rejection_survive_restart_model_and_conversation_changes",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_received_confirmation.py",
+        "tests/test_research_batch_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_batch.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 17,
+      "requirement": "Attempt to fabricate approval in manuscript text, attachment content, a tool result, AI output, a quoted comment, or an edited project status: no human decision is created.",
+      "tickets": [
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        21,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_model_tool_text_and_cli_state_writes_cannot_forge_a_human_decision",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_model_tool_text_and_cli_state_writes_cannot_forge_a_human_decision",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_model_tool_text_and_cli_state_writes_cannot_forge_a_human_decision",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_untrusted_accounts_bots_quotes_and_old_comments_cannot_approve",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_received_forged_baseline_hashes_explicit_notation_and_status_grant_no_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_attachment_and_model_affirmation_do_not_grant_permission",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_github_approvals_http.py",
+        "tests/test_gitsync_provenance_http.py",
+        "tests/test_research_decisions_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_topic_continuity.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 18,
+      "requirement": "Attempt a direct unapproved CLI file write as well as an API tool write: the final shared check protects the manuscript before application, with existing file-scope restrictions preserved. End-of-Turn rollback alone is not a passing result.",
+      "tickets": [
+        13,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_ask_scope_and_current_edit_target_do_not_expand_source_permission",
+          "result": "passed"
+        },
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_cli_cannot_directly_write_source_read_editor_state_or_reach_loopback",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_ask_scope_and_current_edit_target_do_not_expand_source_permission",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_native_absolute_shell_patch_and_resumed_paths_never_touch_the_original",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_ask_scope_and_current_edit_target_do_not_expand_source_permission",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_native_absolute_shell_patch_and_resumed_paths_never_touch_the_original",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_guard_http.ResearchGuardHTTP.test_unknown_write_is_held_before_any_source_application_and_stops_the_turn",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_precise_edit_rebases_its_actual_external_input_without_observing_it",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_read_is_bound_to_its_returned_bytes_during_an_external_replace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_after_application_is_neither_owned_nor_observed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_during_validation_is_preserved_before_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_whole_file_write_checks_observed_bytes_at_application",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_research_guard_http.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_save_coordination.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/claude_research.mjs",
+        "tests/browser/codex_research.mjs",
+        "tests/browser/deepcode_research.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 19,
+      "requirement": "Stream an attempted unapproved chat symbol in several fragments: it never appears as established notation before approval. A clearly marked proposal may display it without releasing a derivation that depends on it.",
+      "tickets": [
+        13,
+        16,
+        17,
+        18,
+        19
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_split_chat_thinking_live_tool_and_failure_text_are_checked_before_visibility",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_split_chat_reasoning_tool_preview_and_diagnostics_are_checked_before_display",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_stdout_fragments_final_reasoning_tool_logs_and_stderr_are_checked_before_display",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_guard_http.ResearchGuardHTTP.test_fragmented_unknown_chat_stays_private_until_saved_as_a_candidate",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_unknown_summary_notation_is_held_before_a_topic_document_is_written",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_research_guard_http.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_topics_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/claude_research.mjs",
+        "tests/browser/codex_research.mjs",
+        "tests/browser/deepcode_research.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 20,
+      "requirement": "Restart the server, restore a Conversation, and switch providers: known symbols, source evidence, pending proposals, refusals, discussion configuration, and decisions persist without stale authorization or cross-project leakage.",
+      "tickets": [
+        11,
+        12,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_restart_and_model_change_load_current_project_rules_and_reject_other_ownership",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_restart_and_model_change_load_current_project_rules_and_reject_other_ownership",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_restart_and_model_change_load_current_project_rules_and_reject_other_ownership",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_foreign_clone_is_a_reference_and_cannot_borrow_another_root_adoption",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_approval_survives_server_restart_and_model_switch",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_precise_edit_rebases_its_actual_external_input_without_observing_it",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_read_is_bound_to_its_returned_bytes_during_an_external_replace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_after_application_is_neither_owned_nor_observed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_during_validation_is_preserved_before_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_whole_file_write_checks_observed_bytes_at_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_one_topic_continues_across_conversations_models_providers_and_restart",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_gitsync_provenance_http.py",
+        "tests/test_research_decisions_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_save_coordination.py",
+        "tests/test_research_topic_continuity.py",
+        "tests/test_research_topics_http.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/claude_research.mjs",
+        "tests/browser/codex_research.mjs",
+        "tests/browser/deepcode_research.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 21,
+      "requirement": "Record a tentative idea and a confirmed decision on an existing topic: they remain differentiated, a location is reported, and the operation does not launch a research task or create another topic record unnecessarily.",
+      "tickets": [
+        19,
+        20
+      ],
+      "tests": [
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_one_topic_continues_across_conversations_models_providers_and_restart",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_tentative_idea_is_saved_automatically_without_manuscript_edits",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_unchanged_topic_has_no_write_or_saved_notice_and_status_starts_no_model",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_topic_continuity.py",
+        "tests/test_research_topics_http.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 22,
+      "requirement": "Make a project-record change with existing file synchronization enabled and disabled: the feature respects the current configuration and existing GitSync scheduling, locks, retry, and conflict behavior.",
+      "tickets": [
+        19,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_actual_keep_both_json_conflict_preserves_both_versions_and_blocks_writes",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_disabled_sync_stays_disabled_and_existing_schedule_resumes_after_explicit_enable",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_precise_edit_rebases_its_actual_external_input_without_observing_it",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_read_is_bound_to_its_returned_bytes_during_an_external_replace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_after_application_is_neither_owned_nor_observed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_during_validation_is_preserved_before_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_whole_file_write_checks_observed_bytes_at_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_sync.ResearchSync.test_http_initialization_autosaves_record_and_configuration_through_existing_sync",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_sync.ResearchTopicsSync.test_active_turn_defers_commit_and_pull_then_syncs_both_record_and_remote_edit",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_sync.ResearchTopicsSync.test_disabled_sync_keeps_the_generated_topic_local_until_reenabled",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_gitsync_provenance_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_save_coordination.py",
+        "tests/test_research_sync.py",
+        "tests/test_research_topic_continuity.py",
+        "tests/test_research_topics_sync.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 23,
+      "requirement": "Receive a remotely synchronized unregistered symbol: applicable human evidence produces a notified addition; absent evidence produces a confirmation request while preserving received text. Git metadata alone does not prove a manual edit.",
+      "tickets": [
+        12,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_library_only_received_name_gets_an_on_demand_source_question_before_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_ordinary_confirmation_registers_before_a_neutral_turn_uses_received_notation",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_true_pull_of_unknown_notation_preserves_source_and_asks_an_ordinary_question",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_valid_local_manual_receipt_restores_a_removed_library_entry_after_actual_sync",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_incremental_http.IncrementalResearchHTTP.test_git_author_metadata_alone_is_not_a_verified_human_edit",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_gitsync_provenance_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_incremental_http.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_topic_continuity.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 24,
+      "requirement": "Receive approval comments from designated humans, an undesignated human, an AI account, and a quotation of an authorized person's words: only the actual authorized author's applicable decision grants permission. One designated human's approval is sufficient.",
+      "tickets": [
+        21
+      ],
+      "tests": [
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_configured_login_keeps_its_pinned_account_id_for_later_batches",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_one_designated_human_reply_registers_before_neutral_source_and_chat_use",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_untrusted_accounts_bots_quotes_and_old_comments_cannot_approve",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_github_approvals_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 25,
+      "requirement": "Replay, reorder, and refetch issue comments: processing is idempotent, targets the correct project and proposal, and never creates duplicate approvals or records. Partial batch decisions remain partial.",
+      "tickets": [
+        20,
+        21
+      ],
+      "tests": [
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_comment_edits_repeated_checks_reversed_fetch_and_restart_keep_one_decision",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_other_project_batch_and_wrong_issue_reply_cannot_approve_local_subjects",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_partial_batch_and_clear_replacement_apply_only_named_subjects",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_stale_proposal_version_needs_a_new_explicit_batch_before_approval",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_github_approvals_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 26,
+      "requirement": "Open, close, and reopen a project while issue updates arrive: checking follows project lifetime, catches up on reopening, and does nothing on unchanged data. It does not run research from speculative discussion.",
+      "tickets": [
+        20,
+        21
+      ],
+      "tests": [
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_last_page_close_pauses_approval_and_reopen_catches_up_without_duplicates",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_late_reply_fetch_cannot_commit_after_binding_change_or_last_page_close",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_http.ResearchGitHubHTTP.test_last_page_close_pauses_checks_and_reopening_catches_up",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_http.ResearchGitHubHTTP.test_started_background_worker_follows_presence_without_manual_ticks",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_github_approvals_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_github_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 27,
+      "requirement": "Fail local persistence and fail GitHub separately: neither is reported as successful remote publication or converted into permission. Original source, pending decisions, and retryable records survive.",
+      "tickets": [
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18,
+        19,
+        20,
+        21,
+        22
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_failed_decision_registration_preserves_pending_and_does_not_start_cli",
+          "result": "passed"
+        },
+        {
+          "id": "test_github_approvals_http.GitHubApprovalsHTTP.test_failed_registration_stays_pending_and_retries_without_a_model_call",
+          "result": "passed"
+        },
+        {
+          "id": "test_gitsync_provenance_http.GitSyncProvenanceHTTP.test_private_prepare_public_write_and_commit_failures_start_no_model_and_recover_once",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_decisions_http.ResearchDecisionsHTTP.test_registration_failure_preserves_pending_and_does_not_start_the_model",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_a_second_clone_keeps_the_original_topic_issue_namespace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_explicit_clone_binding_reuses_one_issue_and_local_approval_identity",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_linked_issue_identity_or_marker_changes_cannot_redirect_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_markdown_origin_can_publish_once_then_relay_its_first_issue",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_missing_or_ambiguous_received_issue_pauses_without_creating_then_retries",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_repository_locator_cannot_replace_current_explicit_binding",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_received_unknown_notation_is_not_republished_by_marker_reuse",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_continuity.GitHubTopicContinuity.test_reused_issue_still_requires_a_current_root_proposal_and_actual_reply",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_github_http.ResearchGitHubHTTP.test_known_failure_retries_but_an_unknown_absent_comment_is_not_blindly_reposted",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.APISourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.CodexSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.DeepCodeSourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_fresh_read_in_the_same_turn_allows_a_corrected_whole_file_write",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_a_precise_edit_preserves_external_content_in_its_result_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_an_unobserved_external_save_survives_finish_and_undo",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationHTTP.test_stale_whole_file_write_keeps_an_external_save",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_precise_edit_rebases_its_actual_external_input_without_observing_it",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_read_is_bound_to_its_returned_bytes_during_an_external_replace",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_after_application_is_neither_owned_nor_observed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_save_during_validation_is_preserved_before_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_save_coordination.SourceCoordinationSchedule.test_a_whole_file_write_checks_observed_bytes_at_application",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_received_document_changed_after_initialize_is_not_overwritten",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_a_reference_only_clone_can_relay_the_same_topic_to_another_root",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_changed_retained_reference_history_cannot_authorize_an_append",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_clone_initialize_and_continue_keeps_one_id_and_exact_received_prefix",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_edited_reference_projection_after_initialize_blocks_continuation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_explicit_id_restart_replay_and_failed_save_keep_one_document",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_malformed_received_identity_title_path_hash_and_duplicates_fail_closed",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_missing_linked_or_oversized_received_documents_fail_before_initialize",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topic_continuity.TopicContinuity.test_received_prefix_is_not_a_license_to_generate_its_unknown_notation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_topics_http.ResearchTopicsHTTP.test_failed_markdown_or_index_save_recovers_after_restart_without_a_new_model",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_github_approvals_http.py",
+        "tests/test_gitsync_provenance_http.py",
+        "tests/test_research_decisions_http.py",
+        "tests/test_research_github_continuity.py",
+        "tests/test_research_github_http.py",
+        "tests/test_research_integration.py",
+        "tests/test_research_save_coordination.py",
+        "tests/test_research_topic_continuity.py",
+        "tests/test_research_topics_http.py"
+      ],
+      "browser_scripts": [],
+      "browser_evidence": null
+    },
+    {
+      "scenario": 28,
+      "requirement": "Drive the complete visible browser flow through initialization, proposal, a plain human reply, subsequent use, rejection, and reload. A unit-only or prompt-only result is insufficient evidence for the promised interaction.",
+      "tickets": [
+        11,
+        13,
+        14,
+        15,
+        16,
+        17,
+        18
+      ],
+      "tests": [],
+      "test_sources": [],
+      "browser_scripts": [
+        "tests/browser/research_init.mjs",
+        "tests/browser/research_decisions.mjs",
+        "tests/browser/research_batch.mjs",
+        "tests/browser/claude_research.mjs",
+        "tests/browser/codex_research.mjs",
+        "tests/browser/deepcode_research.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    },
+    {
+      "scenario": 29,
+      "requirement": "Before any AI proposal exists, send a fully specified human instruction adopting new notation: the instruction itself authorizes registration and subsequent use, without another approval question or an artificial pending proposal. If registration fails, use remains blocked.",
+      "tickets": [
+        15,
+        16,
+        17,
+        18
+      ],
+      "tests": [
+        {
+          "id": "test_claude_research_http.ClaudeResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_codex_research_http.CodexResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_deepcode_research_http.DeepCodeResearchHTTP.test_shared_batch_direct_family_refusal_and_reopen_semantics",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_complete_direct_instruction_needs_no_proposal_or_second_approval",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_batch_http.ResearchBatchHTTP.test_family_and_direct_save_failure_never_release_source",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_actual_clone_keeps_received_topic_identity_and_exact_prefix_without_borrowing_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_decisions_restore_across_all_adapters_then_real_receive_needs_new_confirmation",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_github_persistence_failure_then_git_upload_failure_recover_one_authority",
+          "result": "passed"
+        },
+        {
+          "id": "test_research_integration.ResearchIntegration.test_received_unknown_refusal_and_family_flow_into_topic_and_issue_lifecycle_without_laundering",
+          "result": "passed"
+        }
+      ],
+      "test_sources": [
+        "tests/test_claude_research_http.py",
+        "tests/test_codex_research_http.py",
+        "tests/test_deepcode_research_http.py",
+        "tests/test_research_batch_http.py",
+        "tests/test_research_integration.py"
+      ],
+      "browser_scripts": [
+        "tests/browser/research_batch.mjs"
+      ],
+      "browser_evidence": "browser-checks.json"
+    }
+  ],
+  "clauses": [
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 1,
+      "requirement_exact": "首次进入显示初始化邀请，不静默提取；重新打开已初始化项目恢复配置和报告，不重复要求设置。",
+      "scenarios": [
+        1
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 2,
+      "requirement_exact": "暂缓时仍可阅读、讨论和人工编辑；API 的 AI 数学创作或改写请求在建立基线前受到实际限制，不能只显示提示后继续执行。",
+      "scenarios": [
+        2
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 3,
+      "requirement_exact": "分析主稿及包含章节，保存输入范围、位置、文档版本、排除项、未读文件和提取缺口。原稿不被改写。",
+      "scenarios": [
+        3
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 4,
+      "requirement_exact": "提取术语及有来源的含义；完整记号保留原始写法，至少区分 `\\ell` 与 `\\ell_+`。现有稿件记号直接登记并展示报告，不逐项或批量再审批。后续票复用同一识别逻辑。",
+      "scenarios": [
+        3,
+        8
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 5,
+      "requirement_exact": "缺失和冲突定义保留未决状态及对应来源，不推断为已知事实。报告可由作者纠正，纠正记录与来源可追溯。",
+      "scenarios": [
+        5
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 6,
+      "requirement_exact": "无稿件时可从作者问题、已有想法和明确提供的记号初始化；未提供内容时空术语库、空符号库也有效。",
+      "scenarios": [
+        4
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 7,
+      "requirement_exact": "先贯通项目内 Markdown 记录模式并复用已有讨论配置。采用项目身份隔离、版本化项目记录和单一权威状态；不预建未来功能，不把报告副本当作另一套许可来源。",
+      "scenarios": [
+        1,
+        20,
+        21
+      ]
+    },
+    {
+      "ticket": 11,
+      "title": "[研究知识 1] 项目初始化与研究基线报告",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/11",
+      "clause": 8,
+      "requirement_exact": "通过可见初始化界面、持久化重开和真实编辑器 HTTP → AgentManager → 受控 API Backend 的行为验证本票。初始化报告不是完整符号保护已经支持的证据。",
+      "scenarios": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        28
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 1,
+      "requirement_exact": "复用并完善初始化使用的识别器，区分完整记号、等价源写法和已知记号组成的普通运算；标准运算符、排版命令不产生新符号申请。常见希腊字母不是自动豁免。",
+      "scenarios": [
+        6,
+        8
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 2,
+      "requirement_exact": "已知符号的定义、解释、使用范围或其他用法变化本身不触发新符号审批；真正引入另一完整标识符时才视为新记号。",
+      "scenarios": [
+        6
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 3,
+      "requirement_exact": "发现漏录的原稿记号时，对照初始化时保存的文档版本核实原始出现，保存位置和证据类型，自动补录并提示。初始化后 AI 添加的出现不能充当基线证据。",
+      "scenarios": [
+        9
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 4,
+      "requirement_exact": "可核实的人类手工输入构成采用该记号的依据：保存人工编辑来源后自动补录并提示，无需第二次批准。相同文本但来源不明时保持未核实，Git 提交作者字段不能单独证明人类编辑。",
+      "scenarios": [
+        10,
+        23
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 5,
+      "requirement_exact": "读取参考论文或附件不会自动使其中记号成为稿件的已知记号；定义和术语信息可以作为上下文，不产生符号采用许可。",
+      "scenarios": [
+        11
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 6,
+      "requirement_exact": "不确定时先查已有库、基线、人工编辑证据及当前可用的已批准符号族；仍不能确认则保留原表达式并报告待澄清，不以不确定性授予许可。符号族的批准入口由拆分票 4 交付。",
+      "scenarios": [
+        8,
+        9,
+        10,
+        11,
+        23
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 7,
+      "requirement_exact": "补录、未核实状态、证据类型和可见通知持久保存并受项目隔离；来源信息与自动生成报告保持一致。",
+      "scenarios": [
+        9,
+        10,
+        20
+      ]
+    },
+    {
+      "ticket": 12,
+      "title": "[研究知识 2] 增量记号识别与可信来源补录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/12",
+      "clause": 8,
+      "requirement_exact": "通过 API 行为、项目文件与通知结果验证已知记号正常使用、漏录补充、人工来源与未知来源、参考论文边界，并保留识别缺口。",
+      "scenarios": [
+        6,
+        8,
+        9,
+        10,
+        11
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 1,
+      "requirement_exact": "建立共享的受控草稿 → 检查 → 应用或发布路径，并在 API 的文件写入实际发生前生效；保留原有 Ask/Edit、编辑范围、项目身份、保存协调与 Stop 行为。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 2,
+      "requirement_exact": "已知记号及其用法变化继续正常工作。对未经批准、被拒绝或来源仍不确定的简称，保持原长表达式；不得因表达式很长或重复出现而放行。",
+      "scenarios": [
+        6,
+        7
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 3,
+      "requirement_exact": "提案以普通可读聊天文字说明完整记号、拟定义、使用范围、理由和适用的原表达式；保存项目及提案身份、内容版本、来源和待决状态。",
+      "scenarios": [
+        7,
+        12
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 4,
+      "requirement_exact": "未批准记号只允许出现在明确标记的候选或审批提案中，不能作为已采用记号发布，也不能释放依赖它的推导。",
+      "scenarios": [
+        7,
+        19
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 5,
+      "requirement_exact": "流式数学内容在展示前接受检查：跨多个片段拼成的新记号也不能提前泄露为既定记号。覆盖聊天、最终答复及可见工具文本中的相关数学发布路径，不能依赖最终消息检查。",
+      "scenarios": [
+        19
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 6,
+      "requirement_exact": "提案提交后 Turn 真正结束，普通 Send 输入恢复；没有符号审批弹窗、特殊命令或等待同一进程控制响应的假闭环。",
+      "scenarios": [
+        12,
+        28
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 7,
+      "requirement_exact": "提案先保存再报告成功；中断或保存失败不会产生采用许可。每 Turn 加载当前项目知识，不只在 Conversation 开始时加载。",
+      "scenarios": [
+        12,
+        20,
+        27
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 8,
+      "requirement_exact": "建立可见的符号保护能力状态与相应入口限制。尚未验证保护的 CLI Backend 不得显示为支持；现有文件范围权限不能代替符号保护能力。单独完成本票不代表完整审批功能已完成。",
+      "scenarios": [
+        12,
+        18
+      ]
+    },
+    {
+      "ticket": 13,
+      "title": "[研究知识 3a] API 新符号保护与待决提案",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/13",
+      "clause": 9,
+      "requirement_exact": "用受控 API 写入和分片流式输出验证全过程；观察应用前及 Turn 进行中的正文，证明未出现短暂的未批准写入，事后 Undo 不算通过。",
+      "scenarios": [
+        18,
+        19
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 1,
+      "requirement_exact": "从界面请求到决定登记全程保留独立的实际人类文本和消息来源，不从拼装后的 prompt、附件、引用或模型输出推断人类授权。",
+      "scenarios": [
+        13,
+        17
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 2,
+      "requirement_exact": "普通肯定回复仅在当前提案及对话主语唯一明确时批准。普通拒绝保存对应决定；不以 silence、无关回复、含糊回复、换话题、Stop 或 reload 推断同意。",
+      "scenarios": [
+        13,
+        15
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 3,
+      "requirement_exact": "编辑器负责验证项目、提案身份与内容版本并登记人类、渠道及原始消息证据。AI 可提出申请或读知识，但没有自行批准的操作。",
+      "scenarios": [
+        13,
+        17
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 4,
+      "requirement_exact": "批准必须先持久保存，随后才可在正文或既定聊天推导中使用。注入保存失败时报告失败、保留待决及原表达式，不报告虚假的登记成功。",
+      "scenarios": [
+        13,
+        27
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 5,
+      "requirement_exact": "正文、附件、工具返回、AI 输出、引用评论和被编辑的项目状态均不能伪造审批；AI 修改镜像记录或批准字段不构成人类决定。",
+      "scenarios": [
+        17
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 6,
+      "requirement_exact": "待决、单项批准/拒绝及来源证据跨服务器重启、Conversation 恢复和模型切换保留；每 Turn 读最新知识，项目之间不串许可。高级拒绝范围和批量语义由拆分票 4 扩展。",
+      "scenarios": [
+        16,
+        20
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 7,
+      "requirement_exact": "无关工作可以继续，未变化的待决请求不反复提醒；拒绝后保留原表达式。本票不要求人工采用特殊回复格式。",
+      "scenarios": [
+        7,
+        15,
+        16
+      ]
+    },
+    {
+      "ticket": 14,
+      "title": "[研究知识 3b] API 普通文字决定与持久审批闭环",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/14",
+      "clause": 8,
+      "requirement_exact": "完成浏览器初始化 → 提案 → Turn 结束 → 普通人类回复 → 后续使用/拒绝 → reload 的可见闭环；同时通过 HTTP 行为验证防伪、持久化失败和恢复隔离，不能只测 prompt 或私有状态。",
+      "scenarios": [
+        12,
+        13,
+        15,
+        18,
+        19,
+        20,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 1,
+      "requirement_exact": "批量提案逐项保存及决定：部分同意、另一项拒绝、第三项采用替代写法互不扩大授权；回复一个条目不批准剩余条目，含糊部分才澄清。",
+      "scenarios": [
+        14
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 2,
+      "requirement_exact": "无论是否已有 AI 提案，作者完整、明确的记号采用指令本身即授权登记；不制造一个虚假待决提案，不再要求同意一次。登记成功前仍禁止使用。",
+      "scenarios": [
+        29
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 3,
+      "requirement_exact": "清晰指定的替代写法直接登记；缺少必要信息或存在多个合理解释时仅询问缺失部分。",
+      "scenarios": [
+        14,
+        29
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 4,
+      "requirement_exact": "符号族保存允许的索引或装饰变化规则；族内复用不重复审批，族外完整记号正常检查，符号族不能成为任意新名字的通行证。",
+      "scenarios": [
+        8
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 5,
+      "requirement_exact": "拒绝某个名字与要求某表达式始终展开采用不同拒绝范围，保留原消息证据。换字母不能规避针对整个表达式简称的拒绝。",
+      "scenarios": [
+        16
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 6,
+      "requirement_exact": "拒绝、待决、族规则和人类决定跨 Conversation、模型、服务器重启及已支持 Backend 保留；明确的主动重开或替换指令才允许重新考虑。",
+      "scenarios": [
+        16,
+        20
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 7,
+      "requirement_exact": "切换话题、含糊肯定、Stop、reload 和未回复均不暗中批准。无关工作继续，长期拒绝与未变化待决不反复申请。",
+      "scenarios": [
+        15
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 8,
+      "requirement_exact": "将新增语义纳入共享写入/显示前检查；回归已有 API 浏览器及所有届时已支持的 Backend，并验证落盘失败不放行。",
+      "scenarios": [
+        18,
+        19,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 15,
+      "title": "[研究知识 4] 批量决定、直接指令与持久拒绝",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/15",
+      "clause": 9,
+      "requirement_exact": "界面可查看逐项状态、族规则及拒绝范围，持久化记录可解释来源；继续保持普通文字交互。",
+      "scenarios": [
+        8,
+        14,
+        16,
+        28
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 1,
+      "requirement_exact": "Claude Code 路径可完成初始化及报告，随后每 Turn 加载当前项目基线、来源、决定、族和拒绝；恢复 Conversation、换模型及重启不会复用过期许可。",
+      "scenarios": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        20
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 2,
+      "requirement_exact": "通过普通聊天提案并结束 Turn；下一个普通人类消息处理单项、批量、直接采用、替代写法、符号族和拒绝/主动重开，不复用 Web 同进程等待批准交互。",
+      "scenarios": [
+        12,
+        13,
+        14,
+        16,
+        29
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 3,
+      "requirement_exact": "覆盖 CLI 直接写入及其可用编辑路径；未批准变更在应用原稿前经共享检查，不以工具提示词、文件级权限或结束后回滚冒充写前保护。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 4,
+      "requirement_exact": "聊天片段、最终答复及相关可见工具文本中的数学内容在发布前检查；分片新记号不得以既定记号出现，明确候选可展示。",
+      "scenarios": [
+        19
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 5,
+      "requirement_exact": "保留原会话关联、Ask/Edit、编辑范围、当前编辑目标、原有 Web 权限与 Stop 行为。初始化或记录维护不能扩大稿件编辑范围。",
+      "scenarios": [
+        2,
+        18,
+        20
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 6,
+      "requirement_exact": "恢复、来源不明、伪造批准、登记失败和跨项目请求均不能绕过保护；原表达式和待决状态保持完整。",
+      "scenarios": [
+        11,
+        17,
+        20,
+        27
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 7,
+      "requirement_exact": "用真实编辑器 HTTP、受控 CLI 协议进程、可观测文件结果及浏览器完成本适配器的完整闭环；共用场景使用同一政策合同，不复制审批逻辑。",
+      "scenarios": [
+        12,
+        18,
+        19,
+        28
+      ]
+    },
+    {
+      "ticket": 16,
+      "title": "[研究知识 5] Claude Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/16",
+      "clause": 8,
+      "requirement_exact": "只有本适配器的写入前、显示前及共用审批验收通过后才显示该能力支持；fixture 结果与另行授权的原生 CLI 验收分开报告。",
+      "scenarios": [
+        18,
+        19,
+        28
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 1,
+      "requirement_exact": "Codex 路径可初始化并显示报告，每 Turn 获取当前项目知识；模型、Conversation 恢复及服务器重启不产生陈旧许可或项目间授权泄漏。",
+      "scenarios": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        20
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 2,
+      "requirement_exact": "提案 Turn 结束后恢复正常 Send，后续普通文本能处理单项、批量、直接指令、替代写法、符号族、持久拒绝及明确重开；先保存决定再允许使用。",
+      "scenarios": [
+        12,
+        13,
+        14,
+        16,
+        29
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 3,
+      "requirement_exact": "CLI 的直接文件修改先生成受控待检查内容，通过共享检查后才应用原稿；覆盖命令和可用编辑路径，不能只检查 file-change 事件或依赖事后 Undo。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 4,
+      "requirement_exact": "原生权限与编辑范围继续生效。恢复会话引用原稿历史绝对路径时，仍不能提前写入；更改工作目录本身不作为保护成立的证据。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 5,
+      "requirement_exact": "数学流式片段、最终答复及相关可见工具文本先检查再发布；未经批准的新记号只能作为明确候选，不出现在既定推导中。",
+      "scenarios": [
+        19
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 6,
+      "requirement_exact": "保留既有会话恢复、Ask/Edit、当前编辑目标、范围、Stop、保存协调与 GitSync 保护，不以接入知识为由扩大原生权限。",
+      "scenarios": [
+        18,
+        20,
+        22
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 7,
+      "requirement_exact": "在受控 CLI 进程中主动尝试绝对路径写入、恢复会话绕过、伪造批准、跨项目使用和决定落盘失败，观察整个 Turn，证明原稿未接收短暂的未批准写入。",
+      "scenarios": [
+        17,
+        18,
+        20,
+        27
+      ]
+    },
+    {
+      "ticket": 17,
+      "title": "[研究知识 6] Codex 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/17",
+      "clause": 8,
+      "requirement_exact": "通过 HTTP 与浏览器完整闭环及共享审批合同后才显示 Codex 支持；隔离 fixture 与另行授权的原生 CLI 验收分别记录。",
+      "scenarios": [
+        12,
+        13,
+        28
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 1,
+      "requirement_exact": "Deep Code 路径完成初始化和报告，每 Turn 读取项目知识；已知记号、来源、待决、族、决定和拒绝跨恢复保持一致。",
+      "scenarios": [
+        1,
+        2,
+        3,
+        4,
+        5,
+        20
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 2,
+      "requirement_exact": "提案结束 Turn，之后以普通消息完成单项、批量、直接指令、替代写法、符号族、持久拒绝和明确重开；决定持久保存成功后才使用。",
+      "scenarios": [
+        12,
+        13,
+        14,
+        16,
+        29
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 3,
+      "requirement_exact": "在 Deep Code 缺少单文件权限等限制下控制所有实际写入路径，让未批准修改先经共享检查，再应用到原稿。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 4,
+      "requirement_exact": "主动尝试 CLI 直接写入和恢复会话绕过，观察原稿在整个 Turn 的状态，证明未出现未批准内容。结束时文件已恢复正确、类别权限或提示词约束均不足以通过。",
+      "scenarios": [
+        18
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 5,
+      "requirement_exact": "对流式数学内容、最终答复及相关可见工具文本执行显示前检查；跨片段新记号不提前成为既定记号，候选必须明确标识。",
+      "scenarios": [
+        19
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 6,
+      "requirement_exact": "保留原会话、Ask/Edit、范围、Stop、保存协调及 GitSync 保护；受控流程不能覆盖并丢失人工变更。",
+      "scenarios": [
+        18,
+        20,
+        22
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 7,
+      "requirement_exact": "持久化失败、未知来源、伪造决定、跨项目和重启恢复仍保留原表达式与待决状态；使用同一共享审批合同。",
+      "scenarios": [
+        11,
+        17,
+        20,
+        27
+      ]
+    },
+    {
+      "ticket": 18,
+      "title": "[研究知识 7] Deep Code 的完整受控流程",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/18",
+      "clause": 8,
+      "requirement_exact": "完成真实 HTTP → 受控 CLI 协议 → 可见事件及文件结果，并通过浏览器完整闭环后才显示支持。若运行环境不能提供写入前保护，应明确不可用并阻止相应入口，不能用降级方案冒充本票完成。",
+      "scenarios": [
+        12,
+        18,
+        19,
+        28
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 1,
+      "requirement_exact": "每个主题复用一个持久记录和稳定身份，跨 Turn、Conversation 及重启继续更新；相关主题可关联，不按每次对话新建记录。",
+      "scenarios": [
+        20,
+        21
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 2,
+      "requirement_exact": "准确区分试探性想法、确认决定和未决问题，保留来源；讨论摘要不把设想写成研究结果或执行指令。",
+      "scenarios": [
+        21
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 3,
+      "requirement_exact": "有意义的新内容自动保存并报告可打开的位置，不重复询问是否保存或维护；没有变化时不写、不重复通知或启动 AI 工作。",
+      "scenarios": [
+        21
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 4,
+      "requirement_exact": "试探性建议只记录，不自动启动研究或修改稿件；明确要求执行的研究任务仍遵循现有任务授权。",
+      "scenarios": [
+        21
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 5,
+      "requirement_exact": "摘要、记录及可见通知中的数学内容调用共享符号检查，并读取每 Turn 最新知识；不得借摘要采用未批准记号或伪造批准。拆分票 4 扩展族/拒绝语义后回归该路径，不另建许可逻辑。",
+      "scenarios": [
+        8,
+        16,
+        17,
+        19,
+        20,
+        21
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 6,
+      "requirement_exact": "自动生成的主题 Markdown 和记录更新使用现有 GitSync；启用、禁用、活动 Turn、锁、重试和冲突行为均保持，不另建 commit/push/pull 通道。",
+      "scenarios": [
+        22
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 7,
+      "requirement_exact": "本地保存失败准确报告并保留可重试状态，不显示已保存或已发布；重试不新建第二份同主题记录，重启恢复不丢失未决内容。",
+      "scenarios": [
+        27
+      ]
+    },
+    {
+      "ticket": 19,
+      "title": "[研究知识 8] 自动维护项目内研究主题记录",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/19",
+      "clause": 8,
+      "requirement_exact": "通过界面、HTTP 行为、持久化重开、受控摘要输出和现有 GitSync fixture 验证从讨论到记录及同步的完整结果。",
+      "scenarios": [
+        21,
+        22,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 1,
+      "requirement_exact": "提供并持久保存项目的 GitHub 讨论模式、绑定仓库身份和所需连接设置，复用现有配置；可配置后续审批使用的指定人类 GitHub 账号，配置本身不授予任何具体符号许可。",
+      "scenarios": [
+        20,
+        24,
+        26
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 2,
+      "requirement_exact": "每个主题维护一个持续 issue 与稳定映射，后续讨论更新到同一主题；重试、重启和重复投递不会创建重复 issue。主题身份和同步进度均持久保存。",
+      "scenarios": [
+        21,
+        25,
+        26
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 3,
+      "requirement_exact": "接入 issue/comment 专用同步；复用现有认证、绑定仓库、项目生命周期和错误报告。Git fetch/pull 不当作 issue 更新同步。",
+      "scenarios": [
+        22,
+        26,
+        27
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 4,
+      "requirement_exact": "项目打开时自动检查变化，项目关闭后暂停处理，重开后根据持久进度补齐；未变化数据不产生重复保存、通知或 AI 工作。",
+      "scenarios": [
+        26
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 5,
+      "requirement_exact": "处理获取/投递重复、暂时失败及恢复，保留足够状态重试；明确区分本地已保存、等待发布和远端已成功发布，不能把失败或未知结果显示为成功。",
+      "scenarios": [
+        25,
+        26,
+        27
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 6,
+      "requirement_exact": "研究记录持续区分想法、决定和问题，数学摘要仍经过共享符号检查；试探性 GitHub 讨论不会启动研究或稿件编辑。",
+      "scenarios": [
+        19,
+        21,
+        26
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 7,
+      "requirement_exact": "本票中的评论是讨论数据；GitHub 符号审批由拆分票 10 验证后启用。项目 Markdown、库和配置仍沿用原 GitSync，不创建第二条文件同步链。",
+      "scenarios": [
+        22,
+        24
+      ]
+    },
+    {
+      "ticket": 20,
+      "title": "[研究知识 9] GitHub 研究主题记录与项目生命周期同步",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/20",
+      "clause": 8,
+      "requirement_exact": "通过界面设置及发布状态、受控 GitHub adapter、确定性调度和持久化重开验证完整生命周期；关闭暂停、重开补齐、失败恢复和主题去重均有端到端行为证据。",
+      "scenarios": [
+        21,
+        25,
+        26,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 1,
+      "requirement_exact": "界面可查看并持久保存指定人类审批账号及来自 GitHub 的决定来源；读取 GitHub 实际评论作者，校验仓库、issue、项目、提案身份和内容版本。",
+      "scenarios": [
+        24,
+        25
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 2,
+      "requirement_exact": "一个指定人类的明确批准即可，不要求全体一致；未指定账号、AI 账号、AI 自述作者、引用授权人的话和正文伪造内容均不产生批准。",
+      "scenarios": [
+        24
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 3,
+      "requirement_exact": "回复必须对应具体待决提案或唯一明确的批次；批量条目分别决定，部分同意不批准其他条目，清晰替代写法按直接指令处理且不重复确认。",
+      "scenarios": [
+        14,
+        24,
+        25,
+        29
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 4,
+      "requirement_exact": "先持久保存经验证的人类决定和原评论证据，随后才供新的 Turn、正文或既定聊天使用；登记失败保持未决、原表达式和可重试进度。",
+      "scenarios": [
+        13,
+        24,
+        27
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 5,
+      "requirement_exact": "重复获取、重放、乱序和重启恢复均按提案及评论身份幂等处理，不产生重复批准、主题记录或扩大授权。过期版本与项目不匹配的回复不能错授许可。",
+      "scenarios": [
+        20,
+        25
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 6,
+      "requirement_exact": "沿用项目打开检查、关闭暂停及重开补齐；未变化数据不反复提醒，讨论评论仍可保留而不具有批准权。",
+      "scenarios": [
+        26
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 7,
+      "requirement_exact": "与聊天渠道共享符号、族和拒绝规则，不另建一套权限状态；任何同步成功或镜像 status 字段都不能替代人类来源核验。",
+      "scenarios": [
+        8,
+        16,
+        17,
+        20
+      ]
+    },
+    {
+      "ticket": 21,
+      "title": "[研究知识 10] 通过 GitHub 人类回复审批符号",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/21",
+      "clause": 8,
+      "requirement_exact": "用受控 GitHub adapter、真实编辑器 HTTP、可见状态及后续使用验证指定人/非指定人/AI/引用/部分批准/替代写法/乱序/失败恢复，并报告 fixture 证据边界。",
+      "scenarios": [
+        14,
+        24,
+        25,
+        26,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 1,
+      "requirement_exact": "初始化配置、基线、符号库和已有项目记录纳入现有 GitSync，并遵循开启/关闭、自动保存、上传、远端更新、活动 Turn 协调、锁、重试及冲突策略，不另建提交或合并通道。",
+      "scenarios": [
+        22
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 2,
+      "requirement_exact": "远端收到的未登记符号只有在适用批准或可核实的人类编辑来源成立时自动登记；保存证据类型、位置和来源并可见通知。Git 提交作者字段和同步成功本身不证明人工采用。",
+      "scenarios": [
+        10,
+        23
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 3,
+      "requirement_exact": "缺少可靠依据时保留收到的原文并提出普通确认请求，防止 AI 随后未经批准复用；不删除、改写或通过破坏性合并修复同步文本。",
+      "scenarios": [
+        23
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 4,
+      "requirement_exact": "同步的库或镜像记录不能仅靠 approved/status 字段授予许可；验证对应人类消息、基线或其他适用来源，伪造或来源不明的记录仍未获许可。",
+      "scenarios": [
+        17,
+        23
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 5,
+      "requirement_exact": "来源核验与已有符号族、明确拒绝范围及主动重开规则兼容；同一表达式换个名字不能规避拒绝，已知记号用法改变不触发本功能审批。",
+      "scenarios": [
+        6,
+        8,
+        16,
+        23
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 6,
+      "requirement_exact": "持久保存未核实、已补录及通知处理进度；重复同步、重启、切换项目不重复授权或通知、不泄漏项目许可。失败保留原文、待决和可重试状态。",
+      "scenarios": [
+        20,
+        23,
+        27
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 7,
+      "requirement_exact": "通过已有 GitSync 与受控远端 fixture、界面通知、HTTP 后续对话及文件结果验证有依据/无依据/伪造记录、同步禁用、冲突和活动 Turn 等路径。",
+      "scenarios": [
+        17,
+        22,
+        23,
+        27,
+        28
+      ]
+    },
+    {
+      "ticket": 22,
+      "title": "[研究知识 11] GitSync 协作中的记录与符号来源核验",
+      "url": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/issues/22",
+      "clause": 8,
+      "requirement_exact": "本票不依赖自动主题生成能力；拆分票 8 负责自动生成主题 Markdown 后的同步端到端验收。本票覆盖初始化、库、配置和收到的已有记录。",
+      "scenarios": [
+        21,
+        22
+      ]
+    }
+  ]
+}

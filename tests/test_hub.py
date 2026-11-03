@@ -34,6 +34,7 @@ class TempState(unittest.TestCase):
         self.tmp = tmpdir()
         self.old = os.environ.get("PRISM_STATE_DIR")
         os.environ["PRISM_STATE_DIR"] = str(self.tmp / "state")
+        self.addCleanup(hub.diskprojects.reset)
 
     def tearDown(self):
         if self.old is None:
@@ -425,11 +426,28 @@ class Scan(TempState):
 
     def test_an_unchanged_project_is_not_walked_again(self):
         root = self.project(3)
-        self.listed()
-        seen, patch = self.walks(root)
-        with patch:
-            p = self.listed()
+        notifications = mock.Mock()
+        notifications.stamp.return_value = 0
+        # Keep asynchronous setup notifications out of the quiet-cache scenario.
+        with mock.patch.object(hub.diskprojects, "notifications", return_value=notifications):
+            self.listed()
+            seen, patch = self.walks(root)
+            with patch:
+                p = self.listed()
         self.assertEqual(seen, [])
+        self.assertEqual(p["files"], 3)
+
+    def test_a_notification_invalidates_an_unchanged_scan(self):
+        root = self.project(3)
+        notifications = mock.Mock()
+        notifications.stamp.return_value = 0
+        with mock.patch.object(hub.diskprojects, "notifications", return_value=notifications):
+            self.listed()
+            notifications.stamp.return_value = 1
+            seen, patch = self.walks(root)
+            with patch:
+                p = self.listed()
+        self.assertEqual(seen, [root])
         self.assertEqual(p["files"], 3)
 
     def test_a_new_file_is_seen(self):

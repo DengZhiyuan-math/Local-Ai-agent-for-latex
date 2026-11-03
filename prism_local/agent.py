@@ -25,6 +25,8 @@ import registry
 import settings
 from errors import say
 import snapshot
+from research_access import ResearchAccess
+import research_confirmation
 
 # A model alias or id such as "opus", "sonnet[1m]", "deepseek-chat" or
 # "deepseek/deepseek-chat" (OpenRouter). Never a flag.
@@ -52,7 +54,7 @@ def outcome(job: Job, res: dict) -> tuple[str, str | None]:
     (what that broke is no error), "failed" when the backend says so (an exit other than
     0, is_error), else "ok"; and for "failed" what to say about it, unless an error event
     has said it during the turn already (it is said once)."""
-    if job.cancel.is_set():
+    if job.cancel.is_set() and not res.get('cancelled_by_backend'):
         return "stopped", None
     code = res.get("exit")
     if not res.get("is_error") and code in (None, 0):
@@ -92,6 +94,7 @@ class AgentManager:
         # Held while Undo writes the files: the editor's save lock (repository.FilesLock), which a
         # sync's commit and merge hold too, so a merge never undoes the Undo.
         self.writes = threading.RLock()
+        self.research_fn = None       # the editor's current project knowledge, when connected
 
     def backend(self, provider: str | None) -> Backend | None:
         return self.backends.get(provider or self.default)
@@ -140,7 +143,9 @@ class AgentManager:
     def start(self, prompt: str, session_id: str | None, mode: str,
               model: str | None = None, effort: str | None = None,
               scope: list[str] | None = None, provider: str | None = None,
-              attachments: list[str] | None = None, active_file: str | None = None) -> dict:
+              attachments: list[str] | None = None, active_file: str | None = None,
+              human_text: str | None = None, received_subjects: list[str] | None = None,
+              received_context_ambiguous: bool = False) -> dict:
         """Run one turn. `scope` (project-relative files) limits which files the agent may
         change in edit mode; None lets it change any file and create new ones."""
         backend = self.backend(provider)
@@ -160,10 +165,27 @@ class AgentManager:
                     return {"error": "The active file no longer exists. Open a file and try again."}
             except (ValueError, OSError, RuntimeError) as e:
                 return {"error": f"Invalid active file: {e}"}
+        preflight = backend.preflight
+        if self.research_fn and getattr(backend, 'research_support', False):
+            preflight = getattr(backend, 'research_preflight', preflight)
         bad = backend.check(model, effort) or backend.check_attachments(root, attachments or []) \
-            or backend.preflight(root) or (backend.check_session(root, session_id) if session_id else None)
+            or preflight(root) or (backend.check_session(root, session_id) if session_id else None)
         if bad:
             return {"error": bad}
+        try:
+            knowledge = self.research_fn() if self.research_fn else None
+            supported = backend.kind == "openai" or getattr(backend, "research_support", False)
+            if knowledge and supported:
+                check_research = getattr(backend, "check_research", None)
+                problem = check_research(root) if check_research else None
+                if problem:
+                    return {"error": problem}
+            research_access = ResearchAccess(knowledge) if knowledge and supported else None
+            if knowledge and not supported and knowledge.status().get("initialized"):
+                return {"error": "This provider does not yet protect the initialized research baseline. "
+                                 "Choose an API provider or a supported controlled CLI with file and chat notation checks."}
+        except (OSError, ValueError) as e:
+            return {"error": f"Research baseline could not be read: {e}"}
         if scope:
             try:
                 scope = sorted({project_path(root, rel).relative_to(root).as_posix() for rel in scope})
@@ -172,6 +194,10 @@ class AgentManager:
             bad = backend.check_scope(root, scope) if mode == "edit" else None
             if bad:
                 return {"error": bad}
+        if received_subjects is not None and not isinstance(received_subjects, list):
+            return {"error": "The received notation context must be a list of question IDs."}
+        if (received_subjects or received_context_ambiguous) and human_text is None:
+            return {"error": "A received notation reply needs the original human message."}
         with self.lock:
             if self.active and not self.active.done:
                 return {"error": "The agent is still working on the previous message."}
@@ -206,10 +232,41 @@ class AgentManager:
                        + "Explicit file requests and the scope for this turn take priority over this default. "
                        "Targets from earlier turns no longer apply.")
         job.provider, job.prompt, job.session_id = backend.id, prompt, session_id
+        job.human_text = human_text
+        try:
+            decision = None
+            if research_access is not None and human_text is not None:
+                conversation = backend.id + ":" + (session_id or f"new-{job.id}")
+                decision = research_confirmation.decide_reply(knowledge, human_text, conversation, received_subjects,
+                    context_ambiguous=received_context_ambiguous)
+                if decision is None:
+                    decision = knowledge.decide_reply(human_text, conversation)
+            if decision:
+                research_access = ResearchAccess(knowledge)
+        except (OSError, ValueError) as error:
+            with self.lock:
+                self.jobs.pop(job.id, None)
+                if self.active is job:
+                    self.active = None
+            return {"error": f"The human decision could not be saved: {error}"}
+        job.research_access = research_access
+        if research_access is not None:
+            research_access.cancel = job.cancel
         job.mode, job.model, job.effort = mode if mode in ("edit", "ask") else "ask", model, effort
         job.root, job.files = self.root_fn().resolve(), self.files_fn
         job.server_url = self.server_url
         job.attachments = attachments or []
+        job.notation_reply = bool(decision)
+        if decision:
+            for receipt in decision.get("decisions", [decision] if "id" in decision else []):
+                job.emit({"t": "notation_decision", "decision": receipt})
+                if receipt.get("kind") == "reopen":
+                    proposal = next((p for p in knowledge.status().get("proposals", [])
+                                     if p["id"] == receipt.get("proposal_id")), None)
+                    if proposal:
+                        job.emit({"t": "notation_proposal", "proposal": proposal})
+            for message in decision.get("clarifications", []):
+                job.emit({"t": "notation_clarification", "message": message})
         print(json.dumps({"event": "agent_start", "job": job.id, "provider": job.provider,
                           "project_key": registry.project_key(root), "cwd": str(root),
                           "session_id": session_id}), flush=True)
@@ -240,12 +297,26 @@ class AgentManager:
         t0, res = time.time(), {}
         try:
             res = backend.run(job) or {}
+            if job.research_access is not None:
+                from research_decisions import set_subject
+                sid = res.get("session_id") or job.session_id
+                if sid:
+                    proposals = [event["proposal"] for event in job.events if event["t"] == "notation_proposal"] \
+                        if not job.cancel.is_set() and not res.get("is_error") else []
+                    if proposals or job.cancel.is_set() or res.get("is_error") or not getattr(job, "notation_reply", False):
+                        set_subject(registry.project_key(job.root), job.provider + ":" + sid, proposals)
         except Exception as e:  # noqa: BLE001 — report anything to the UI
             # A ValueError or an OSError is the backend saying what is wrong ("The API session
             # does not belong to this project"), or a timeout: its words; anything else is a
             # bug, named by its type.
             said = say(e) if isinstance(e, (ValueError, OSError, subprocess.TimeoutExpired)) \
                 else f"{type(e).__name__}: {e}"
+            if job.research_access is not None:
+                try:
+                    checked = job.research_access.review_auxiliary(said, channel="error")
+                    said = said if checked == said else "The protected Turn failed; its unchecked diagnostic was withheld."
+                except (OSError, ValueError):
+                    said = "The protected Turn failed; its diagnostic could not be checked."
             job.emit({"t": "error", "message": said})
             res = {"is_error": True}
         try:
@@ -254,7 +325,7 @@ class AgentManager:
             job.emit({"t": "error", "message": f"{type(e).__name__}: {e}"})
             self._refresh_rate(job, backend)
             job.emit({"t": "done", "turn": job.id, "provider": job.provider, "changed": [],
-                      "outcome": "stopped" if job.cancel.is_set() else "failed", "error": None,
+                      "outcome": "stopped" if job.cancel.is_set() and not res.get('cancelled_by_backend') else "failed", "error": None,
                       "is_error": True, "session_id": res.get("session_id") or job.session_id})
         finally:
             with job.cond:
@@ -271,6 +342,19 @@ class AgentManager:
 
     def _finish(self, job: Job, backend: Backend, res: dict, t0: float) -> None:
         """After the backend: what the turn changed, reverted where it may not, reported."""
+        if job.research_access is not None and job.research_access.initialized:
+            from research_access import NotationStop
+            from research_topics import finish
+            try:
+                finish(job.research_access, job,
+                       success=outcome(job, res)[0] == "ok" and not res.get("notation_pending"),
+                       session_id=res.get("session_id") or job.session_id)
+            except NotationStop as stop:
+                from backend_openai import OpenAICompat
+                OpenAICompat._notation_stop(job, res, stop)
+            except (OSError, ValueError):
+                job.emit({"t": "research_record_error", "retryable": True,
+                          "message": "Research notes could not be saved; their pending update can be retried."})
         time.sleep(0.2)
         # What the editor wrote meanwhile (your saves, uploads, builds) is not the turn's:
         # taken as it was then. The files are held while looked at and reverted (a sync's
@@ -286,7 +370,14 @@ class AgentManager:
             out_of_scope = [rel for rel in snapshot.changed_paths(job.before, job.after)
                             if read_only or (job.scope and rel not in job.scope)]
             reverted = []
-            if out_of_scope and (read_only or not backend.enforces_scope):
+            if job.controlled_cli:
+                # Only unchanged parent results belong to this Turn. Keep
+                # external saves out of its diff and Undo, even on launch failure.
+                external = {rel: job.after.get(rel) for rel in snapshot.changed_paths(job.before, job.after)
+                            if rel not in job.controlled_writes or job.after.get(rel) != job.controlled_writes[rel]}
+                snapshot.rebase(job.before, external, set())
+                out_of_scope = []
+            elif out_of_scope and (read_only or not backend.enforces_scope):
                 # This backend cannot be kept to the @-mentioned files, so undo what it
                 # wrote outside them (only where nothing else changed the file since).
                 reverted = snapshot.restore(job.root, job.before, job.after, out_of_scope)

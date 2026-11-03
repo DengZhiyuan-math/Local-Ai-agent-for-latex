@@ -1,5 +1,11 @@
 """Deep Code CLI backend: DeepSeek's terminal coding agent.
 
+Editor research turns use replacement --settings, checked parent-owned MCP tools
+and a verified native write boundary. Original settings and native session history
+stay in place. The implementation below also retains the legacy path for callers
+without project research access; only that path uses a project settings overlay
+and post-Turn restoration as described below.
+
 Deep Code (npm: @vegamo/deepcode-cli, command ``deepcode``) is the CLI that DeepSeek's API
 documentation lists for agents. Each chat turn runs it non-interactively in the project:
 
@@ -27,7 +33,10 @@ import json
 import os
 import re
 import shutil
+import stat
+import subprocess
 import time
+from functools import lru_cache
 from pathlib import Path
 from contextlib import contextmanager
 
@@ -37,6 +46,7 @@ from gitenv import selects_repository
 import mcp_compile
 import registry
 import sessionmeta
+from proc import run as run_bounded
 
 PACKAGE = "@vegamo/deepcode-cli"
 ASK_NOTE = ("[Ask mode] Answer only: do not create, change or delete any file in this turn; "
@@ -77,6 +87,22 @@ def node_entry(bin_path: str) -> list[str]:
 # real CLI, is 0.4.3 (docs/audits/2026-10-08-*). One that does not know them would let an
 # Ask turn write, leaving only the restore after the turn.
 MIN_VERSION = (0, 4, 3)
+
+
+@lru_cache(maxsize=8)
+def controlled_runtime(binary: str, stamp: int) -> str | None:
+    """Read-only CLI option discovery; never send a user request or --exec."""
+    version = installed_version(binary)
+    if version is not None and version < (0,4,5):
+        return 'The controlled Deep Code path requires version 0.4.5 or newer.'
+    try:
+        result = run_bounded(node_entry(binary)+['--help'], text=True, timeout=10)
+        if result.returncode or any(flag not in result.stdout for flag in
+                ('--exec','--json','--settings','--session-id','--resume')):
+            return 'This Deep Code lacks controlled settings and JSON exec support. Update Deep Code.'
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return 'Deep Code controlled settings support could not be verified.'
+    return None
 
 
 def installed_version(bin_path: str) -> tuple[int, int, int] | None:
@@ -134,11 +160,42 @@ def _time(v) -> float:
     return 0.0
 
 
-def read_settings(path: Path) -> dict:
+def read_settings(path: Path, *, strict=False, nofollow=False) -> dict:
+    path = Path(path)
+    limit = 2 * 1024 * 1024
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
+        if nofollow and os.name == 'nt':
+            from fsutil import read_windows_file
+            raw = read_windows_file(path, limit)[0]
+        else:
+            nonblocking = getattr(os, 'O_NONBLOCK', 0)
+            if not nonblocking:
+                info = path.lstat() if nofollow else path.stat()
+                if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+                    raise ValueError('Deep Code metadata is not a bounded regular JSON file.')
+            flags = os.O_RDONLY | nonblocking | getattr(os, 'O_BINARY', 0)
+            if nofollow:
+                nofollow_flag = getattr(os, 'O_NOFOLLOW', 0)
+                if not nofollow_flag:
+                    raise ValueError('No-follow metadata reads are unavailable on this platform.')
+                flags |= nofollow_flag
+            descriptor = os.open(path, flags)
+            with os.fdopen(descriptor, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= limit:
+                    raise ValueError('Deep Code metadata is not a bounded regular JSON file.')
+                raw = stream.read(limit + 1)
+        if len(raw)>limit:
+            raise ValueError('Deep Code metadata exceeded the checking limit.')
+        data = json.loads(raw)
+        if not isinstance(data,dict):
+            raise ValueError('Deep Code metadata must hold a JSON object.')
+        return data
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, UnicodeError, RecursionError) as error:
+        if strict:
+            raise ValueError('Deep Code settings could not be verified.') from error
         return {}
 
 
@@ -237,6 +294,7 @@ class SessionLog:
 
 class DeepCode(Backend):
     kind = "deepcode"
+    research_support = True
     label = "Deep Code (DeepSeek)"
     models = ["deepseek-v4-pro", "deepseek-flash"]
     efforts = ("low", "high", "max")
@@ -276,6 +334,18 @@ class DeepCode(Backend):
         return None
 
     def preflight(self, root: Path) -> str | None:
+        return self._preflight(root)
+
+    def research_preflight(self, root: Path) -> str | None:
+        from deepcode_research import _object
+        try:
+            _object(Path.home()/'.deepcode/settings.json')
+            _object(project_path(root,'.deepcode/settings.json'))
+        except ValueError as error:
+            return str(error)
+        return self._preflight(root, allow_user_mcp=True)
+
+    def _preflight(self, root: Path, *, allow_user_mcp=False) -> str | None:
         try:
             project = project_path(root, ".deepcode/settings.json")
         except (ValueError, OSError):
@@ -293,7 +363,7 @@ class DeepCode(Backend):
         except OSError as e:
             return f"Deep Code settings {project} cannot be read: {e}"
         inherited = user_settings().get("mcpServers") or {}
-        if inherited:
+        if inherited and not allow_user_mcp:
             names = ", ".join(sorted(map(str, inherited))) if isinstance(inherited, dict) else "some"
             return (f"Deep Code would bring the MCP servers of {Path.home() / '.deepcode' / 'settings.json'} "
                     f"({names}) into this turn, which the editor cannot restrict. Remove them there, "
@@ -323,7 +393,25 @@ class DeepCode(Backend):
         return None
 
     def info(self) -> dict:
-        return {**super().info(), "bin": self.bin()}
+        import claude_sandbox
+        base = super().info()
+        supported = base['available'] and self.check_research(Path.cwd()) is None
+        return {**base, "bin": self.bin(),
+                "research_initialization": supported,
+                "notation_guard": {"application":supported,"display":supported,
+                                   "proposals":supported,"decisions":supported},
+                "enforces_scope":supported,"read_only_ask":supported}
+
+    def check_research(self, root: Path) -> str | None:
+        import claude_sandbox
+        runtime = claude_sandbox.availability('deepcode')
+        if not runtime['supported']:
+            return runtime['reason']
+        try:
+            binary = str(Path(shutil.which(self.bin()) or self.bin()).resolve())
+            return controlled_runtime(binary, Path(binary).stat().st_mtime_ns)
+        except (OSError,TypeError,ValueError):
+            return 'Deep Code controlled runtime could not be verified.'
 
     def env(self, job: Job) -> dict:
         env = agent_env(root=job.root)
@@ -410,6 +498,10 @@ class DeepCode(Backend):
                 pass
 
     def run(self, job: Job) -> dict:
+        if job.research_access is not None:
+            job.controlled_cli = True
+            from deepcode_research import run
+            return run(self, job)
         # AgentManager.start has run preflight and check_session; turn_settings checks
         # again what may have changed since (the settings it passes on).
         with self.turn_settings(job):

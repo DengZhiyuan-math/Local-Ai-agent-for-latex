@@ -5,6 +5,8 @@ without changing the configured GitHub identity. Patch gitenv.git with it for of
 
     with mock.patch.object(github, "GITHUB", FakeGitHub()) as gh: ...
 """
+from __future__ import annotations
+
 from pathlib import Path
 
 import gitenv

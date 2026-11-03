@@ -9,7 +9,7 @@ both name the same document and the same output folder.
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import build
 
@@ -34,8 +34,10 @@ def guess_main(root: Path) -> str | None:
 
 def output_folder(value) -> tuple[str, str | None]:
     """prism.json's "outdir" as a folder inside the project, and why it was not usable."""
-    outdir = str(value or "build").replace("\\", "/").strip("/") or "build"
-    if Path(outdir).is_absolute() or ".." in Path(outdir).parts:
+    raw = str(value or "build").replace("\\", "/")
+    outdir = raw.strip("/") or "build"
+    # Check Windows roots both before and after slash normalization, on every host.
+    if PureWindowsPath(raw).drive or PureWindowsPath(outdir).drive or ".." in Path(outdir).parts:
         return "build", "outdir must be a folder inside the project; build is used."
     return outdir, None
 

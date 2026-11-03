@@ -208,6 +208,8 @@ class ExplorerChanges(unittest.TestCase):
         new = self.make(self.root / "new chapter" / "new project")
         self.assertIn(new, {Path(p["path"]) for p in self.listed()})
 
+    @unittest.skipUnless(os.name == "nt" or sys.platform == "darwin",
+                         "Real directory notifications require Windows or macOS.")
     def test_http_poll_follows_explorer_move_and_discovers_new_project(self):
         ready = self.tmp / "ready.json"
         server = subprocess.Popen(

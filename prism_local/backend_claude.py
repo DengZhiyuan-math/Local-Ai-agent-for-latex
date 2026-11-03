@@ -1,19 +1,17 @@
 """Claude Code backend.
 
-Each chat turn runs the local Claude Code CLI headlessly in the repository:
+Each chat turn runs the local Claude Code CLI headlessly in the repository.
+Research-controlled turns expose editor-owned MCP tools behind shared checks;
+the native sandbox prevents the CLI from writing the manuscript or editor state.
+Native Web tools retain the editor's bidirectional permission channel.
 
-    claude -p <prompt> --output-format stream-json --verbose
-           --include-partial-messages --permission-mode <mode> [--resume <id>]
-
-so the agent loads the project's CLAUDE.md, skills and .claude/settings.json
-permissions exactly as it would in the terminal. In "edit" mode file edits are accepted
-automatically. Web approvals use a bidirectional stream-json control channel. The panel
-does not approve shell commands, so the shell tools
-are left out unless the settings allow some commands, and then only those run. "ask" mode uses plan mode (read-only).
+The legacy path, when no research access is supplied, uses the terminal settings:
+Edit accepts native edits, Ask uses plan mode, and shell tools require rules.
 """
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 import os
 import re
 import subprocess
@@ -33,6 +31,7 @@ from usage import UsageCache, control_query
 from proc import run as run_bounded
 
 MODES = {"edit": "acceptEdits", "ask": "plan"}
+INITIALIZE_TIMEOUT = 15     # seconds before an unsupported CLI must return Send
 CATALOG_RETRY = 60          # seconds a failed lookup of the commands is not tried again
 
 
@@ -377,6 +376,7 @@ class ClaudeCode(CliBackend):
 
     input_types = ("text", "image", "pdf")
     kind = "claude"
+    research_support = True
     label = "Claude Code"
     models = ["opus", "sonnet", "haiku", "fable", "best", "opusplan", "sonnet[1m]", "opus[1m]"]
     efforts = ("low", "medium", "high", "xhigh", "max")
@@ -407,8 +407,20 @@ class ClaudeCode(CliBackend):
         return None if executable(self.bin()) else \
             "Claude Code CLI not found. Start the editor with CLAUDE_BIN=/path/to/claude."
 
+    def check_research(self, root: Path) -> str | None:
+        from claude_sandbox import availability
+        result = availability()
+        return None if result["supported"] else result["reason"]
+
     def info(self) -> dict:
-        return {**super().info(), "bin": self.bin(), "rate": self.rate}
+        from claude_sandbox import availability
+        runtime = availability()
+        supported = runtime["supported"]
+        return {**super().info(), "bin": self.bin(), "rate": self.rate,
+                "research_initialization": supported,
+                "notation_guard": {"application": supported, "display": supported,
+                                   "proposals": supported, "decisions": supported},
+                "research_runtime": runtime}
 
     def model_catalog(self, root: Path, refresh: bool = False) -> dict:
         """Read models and effort capabilities from initialize; send no user prompt."""
@@ -474,6 +486,26 @@ class ClaudeCode(CliBackend):
 
     def command(self, job: Job) -> tuple[list[str], str]:
         use_config_dir()                    # the profile this turn's `claude` inherits
+        if job.research_access is not None:
+            from claude_research import Controller, PREFIX
+            guard = Controller(job)
+            # Parent tools enforce Ask/Edit and scope. Native plan mode would also
+            # block the knowledge-only proposal operation in an Ask Turn.
+            cmd = [self.bin(), "-p", "--output-format", "stream-json", "--verbose",
+                   "--include-partial-messages", "--input-format", "stream-json",
+                   "--permission-prompt-tool", "stdio", "--permission-mode", "default",
+                   "--setting-sources", "", "--tools", "WebSearch,WebFetch",
+                   "--strict-mcp-config", "--mcp-config", json.dumps({"mcpServers": {
+                       "prism": {"type": "sdk", "name": "prism"}}}),
+                   "--allowedTools", *(PREFIX + name for name in sorted(guard.names())),
+                   "--append-system-prompt", self.system_text()]
+            if job.session_id:
+                cmd += ["--resume", job.session_id]
+            if job.model or self.default_model:
+                cmd += ["--model", job.model or self.default_model]
+            if job.effort:
+                cmd += ["--effort", job.effort]
+            return cmd, job.prompt + "\n\n" + job.research_access.context()
         perm = MODES.get(job.mode, "plan")
         if job.scope:
             # acceptEdits would accept an edit to any file. In default mode a headless run
@@ -506,85 +538,169 @@ class ClaudeCode(CliBackend):
         return cmd, job.prompt
 
     def run(self, job: Job) -> dict:
-        """Keep the control channel open while a web operation waits for the author.
-
-        The wire protocol follows anthropics/claude-agent-sdk-python query.py.
-        Only WebSearch/WebFetch approvals are exposed; other callbacks fail closed.
-        """
+        """One native control loop; protected project tools execute in the parent."""
+        from claude_research import Controller, PREFIX, SERVER, WEB_HOOK, user_content
+        guard = Controller(job) if job.research_access is not None else None
         cmd, prompt = self.command(job)
         st: dict = {}
         writer = threading.Lock()
         workers: list[threading.Thread] = []
         namespace = json.dumps([str(job.root.resolve()), str(profile_dir().resolve()), self.id])
+        hooks = {"PreToolUse": [{"matcher": "WebSearch|WebFetch", "hookCallbackIds": [WEB_HOOK]}]} if guard else {}
         init_id = "prism-initialize"
         initial = json.dumps({"type": "control_request", "request_id": init_id,
-                              "request": {"subtype": "initialize", "hooks": {},
+                              "request": {"subtype": "initialize", "hooks": hooks,
                                           "sdkMcpServers": []}}) + "\n"
-        with cli_process(job, cmd, initial, agent_env(root=job.root), bufsize=1,
-                         keep_stdin_open=True) as (proc, lines, errors):
-            if proc is None:
-                return st
+        with tempfile.TemporaryDirectory(prefix="prism-claude-") if guard else nullcontext(None) as scratch:
+            env = agent_env(root=job.root)
+            if guard:
+                import claude_sandbox
+                runtime = claude_sandbox.availability()
+                if not runtime["supported"]:
+                    raise ValueError(runtime["reason"])
+                cmd = claude_sandbox.wrap(cmd, job.root, profile_dir(), Path(scratch))
+                env = claude_sandbox.environment(env, Path(scratch))
+            with cli_process(job, cmd, initial, env, bufsize=1,
+                             keep_stdin_open=True) as (proc, lines, errors):
+                if proc is None:
+                    return st
+                timer = None
+                initialized = False
+                initialization_expired = threading.Event()
+                def expire_initialization():
+                    initialization_expired.set()
+                    kill_tree(proc)
+                initialization_timer = threading.Timer(INITIALIZE_TIMEOUT, expire_initialization) if guard else None
+                if initialization_timer:
+                    initialization_timer.daemon = True
+                    initialization_timer.start()
 
-            def send(message):
-                with writer:
-                    if not job.cancel.is_set() and proc.poll() is None:
-                        try:
-                            proc.stdin.write(json.dumps(message) + "\n")
-                            proc.stdin.flush()
-                        except (OSError, ValueError):
-                            pass
+                def send(message):
+                    with writer:
+                        if not job.cancel.is_set() and proc.poll() is None:
+                            try:
+                                proc.stdin.write(json.dumps(message) + "\n")
+                                proc.stdin.flush()
+                            except (OSError, ValueError):
+                                pass
 
-            def approve(frame):
-                request = frame.get("request") or {}
-                rid = frame.get("request_id")
-                if request.get("subtype") == "can_use_tool":
-                    answer = self.permissions.request(
-                        job, rid, request.get("tool_name"), request.get("input"),
-                        st.get("session_id"), namespace)
-                    send({"type": "control_response", "response": {
-                        "subtype": "success", "request_id": rid, "response": answer}})
-                else:
-                    send({"type": "control_response", "response": {
-                        "subtype": "error", "request_id": rid,
-                        "error": "Unsupported control request"}})
+                def interrupt():
+                    nonlocal timer
+                    if guard and guard.halted and timer is None:
+                        send({"type": "control_request", "request_id": "prism-notation-interrupt",
+                              "request": {"subtype": "interrupt"}})
+                        # A CLI that ignores the interrupt still cannot keep the
+                        # Turn or descendants alive indefinitely. This is not Stop.
+                        timer = threading.Timer(1, kill_tree, args=(proc,))
+                        timer.daemon = True
+                        timer.start()
 
-            try:
-                for line in lines:
-                    try:
-                        d = json.loads(line)
-                    except ValueError:
-                        continue
-                    if not isinstance(d, dict):
-                        continue
-                    if d.get("type") == "control_response":
-                        response = d.get("response") or {}
-                        if response.get("request_id") == init_id:
-                            if response.get("subtype") != "success":
-                                raise ValueError(response.get("error") or "Claude initialization failed")
-                            send({"type": "user", "session_id": job.session_id or "",
-                                  "message": {"role": "user", "content": prompt},
-                                  "parent_tool_use_id": None})
-                    elif d.get("type") == "control_request":
-                        thread = threading.Thread(target=approve, args=(d,), daemon=True)
-                        workers.append(thread)
-                        thread.start()
-                    elif d.get("type") == "control_cancel_request":
-                        self.permissions.cancel(job, d.get("request_id"))
+                def approve(frame):
+                    request = frame.get("request")
+                    rid = frame.get("request_id")
+                    if not isinstance(request, dict):
+                        send({"type": "control_response", "response": {
+                            "subtype": "error", "request_id": rid, "error": "Invalid control request"}})
+                        return
+                    kind = request.get("subtype")
+                    if guard and kind == "mcp_message":
+                        message = request.get("message")
+                        if not initialized and isinstance(message, dict) and message.get("method") == "tools/call":
+                            answer = {"jsonrpc": "2.0", "id": message.get("id"), "error": {
+                                "code": -32600, "message": "The current user Turn has not started."}}
+                        elif request.get("server_name") != SERVER:
+                            answer = {"jsonrpc": "2.0", "id": request["message"].get("id") if isinstance(request.get("message"), dict) else None,
+                                      "error": {"code": -32601, "message": "Unknown protected MCP server"}}
+                        else:
+                            answer = guard.answer(request.get("message"))
+                        send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
+                              "response": {"mcp_response": answer or {"jsonrpc": "2.0", "result": {}}}}})
+                        interrupt()
+                    elif guard and kind == "hook_callback" and request.get("callback_id") == WEB_HOOK:
+                        inp = request.get("input") or {}
+                        decision = "ask" if isinstance(inp, dict) and inp.get("tool_name") in ("WebSearch", "WebFetch") else "deny"
+                        send({"type": "control_response", "response": {"subtype": "success", "request_id": rid,
+                              "response": {"hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                "permissionDecision": decision, "permissionDecisionReason": "Use the editor's Web permission control."}}}})
+                    elif kind == "can_use_tool":
+                        name = request.get("tool_name")
+                        if guard and (not initialized or guard.halted or job.cancel.is_set()):
+                            answer = {"behavior": "deny", "message": "The protected Turn is not active."}
+                        elif guard and isinstance(name, str) and name.startswith(PREFIX) and name[len(PREFIX):] in guard.names():
+                            answer = {"behavior": "allow", "updatedInput": request.get("input") or {}}
+                        else:
+                            raw_input = request.get("input")
+                            preview = {"display_input": guard.public_input(raw_input)} \
+                                if guard and isinstance(raw_input, dict) else {}
+                            answer = self.permissions.request(job, rid, name, raw_input,
+                                st.get("session_id"), namespace, **preview)
+                        send({"type": "control_response", "response": {
+                            "subtype": "success", "request_id": rid, "response": answer}})
                     else:
-                        self.handle(d, job, st)
-                        if d.get("type") == "result":
-                            # One top-level turn per process, as before. EOF lets the
-                            # CLI finish; no permission response is needed after result.
-                            with writer:
-                                proc.stdin.close()
-                proc.wait()
-            finally:
-                self.permissions.cancel(job)
-                for thread in workers:
-                    thread.join(.5)
-        st["exit"] = proc.returncode
-        if st["exit"] != 0 or st.get("is_error"):
-            st["stderr"] = "".join(errors)[-2000:]
+                        send({"type": "control_response", "response": {
+                            "subtype": "error", "request_id": rid, "error": "Unsupported control request"}})
+
+                try:
+                    for line in lines:
+                        try:
+                            d = json.loads(line)
+                        except ValueError:
+                            continue
+                        if not isinstance(d, dict):
+                            continue
+                        if d.get("type") == "control_response":
+                            response = d.get("response") or {}
+                            if not isinstance(response, dict):
+                                if guard:
+                                    raise ValueError("Invalid Claude control response")
+                                continue
+                            if response.get("request_id") == init_id:
+                                if guard and initialized:
+                                    continue
+                                if response.get("subtype") != "success":
+                                    raise ValueError("Claude initialization failed" if guard else response.get("error") or "Claude initialization failed")
+                                initialized = True
+                                if initialization_timer:
+                                    initialization_timer.cancel()
+                                send({"type": "user", "session_id": job.session_id or "",
+                                      "message": {"role": "user", "content": user_content(job, prompt) if guard else prompt}, "parent_tool_use_id": None})
+                        elif d.get("type") == "control_request":
+                            request = d.get("request")
+                            if guard and (not isinstance(request, dict) or request.get("subtype") != "can_use_tool"):
+                                # Parent tools finish before the next wire frame;
+                                # malformed/early result frames cannot race a write.
+                                approve(d)
+                            else:
+                                thread = threading.Thread(target=approve, args=(d,), daemon=True)
+                                workers.append(thread)
+                                thread.start()
+                        elif d.get("type") == "control_cancel_request":
+                            self.permissions.cancel(job, d.get("request_id"))
+                        else:
+                            if guard:
+                                guard.handle(d, self, st)
+                                interrupt()
+                            else:
+                                self.handle(d, job, st)
+                            if d.get("type") == "result":
+                                with writer:
+                                    proc.stdin.close()
+                    proc.wait()
+                finally:
+                    if initialization_timer:
+                        initialization_timer.cancel()
+                    if timer:
+                        timer.cancel()
+                    self.permissions.cancel(job)
+                    for thread in workers:
+                        thread.join(.5)
+            st["exit"] = proc.returncode
+            if initialization_expired.is_set():
+                st.update(is_error=True, subtype="Claude initialization timed out")
+            if guard:
+                guard.sanitize_result(st, "".join(errors))
+            elif st["exit"] != 0 or st.get("is_error"):
+                st["stderr"] = "".join(errors)[-2000:]
         return st
 
     def handle(self, d: dict, job: Job, st: dict) -> None:
@@ -735,9 +851,8 @@ class ClaudeCode(CliBackend):
         """Skills and slash commands available here, as Claude Code lists them.
 
         Each turn's init event refreshes the list. Before the first turn, start the
-        CLI in the project, read its init event (which comes before any model call)
-        and stop it. It runs with Haiku and no tools, so even if a request slips out
-        before the process is stopped it costs next to nothing.
+        CLI's read-only initialize control query. It sends no user prompt and does
+        not fall back to a model request.
 
         The list is kept while what it depends on (catalog_key_for) stays the same. The
         page asks on every "/" typed until it has one, so a lookup that failed answers
@@ -760,36 +875,23 @@ class ClaudeCode(CliBackend):
     def _read_catalog(self, exe: str | None, root: Path, key: tuple) -> dict:
         if not exe:
             return {"error": "Claude Code CLI not found"}
-        bad = self.preflight(root)          # the account check of a turn, before any start
+        bad = self.preflight(root)
         if bad:
             return {"error": bad}
-        use_config_dir()
-        cmd = [exe, "-p", "--model", "haiku", "--tools", "", "--no-session-persistence",
-               "--output-format", "stream-json", "--verbose"]
         try:
-            proc = start(cmd, cwd=root, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
-        except OSError as e:
-            return {"error": f"Could not start Claude Code: {e}"}
-        timer = threading.Timer(60, kill_tree, args=(proc,))
-        timer.start()
-        try:
-            proc.stdin.write("ok")
-            proc.stdin.close()
-            for line in proc.stdout:
-                try:
-                    d = json.loads(line)
-                except ValueError:
-                    continue
-                if d.get("type") == "system" and d.get("subtype") == "init":
-                    self._remember_catalog(d, key)
-                    break
-        except OSError:
-            pass
-        finally:
-            timer.cancel()
-            kill_tree(proc)
-        return self.catalog or {"error": "Claude Code did not report its commands"}
+            payload = control_query(exe, root=root)
+        except (OSError, ValueError) as error:
+            return {"error": "Claude Code did not report its commands: " + str(error)[:200]}
+        if not any(name in payload for name in ("commands", "slash_commands", "skills")):
+            return {"error": "Claude Code did not report its commands"}
+        def names(items):
+            return [x if isinstance(x, str) else x.get("name") for x in items
+                    if isinstance(x, str) or isinstance(x, dict) and isinstance(x.get("name"), str)]
+        self._remember_catalog({"skills": names(payload.get("skills") or []),
+            "slash_commands": names(payload.get("commands") or payload.get("slash_commands") or []),
+            "terminal_slash_commands": payload.get("terminal_slash_commands") or [],
+            "agents": payload.get("agents") or [], "claude_code_version": payload.get("version")}, key)
+        return self.catalog
 
     def probe_rate(self, force: bool = True) -> dict:
         """Read subscription usage through the CLI; no model request is made."""

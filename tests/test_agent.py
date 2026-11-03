@@ -13,7 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from unittest import mock
 
@@ -25,6 +25,7 @@ import agent  # noqa: E402
 import backends  # noqa: E402
 import backend_claude  # noqa: E402
 import mcp_compile  # noqa: E402
+import httpbase  # noqa: E402
 from backend_claude import ClaudeCode  # noqa: E402
 from backend_codex import Codex  # noqa: E402
 from backend_openai import OpenAICompat  # noqa: E402
@@ -124,6 +125,7 @@ class ClaudeScope(unittest.TestCase):
     def setUp(self):
         no_account_lock(self)
         self.claude = ClaudeCode("claude", {"bin": "claude"})
+        self.claude.unavailable = lambda: None    # command construction needs no installed CLI
         self.m = manager(claude=self.claude)
         self.jobs = []
         self.m._run = lambda job, backend: self.jobs.append(job)    # never start Claude
@@ -1360,10 +1362,10 @@ def wait_done(job, timeout=10):
     raise AssertionError("turn did not finish")
 
 
-class FakeAPI(ThreadingHTTPServer):
+class FakeAPI(httpbase.Server):
     """Answers /chat/completions with the next scripted list of SSE chunks."""
 
-    def __init__(self, script):
+    def __init__(self, script, *, port=0):
         self.script, self.requests = list(script), []
 
         class H(BaseHTTPRequestHandler):
@@ -1394,7 +1396,7 @@ class FakeAPI(ThreadingHTTPServer):
                 except OSError:                                   # the client went (Stop)
                     pass
 
-        super().__init__(("127.0.0.1", 0), H)
+        super().__init__(("127.0.0.1", port), H)
         threading.Thread(target=self.serve_forever, daemon=True).start()
 
 
@@ -1641,9 +1643,10 @@ class ClaudeRemembers(unittest.TestCase):
     def lookups(self, lines, *calls):
         """How many times `claude` was started for commands(**kw) of each of `calls`."""
         from unittest import mock
-        with mock.patch.object(backend_claude, "start", side_effect=lambda *a, **k: FakeInit(lines)) as popen:
+        payload = json.loads(lines[0]) if lines else {}
+        with mock.patch.object(backend_claude, "control_query", return_value=payload) as query:
             answers = [self.claude.commands(self.root, **kw) for kw in calls]
-        return popen.call_count, answers
+        return query.call_count, answers
 
     def test_the_command_list_is_kept_until_a_skill_folder_changes(self):
         n, answers = self.lookups([self.INIT], {}, {})

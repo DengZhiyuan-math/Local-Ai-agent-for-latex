@@ -57,6 +57,21 @@ class Failing(httpbase.Handler):
         return self._json({"job": int(body["job"])})       # TypeError for None
 
 
+class Binding(unittest.TestCase):
+    def test_loopback_listener_serves_without_reverse_dns(self):
+        with mock.patch.object(socket, "getfqdn", side_effect=AssertionError("DNS is unavailable")) as fqdn:
+            srv = httpbase.Server(("127.0.0.1", 0), Failing)
+            self.addCleanup(srv.server_close)
+            threading.Thread(target=srv.serve_forever, daemon=True).start()
+            self.addCleanup(srv.shutdown)
+            self.assertEqual((srv.server_name, srv.server_port), srv.server_address)
+            opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+            with opener.open(f"http://127.0.0.1:{srv.server_port}/ok", timeout=5) as response:
+                self.assertEqual(response.status, 200)
+                self.assertEqual(json.load(response), {"ok": True})
+            fqdn.assert_not_called()
+
+
 class Answers(unittest.TestCase):
     def setUp(self):
         self.srv = httpbase.Server(("127.0.0.1", 0), Failing)

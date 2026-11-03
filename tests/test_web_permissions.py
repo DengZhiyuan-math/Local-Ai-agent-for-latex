@@ -59,6 +59,35 @@ class PermissionRoundTrip(unittest.TestCase):
                 cc.stop(j)
                 thread.join(3)
 
+    def test_checked_permission_preview_preserves_the_original_tool_input(self):
+        from permissions import WebPermissions
+        with tempfile.TemporaryDirectory() as td, mock.patch.dict(os.environ, {'PRISM_STATE_DIR': td}):
+            broker, job = WebPermissions(), Job(8)
+            original = {'query': 'Explain the unapproved $z$'}
+            answer = {}
+            failure = []
+            def request():
+                try:
+                    answer.update(broker.request(job, 'web-preview', 'WebSearch', original,
+                        'chat-1', 'project-a', display_input={'query': 'Mathematical preview withheld.'}))
+                except Exception as error:
+                    failure.append(error)
+            thread = threading.Thread(target=request)
+            thread.start()
+            deadline = time.monotonic() + 2
+            while thread.is_alive() and not job.events and time.monotonic() < deadline:
+                time.sleep(.01)
+            try:
+                self.assertFalse(failure, failure)
+                event = next(e for e in job.events if e['t'] == 'permission')
+                self.assertEqual(event['input'], {'query': 'Mathematical preview withheld.'})
+                self.assertEqual(broker.resolve(job, 'web-preview', 'allow'), {'ok': True})
+                thread.join(2)
+                self.assertEqual(answer, {'behavior': 'allow', 'updatedInput': original})
+            finally:
+                broker.cancel(job)
+                thread.join(2)
+
 
 class GrantBoundaries(unittest.TestCase):
     def setUp(self):

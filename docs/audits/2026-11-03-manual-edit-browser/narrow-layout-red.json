@@ -1,0 +1,175 @@
+{
+  "successful": false,
+  "checks": [
+    {
+      "name": "automatic compilation is off",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "typing starts at the end of the source",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "typing during Edit leaves disk unchanged",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "final refresh keeps saves held",
+      "passed": true,
+      "details": {
+        "draft": "\\documentclass{article}\n\\begin{document}\n\\emph{compact} is a finite covering property.\n\\emph{unresolved}\nExisting $\\ell+\\ell_+$.\nLet $x$ be a real number.\n\\input{sections/intro}\n\\end{document}\n\n% Manual note A.\n",
+        "held": true,
+        "trusted": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "writes": []
+      }
+    },
+    {
+      "name": "manual input uses trusted browser events",
+      "passed": true,
+      "details": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "queued manual text saves at turn end",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "Agent diff excludes manual file",
+      "passed": true,
+      "details": [
+        {
+          "created": false,
+          "deleted": false,
+          "diff": "--- a/sections/intro.tex\n+++ b/sections/intro.tex\n@@ -1,4 +1,4 @@\n \\section{Intro}\n-\\emph{compact} means a conflicting definition.\n+\\emph{compact} means a checked definition.\n $x$ denotes a complex number.\n \\input{missing}\n",
+          "lines": [
+            [
+              1,
+              2
+            ]
+          ],
+          "path": "sections/intro.tex",
+          "undoable": true
+        }
+      ]
+    },
+    {
+      "name": "queued save has no 409",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "Undo restores Agent bytes and keeps manual file",
+      "passed": true,
+      "details": [
+        {
+          "restored": [
+            "sections/intro.tex"
+          ],
+          "skipped": []
+        }
+      ]
+    },
+    {
+      "name": "typing starts at the end of the source",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "final refresh keeps saves held",
+      "passed": true,
+      "details": {
+        "draft": "\\documentclass{article}\n\\begin{document}\n\\emph{compact} is a finite covering property.\n\\emph{unresolved}\nExisting $\\ell+\\ell_+$.\nLet $x$ be a real number.\n\\input{sections/intro}\n\\end{document}\n\n% Manual note A.\n\n% Manual note B.\n",
+        "held": true,
+        "trusted": [
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true,
+          true
+        ],
+        "writes": []
+      }
+    },
+    {
+      "name": "manual input uses trusted browser events",
+      "passed": true,
+      "details": [
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "name": "same-file conflict retains both versions",
+      "passed": true,
+      "details": null
+    },
+    {
+      "name": "Agent commit exists separately",
+      "passed": true,
+      "details": null
+    }
+  ],
+  "error": "{\"success\":false,\"data\":null,\"error\":\"Element '@e63' is covered by <div#pdf-empty> at its click point, so the input would land on that element instead. Dismiss or interact with the covering element first (it is often a dialog, banner, or sticky header).\"}\n"
+}

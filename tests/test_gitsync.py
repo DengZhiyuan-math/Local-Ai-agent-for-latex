@@ -41,6 +41,41 @@ class Clock:
         self.now += seconds
 
 
+class WorkerShutdown(unittest.TestCase):
+    def test_flush_waits_for_native_watch_cleanup_before_returning(self):
+        root = tmpdir()
+        sync = gitsync.GitSync(lambda: root, lambda: "build")
+        started, closing, release, closed, flushed = (threading.Event() for _ in range(5))
+        events = mock.Mock()
+
+        def close():
+            closing.set()
+            release.wait(5)
+            closed.set()
+
+        events.close.side_effect = close
+
+        def flush():
+            sync.flush()
+            flushed.set()
+
+        with mock.patch.object(gitsync.diskwatch, "Changes", return_value=events), \
+                mock.patch.object(sync, "_start", side_effect=started.set), \
+                mock.patch.object(sync, "active", return_value=False):
+            sync.start()
+            self.assertTrue(started.wait(3))
+            flusher = threading.Thread(target=flush)
+            flusher.start()
+            try:
+                self.assertTrue(closing.wait(3))
+                self.assertFalse(flushed.wait(.1), "flush returned while native cleanup was still running")
+            finally:
+                release.set()
+                flusher.join(3)
+            self.assertTrue(closed.is_set())
+            self.assertTrue(flushed.is_set())
+
+
 @unittest.skipUnless(shutil.which("git"), "needs git")
 class GitSyncTest(unittest.TestCase):
     def setUp(self):

@@ -1,0 +1,291 @@
+{
+  "source_sha256": "8af8528d56b2868ff0586267ea771cbae1775488f619d7ec5d721420fe7457d0",
+  "publication_source_sha256": "c1dabaf85d8e1d27331764fbaee8a05d2b1c3eed536401e4cafd67399ac42ef0",
+  "post_validation_format_delta": {
+    "file": "tests/test_deepcode_research_http.py",
+    "change": "Remove one trailing blank line found by git diff --cached --check; no executable statement changed.",
+    "validated_sha256": "a754f38ded214b3e3ebd9355879fe5e7333399f420168ec24c248703b3da0b7d",
+    "publication_sha256": "5e08588f194f23c2a86d0115ec3cda77b619459fb38a00e1e97fc4c851bbf304",
+    "reconstruct_validated_bytes": "Append one LF byte to the published file.",
+    "python_ast_including_locations_equal": true
+  },
+  "full_discovery": {
+    "tests": 1544,
+    "passed": 1488,
+    "skipped": [
+      {
+        "test": "test_backend_contracts.CodexPermissions.test_command_policy_enforces_scope_with_the_native_sandbox",
+        "reason": "Codex CLI is not installed"
+      },
+      {
+        "test": "test_build.Platform.test_ascii_alias_for_names_the_code_page_cannot_spell",
+        "reason": "Windows code pages"
+      },
+      {
+        "test": "test_build.RealBuilds.test_a_broken_aux_from_an_earlier_build_is_repaired",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_biber_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_biblatex_with_biber",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_bibtex_and_cross_references",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_bibtex_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_ctex_in_a_chinese_folder",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_errors_draft_goes_on_and_strict_stops",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_fontspec_documents_are_built_with_xelatex",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_index_glossary_and_nomenclature",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_stop_and_time_limit",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_build.RealBuilds.test_the_projects_own_bst_and_included_subfolders",
+        "reason": "needs a TeX distribution (pdflatex on PATH)"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_gui_finds_bundled_native_cli_and_follows_updates",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_missing_desktop_installation_is_unavailable",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_one_disappearing_bundle_does_not_hide_another_installation",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_discovery.CodexDiscovery.test_override_and_path_take_precedence",
+        "reason": "Windows desktop installation"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_edit_compile_mcp_works_with_native_command_network_disabled",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_existing_nested_metadata_and_explicit_metadata_scopes_stay_read_only",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_full_project_edit_cannot_patch_a_sibling_outside_the_project",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_global_hooks_do_not_run_in_editor_turns",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_missing_windows_setting_reproduces_policy_rejection",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_native_apply_patch_edits_scoped_file_and_denies_other_files",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_reads_work_and_native_writes_follow_each_turn_scope",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_codex_runtime.CodexRuntime.test_user_mcp_configuration_is_ignored_without_modifying_it",
+        "reason": "opt-in Windows sandbox startup"
+      },
+      {
+        "test": "test_diskprojects.NativeNotifications.test_watcher_survives_the_creating_request_thread",
+        "reason": "Windows I/O belongs to its issuing thread"
+      },
+      {
+        "test": "test_hub.Instances.test_a_pid_given_to_a_new_process_is_not_the_server",
+        "reason": "this system does not say when a process started"
+      },
+      {
+        "test": "test_install_ps1.Install.test_a_file_or_a_bad_name_is_refused_in_a_sentence",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_checkout_of_another_repository_is_refused",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_default_folder_is_under_localappdata",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_existing_checkout_is_updated_fast_forward",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_existing_checkout_that_cannot_update_is_kept",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_failure_piped_into_iex_keeps_the_shell_open",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_foreign_folder_is_refused",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_git_missing_is_installed_with_winget",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_parameters_when_run_as_a_file",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_piped_into_iex",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_and_git_found_fresh_clone",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_missing_is_installed_with_winget_for_the_user",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_missing_without_winget_is_never_installed_for_real",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_python_store_alias_is_skipped",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Install.test_without_git_or_winget_a_zip_is_unpacked",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_parses_in_every_powershell",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_script_is_plain_ascii",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_shortcut_uses_the_python_it_is_given",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_install_ps1.Script.test_windows_powershell_is_5_1",
+        "reason": "needs Windows and PowerShell"
+      },
+      {
+        "test": "test_instance_lifecycle.Handover.test_venv_editor_releases_its_redirectors_cwd_before_renaming",
+        "reason": "Windows venv redirector holds the working directory"
+      },
+      {
+        "test": "test_instances.Startup.test_real_windows_venv_startup_uses_the_servers_identity",
+        "reason": "Windows venv redirector"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_browser_selection_scripts_compile_natively",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_bundle_runs_launcher_with_quoted_paths",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_macos_app.MacApp.test_installer_refuses_an_unrelated_existing_app",
+        "reason": "Outside current local fixture acceptance: native app build/sign/install/AppleScript"
+      },
+      {
+        "test": "test_proc.Tree.test_if_the_server_dies_what_it_started_ends_with_it",
+        "reason": "job objects: Windows"
+      },
+      {
+        "test": "test_server.Files.test_save_while_another_program_reads_the_file",
+        "reason": "Windows file sharing"
+      },
+      {
+        "test": "test_synctex.SourceAndBack.test_a_real_build_goes_from_source_to_pdf_and_back",
+        "reason": "needs a TeX distribution"
+      },
+      {
+        "test": "test_tools_download.LaTeXAndClaude.test_claude_code_is_found_in_local_bin_once_installed",
+        "reason": "Claude Code is installed on this computer, where it is looked for too"
+      }
+    ],
+    "failures": [],
+    "errors": [],
+    "seconds": 791.139,
+    "modules": 96,
+    "process_exit": 0,
+    "source_drift": [],
+    "blocked_processes": [],
+    "blocked_connections": [],
+    "isolation": "temporary PRISM/XDG/user-path defaults; HOME/CODEX_HOME not repurposed; local-only Git protocol; Python process/network audit guards; no claim of a global OS sandbox for native descendants"
+  },
+  "focused_consumers": {
+    "tests": 86,
+    "passed": 74,
+    "skipped": {
+      "real_tex": 11,
+      "windows_code_pages": 1
+    },
+    "process_exit": 0
+  },
+  "path_regression": {
+    "public_config_tests": 7,
+    "windows_path_inputs": 11,
+    "original_failing_assertion_retained": true
+  },
+  "source_changes_after_browser_acceptance": [
+    "prism_local/projectconfig.py",
+    "tests/test_hub.py",
+    "tests/test_projectconfig.py"
+  ],
+  "source_review": {
+    "standards_findings": 0,
+    "spec_findings": 0,
+    "reviewed_research_source_sha256": "d67662acc726d7317730b281d47c16fc96dd549aa0b05590fa9d29af8cda2823",
+    "focused_independent_tests": 51,
+    "frontend_tests": 13,
+    "joined_javascript_http_checks": 2,
+    "followup": "The output-folder fix and cache fixture were separately reviewed. Research/frontend source hashes did not change."
+  },
+  "limits": {
+    "native_windows": false,
+    "real_models_vendor_cli": false,
+    "product_real_github": false,
+    "real_tex": false,
+    "installed_app": false,
+    "human_product_acceptance": false
+  },
+  "record_source": "Curated from the final source-bound local reports. No temporary project state, private receipt keys, browser profiles or raw operation logs are included.",
+  "recorded_at_head": "b32b3a852a739abc915b053b12506e0abdd827b7",
+  "followup_review": "../2026-10-29-pr27-review/README.md",
+  "record_scope": "Historical initial PR evidence; the follow-up review records subsequent fixes and validation."
+}

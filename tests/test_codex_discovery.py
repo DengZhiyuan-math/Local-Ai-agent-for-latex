@@ -56,17 +56,21 @@ class CodexDiscovery(unittest.TestCase):
                 path.parent.mkdir(parents=True)
                 path.touch()
             real_stat = Path.stat
+            observed = []
 
             def stat(path, *args, **kwargs):
                 if path == gone:
+                    observed.append(path)
                     raise FileNotFoundError(str(path))
                 return real_stat(path, *args, **kwargs)
 
             with mock.patch.dict(os.environ, {"LOCALAPPDATA": tmp}), \
                     mock.patch("backend_codex.find_bin", return_value=None), \
+                    mock.patch.object(Path, "glob", return_value=iter([gone, good])), \
                     mock.patch.object(Path, "is_file", return_value=True), \
                     mock.patch.object(Path, "stat", stat):
                 self.assertEqual(codex_bin(), str(good))
+            self.assertIn(gone, observed, "The bundle disappears after discovery, during inspection.")
 
 
 class CodexCompatibility(unittest.TestCase):

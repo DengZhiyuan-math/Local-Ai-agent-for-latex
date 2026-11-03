@@ -6,10 +6,11 @@ import subprocess
 import sys
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 
 import instances
+import httpbase
 
 
 def main():
@@ -57,7 +58,7 @@ def main():
                 self.wfile.write(b"{}")
                 threading.Thread(target=self.server.shutdown, daemon=True).start()
 
-        with ThreadingHTTPServer(("127.0.0.1", args.port), Handler) as server:
+        with httpbase.Server(("127.0.0.1", args.port), Handler) as server:
             life.publish(f"http://127.0.0.1:{server.server_port}/", server.server_port)
             server.serve_forever(poll_interval=0.05)
     return 0

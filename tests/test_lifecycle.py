@@ -70,6 +70,20 @@ def wait_file(path, timeout=15):
     raise AssertionError(f"{path} did not appear")
 
 
+class LifecycleDiagnostics(unittest.TestCase):
+    def test_large_child_failure_output_is_drained_and_keeps_a_bounded_tail(self):
+        proc = subprocess.Popen([sys.executable, "-c",
+                                 "import sys; sys.stderr.write('x' * 262144 + 'lifecycle-error-tail'); sys.exit(1)"],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW)
+        self.addCleanup(proc.stdout.close)
+        self.addCleanup(stop, proc)
+        case = ServerLifecycle("test_silent_page_goes_stale")
+        case.proc = proc
+        with self.assertRaisesRegex(AssertionError, "lifecycle-error-tail") as failed:
+            case.assertExitsWithin(0, 1, time.monotonic())
+        self.assertLess(len(str(failed.exception)), 40000)
+
+
 class ServerLifecycle(unittest.TestCase):
     def start(self, timings, *extra, project=PROJECT, port="0"):
         self.tmp = tmpdir()
@@ -78,15 +92,15 @@ class ServerLifecycle(unittest.TestCase):
             [sys.executable, str(SERVER), str(project), "--port", port, "--no-browser",
              "--exit-when-idle", "--idle-timings", timings, "--ready-file", str(self.ready),
              *extra], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
-            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state")})
+            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state"), "PYTHONFAULTHANDLER": "1"})
         self.addCleanup(self.proc.stdout.close)
         self.addCleanup(stop, self.proc)
         return wait_file(self.ready)["url"]
 
     def assertExitsWithin(self, lo, hi, t0):
-        self.proc.wait(hi + 5)
+        output, _ = self.proc.communicate(timeout=hi + 5)
         took = time.monotonic() - t0
-        self.assertEqual(self.proc.returncode, 0)
+        self.assertEqual(self.proc.returncode, 0, output[-32768:].decode("utf-8", "replace"))
         self.assertGreaterEqual(took, lo)
         self.assertLessEqual(took, hi)
         self.assertFalse(self.ready.exists(), "ready file should be removed on exit")
@@ -262,6 +276,34 @@ class ServerLifecycle(unittest.TestCase):
         self.proc.send_signal(signal.SIGTERM)
         self.assertEqual(self.proc.wait(10), 0)
         self.assertFalse(self.ready.exists(), "the instance file goes, as after the last page")
+
+    @unittest.skipIf(os.name == "nt", "signals: Linux and macOS")
+    def test_sigterm_as_instance_is_published_stops_cleanly(self):
+        self.tmp = tmpdir()
+        self.ready = self.tmp / "ready.json"
+        script = """
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import instances, server
+publish = instances.Serving.publish
+def signal_after_publish(self, *args, **kwargs):
+    result = publish(self, *args, **kwargs)
+    os.kill(os.getpid(), signal.SIGTERM)
+    return result
+instances.Serving.publish = signal_after_publish
+sys.argv = [server.__file__, sys.argv[2], '--port', '0', '--no-browser',
+            '--ready-file', sys.argv[3]]
+server.main()
+"""
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", script, str(REPO / "prism_local"), str(self.copy_project()), str(self.ready)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
+            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state"), "PYTHONFAULTHANDLER": "1"})
+        self.addCleanup(self.proc.stdout.close)
+        self.addCleanup(stop, self.proc)
+        output, _ = self.proc.communicate(timeout=10)
+        self.assertEqual(self.proc.returncode, 0, output[-32768:].decode("utf-8", "replace"))
+        self.assertFalse(self.ready.exists(), "published instances must already support signal cleanup")
 
     def test_port_in_use_moves_up(self):
         blocker = socket.socket()

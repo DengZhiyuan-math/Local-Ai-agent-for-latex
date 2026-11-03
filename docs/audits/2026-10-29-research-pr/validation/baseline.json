@@ -1,0 +1,9 @@
+{
+  "head": "1d7b7c9735cba777d985d635b97eaab8fdf5899a",
+  "files": {
+    "prism_local/projectconfig.py": "d3a07a5bf314777ed8c5d77205f6e00b3d95f21cf20ecf3d8eea36c19c27f2d1",
+    "tests/test_projectconfig.py": "3af06b0e3bcfa9bb0e0a2bdf69aaf66978de514524fa6348acacf9a3949dfef8",
+    "tests/test_project.py": "e80261981e67775d4ab1345b0fc56cb8c9a3454a07df6ed2cf1ca28d185e0c07"
+  },
+  "note": "Historical baseline used by the recorded runner. Use --final for current complete discovery."
+}
