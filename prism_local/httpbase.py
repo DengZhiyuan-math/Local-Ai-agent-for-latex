@@ -417,13 +417,13 @@ class App:
         line, its folder)."""
         import selfupdate
         a, srv, life = self.args, self.server, self.life
+        stop_on_signals(srv)
         life.publish(self.url, srv.server_address[1])
         if not a.no_browser:
             url = self.url
             threading.Timer(0.5, lambda: webbrowser.open(url)).start()
         if a.exit_when_idle:
             threading.Thread(target=idle_watchdog, daemon=True, args=(srv, self.presence, busy, what)).start()
-        stop_on_signals(srv)
         started()
         threading.Thread(target=selfupdate.update, daemon=True).start()   # the page then offers a restart
         try:

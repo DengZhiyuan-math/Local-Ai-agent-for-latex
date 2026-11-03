@@ -277,6 +277,34 @@ class ServerLifecycle(unittest.TestCase):
         self.assertEqual(self.proc.wait(10), 0)
         self.assertFalse(self.ready.exists(), "the instance file goes, as after the last page")
 
+    @unittest.skipIf(os.name == "nt", "signals: Linux and macOS")
+    def test_sigterm_as_instance_is_published_stops_cleanly(self):
+        self.tmp = tmpdir()
+        self.ready = self.tmp / "ready.json"
+        script = """
+import os, signal, sys
+sys.path.insert(0, sys.argv[1])
+import instances, server
+publish = instances.Serving.publish
+def signal_after_publish(self, *args, **kwargs):
+    result = publish(self, *args, **kwargs)
+    os.kill(os.getpid(), signal.SIGTERM)
+    return result
+instances.Serving.publish = signal_after_publish
+sys.argv = [server.__file__, sys.argv[2], '--port', '0', '--no-browser',
+            '--ready-file', sys.argv[3]]
+server.main()
+"""
+        self.proc = subprocess.Popen(
+            [sys.executable, "-c", script, str(REPO / "prism_local"), str(self.copy_project()), str(self.ready)],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, creationflags=NO_WINDOW,
+            env={**os.environ, "PRISM_STATE_DIR": str(self.tmp / "state"), "PYTHONFAULTHANDLER": "1"})
+        self.addCleanup(self.proc.stdout.close)
+        self.addCleanup(stop, self.proc)
+        output, _ = self.proc.communicate(timeout=10)
+        self.assertEqual(self.proc.returncode, 0, output[-32768:].decode("utf-8", "replace"))
+        self.assertFalse(self.ready.exists(), "published instances must already support signal cleanup")
+
     def test_port_in_use_moves_up(self):
         blocker = socket.socket()
         blocker.bind(("127.0.0.1", 0))

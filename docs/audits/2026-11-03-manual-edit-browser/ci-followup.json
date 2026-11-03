@@ -1,0 +1,52 @@
+{
+  "date": "2026-11-03",
+  "failed_run": "https://github.com/DengZhiyuan-math/Local-Ai-agent-for-latex/actions/runs/41547088036",
+  "failed_head": "cfdb7336b2d52d1f947c529b46a809ae27ce14e8",
+  "jobs": {
+    "success": 11,
+    "failure": 1
+  },
+  "failure": {
+    "runner": "macos-15-intel",
+    "python": "3.9.25",
+    "test": "test_lifecycle.ServerLifecycle.test_sigterm_stops_the_server_cleanly",
+    "assertion": "-15 != 0"
+  },
+  "reproduction": "test_lifecycle.ServerLifecycle.test_sigterm_as_instance_is_published_stops_cleanly sends SIGTERM immediately after the real instance publishes readiness.",
+  "root_cause": "Readiness was published before graceful signal handlers were registered. A signal in that interval terminated the process without cleanup.",
+  "fix": "Register the existing signal handlers before publishing readiness.",
+  "reports": {
+    "red": {
+      "tests": 1,
+      "passed": 0,
+      "successful": false,
+      "source_drift": [],
+      "skipped": [],
+      "blocked_processes": [],
+      "blocked_connections": []
+    },
+    "focused-green": {
+      "tests": 13,
+      "passed": 13,
+      "successful": true,
+      "source_drift": [],
+      "skipped": [],
+      "blocked_processes": [],
+      "blocked_connections": []
+    },
+    "regression-green": {
+      "tests": 45,
+      "passed": 45,
+      "successful": true,
+      "source_drift": [],
+      "skipped": [],
+      "blocked_processes": [],
+      "blocked_connections": []
+    }
+  },
+  "source_sha256": {
+    "prism_local/httpbase.py": "fa9e5b2452e993bedfa8021ad472d98bec3e85964e4af317307afb3cdf1cb30a",
+    "tests/test_lifecycle.py": "15a18dce0e9ce7be9891d66c8de39febd0226cdbb6ed9cd2904ebc799fb3badd"
+  },
+  "scope": "Local real-server, HTTP and subprocess fixtures; no installed app, live provider, CI rerun or merge."
+}
