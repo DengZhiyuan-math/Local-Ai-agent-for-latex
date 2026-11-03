@@ -21,15 +21,18 @@ from proc import run as run_bounded
 import registry
 
 SANDBOX = Path("/usr/bin/sandbox-exec")
-MAX_SCAN_ENTRIES = 50000
-MAX_SCAN_DIRS = 5000
+# CLI profiles include installed plugin caches; keep the full scan bounded.
+MAX_SCAN_ENTRIES = 250000
+MAX_SCAN_DIRS = 50000
 
 
 def environment(base_env: dict, scratch: Path) -> dict:
     """Keep auth and HOME intact while confining temporary files to this turn."""
     temporary = Path(scratch).resolve() / "tmp"
     temporary.mkdir(parents=True, exist_ok=True)
-    return {**base_env, "TMPDIR": str(temporary), "TMP": str(temporary),
+    # Claude's internal files use its own override, not macOS TMPDIR.
+    return {**base_env, "CLAUDE_CODE_TMPDIR": str(temporary),
+            "TMPDIR": str(temporary), "TMP": str(temporary),
             "TEMP": str(temporary), "PYTHONDONTWRITEBYTECODE": "1"}
 
 
@@ -147,6 +150,9 @@ def _profile(cmd, root, profile, scratch, *, private=(), provider='claude', runt
              '(deny network-outbound (remote ip "localhost:*"))',
              # Authentication uses system trust/keychain services; this permits
              # service lookup, not arbitrary Apple events or host automation.
+             # CFPreferences also reads its system shared-memory cache. Without
+             # it, Codex cannot synchronize mandatory managed preferences.
+             '(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))',
              '(allow mach-lookup (global-name "com.apple.securityd") (global-name "com.apple.trustd") '
              '(global-name "com.apple.trustd.agent") (global-name "com.apple.cfprefsd.agent") '
              '(global-name "com.apple.cfprefsd.daemon") (global-name "com.apple.networkd") '

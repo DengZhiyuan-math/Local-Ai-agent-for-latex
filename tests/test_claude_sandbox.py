@@ -13,15 +13,35 @@ class ClaudeSandbox(unittest.TestCase):
         import claude_sandbox
         with tempfile.TemporaryDirectory() as temporary:
             scratch = Path(temporary).resolve()
-            original = {"HOME": "/unchanged-home", "TOKEN_FOR_CLI": "fixture"}
+            original = {"HOME": "/unchanged-home", "TOKEN_FOR_CLI": "fixture",
+                        "CLAUDE_CODE_TMPDIR": "/outside-private-scratch"}
             env = claude_sandbox.environment(original, scratch)
             self.assertEqual(env["HOME"], "/unchanged-home")
             self.assertEqual(env["TOKEN_FOR_CLI"], "fixture")
-            self.assertEqual(original, {"HOME": "/unchanged-home", "TOKEN_FOR_CLI": "fixture"})
+            self.assertEqual(original, {"HOME": "/unchanged-home", "TOKEN_FOR_CLI": "fixture",
+                                        "CLAUDE_CODE_TMPDIR": "/outside-private-scratch"})
             self.assertTrue(Path(env["TMPDIR"]).is_dir())
             self.assertTrue(Path(env["TMPDIR"]).is_relative_to(scratch))
             self.assertEqual(env["TMPDIR"], env["TMP"])
             self.assertEqual(env["TMPDIR"], env["TEMP"])
+            self.assertEqual(env["CLAUDE_CODE_TMPDIR"], env["TMPDIR"])
+
+    def test_cli_profile_can_include_large_installed_plugin_cache(self):
+        import claude_sandbox
+        import sys
+        from unittest import mock
+        if not DIRECTORY_DESCRIPTORS:
+            self.skipTest("Directory descriptors are unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            top = Path(temporary).resolve()
+            root, profile, scratch, state = [top / name for name in ('project', 'profile', 'scratch', 'state')]
+            for path in (root, profile, scratch, state):path.mkdir()
+            for index in range(5001):
+                (profile / str(index)).mkdir()
+            command = [sys.executable, '-I', '-c', 'pass']
+            with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}):
+                wrapped = claude_sandbox.wrap(command, root, profile, scratch)
+            self.assertEqual(wrapped[3:], command)
 
     def test_wrap_keeps_the_cli_argv_behind_a_specific_native_boundary(self):
         import claude_sandbox
@@ -164,6 +184,57 @@ class ClaudeSandbox(unittest.TestCase):
 
 
 class NativeClaudeSandbox(unittest.TestCase):
+    def test_system_preference_cache_is_read_only_and_name_scoped(self):
+        import claude_sandbox
+        import ctypes
+        import mmap
+        import subprocess
+        import sys
+        import uuid
+        from unittest import mock
+        if sys.platform != 'darwin' or not claude_sandbox.SANDBOX.is_file():
+            self.skipTest('The native CLI boundary requires macOS sandbox-exec.')
+        libc = ctypes.CDLL(None, use_errno=True)
+        # On macOS, mode is variadic; ARM64 passes it differently from fixed args.
+        libc.shm_open.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        libc.shm_unlink.argtypes = [ctypes.c_char_p]
+        suffix = uuid.uuid4().hex[:8]
+        names = [('apple.cfprefs.prism-' + suffix).encode(), ('prism-private-' + suffix).encode()]
+        created = []
+        try:
+            for name in names:
+                fd = libc.shm_open(name, os.O_CREAT | os.O_EXCL | os.O_RDWR, ctypes.c_uint(0o644))
+                self.assertGreaterEqual(fd, 0, ctypes.get_errno())
+                created.append(name)
+                try:
+                    self.assertTrue(os.fstat(fd).st_mode & 0o400, 'fixture must be owner-readable')
+                    os.ftruncate(fd, 7)
+                    with mmap.mmap(fd, 7) as data:data[:] = b'fixture'
+                finally: os.close(fd)
+            with tempfile.TemporaryDirectory() as temporary:
+                top = Path(temporary).resolve()
+                root, profile, scratch, state = [top / name for name in ('project', 'profile', 'scratch', 'state')]
+                for folder in (root, profile, scratch, state):folder.mkdir()
+                code = '''import ctypes,errno,mmap,os,sys
+libc=ctypes.CDLL(None,use_errno=True)
+libc.shm_open.argtypes=[ctypes.c_char_p,ctypes.c_int]
+name,other=(value.encode() for value in sys.argv[1:])
+fd=libc.shm_open(name,os.O_RDONLY)
+assert fd >= 0, ctypes.get_errno()
+with mmap.mmap(fd,7,access=mmap.ACCESS_READ) as data:assert data[:] == b'fixture'
+os.close(fd)
+for candidate,flags in [(name,os.O_RDWR),(other,os.O_RDONLY)]:
+    fd=libc.shm_open(candidate,flags)
+    assert fd == -1 and ctypes.get_errno() in (errno.EACCES,errno.EPERM)
+'''
+                command = [sys.executable, '-I', '-B', '-c', code, *[name.decode() for name in names]]
+                with mock.patch.dict(os.environ, {'PRISM_STATE_DIR': str(state)}):
+                    wrapped = claude_sandbox.wrap(command, root, profile, scratch, provider='codex')
+                    result = subprocess.run(wrapped, cwd=root, capture_output=True, text=True, timeout=10)
+                self.assertEqual(result.returncode, 0, result.stderr)
+        finally:
+            for name in created:libc.shm_unlink(name)
+
     def test_native_runtime_checks_writes_private_reads_and_both_loopbacks(self):
         import claude_sandbox
         import sys
