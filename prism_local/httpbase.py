@@ -251,9 +251,17 @@ def stop_on_signals(srv: Server) -> None:
 
 
 def listen(handler, port: int, tries: int) -> Server:
-    """A server on 127.0.0.1:port, or on one of the next tries-1 ports (0: any free port)."""
+    """Listen on loopback; multiple tries allow nearby ports, then an OS-assigned port.
+
+    A single try stays on the requested port, as a restart must keep the browser's URL.
+    Port 0 always asks the OS for a free port directly.
+    """
+    ports = [port]
+    if port and tries > 1:
+        ports.extend(range(port + 1, min(port + tries, 65536)))
+        ports.append(0)              # Windows may reserve the entire preferred range.
     err = None
-    for p in range(port, port + max(1, tries)) if port else [0]:
+    for p in ports:
         try:
             return Server(("127.0.0.1", p), handler)
         except OSError as e:
@@ -341,7 +349,8 @@ class App:
         """The command-line options both servers take."""
         ap.add_argument("--port", type=int, default=port, help="port (0: any free port)")
         ap.add_argument("--port-tries", type=int, default=1,
-                        help="if the port is taken, try this many ports upwards")
+                        help="try this many ports upwards; with more than one try, "
+                             "fall back to an OS-assigned port if none is available")
         ap.add_argument("--no-browser", action="store_true")
         ap.add_argument("--exit-when-idle", action="store_true",
                         help=f"exit shortly after the last {pages} is closed")

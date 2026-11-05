@@ -127,6 +127,46 @@ class Answers(unittest.TestCase):
             log.assert_not_called()
 
 
+class Listening(unittest.TestCase):
+    def test_reserved_range_falls_back_to_a_working_loopback_server(self):
+        """Windows can reserve every port the project launcher tries, not just one."""
+        bind = httpbase.Server.server_bind
+        attempted = []
+
+        def reserved_range(server):
+            port = server.server_address[1]
+            attempted.append(port)
+            if 9309 <= port <= 9328:
+                error = PermissionError(13, "port reserved by Windows")
+                error.winerror = 10013
+                raise error
+            return bind(server)
+
+        with mock.patch.object(httpbase.Server, "server_bind", reserved_range):
+            srv = httpbase.listen(Failing, 9309, 20)
+        self.addCleanup(srv.server_close)
+        self.assertEqual(attempted, [*range(9309, 9329), 0])
+        host, port = srv.server_address
+        self.assertEqual(host, "127.0.0.1")
+        self.assertGreater(port, 0)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        http = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with http.open(f"http://{host}:{port}/ok", timeout=5) as response:
+            self.assertEqual((response.status, json.loads(response.read())), (200, {"ok": True}))
+
+    def test_one_port_stays_strict_and_failed_fallback_is_not_retried(self):
+        # A restart uses tries=1 so the browser can reconnect to the same address.
+        for port, tries, expected in ((9309, 1, [9309]), (0, 20, [0]),
+                                      (9309, 2, [9309, 9310, 0]), (65535, 20, [65535, 0])):
+            with self.subTest(port=port, tries=tries), mock.patch.object(
+                    httpbase, "Server", side_effect=OSError("fixture bind failure")) as server:
+                with self.assertRaisesRegex(OSError, "fixture bind failure"):
+                    httpbase.listen(Failing, port, tries)
+                self.assertEqual([call.args[0] for call in server.call_args_list],
+                                 [("127.0.0.1", p) for p in expected])
+
+
 class StaticAssets(unittest.TestCase):
     def test_a_browser_asset_burst_survives_an_accept_pause(self):
         # Browsers open several asset connections at once. Hold accept until every

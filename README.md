@@ -830,8 +830,12 @@ python3 launcher/make_desktop_entry.py --project ~/papers/my-paper --desktop    
   also send heartbeats, and one silent for 2 minutes counts as closed (after the computer
   sleeps, pages get a fresh 2 minutes). If a server stopped while its page stayed open, the
   page says so; click the shortcut again and it reconnects.
-- **Stable port.** Each project always gets the same port, between 8800 and 9799, so the
-  browser keeps its open tabs and chat per project. If it is taken, the next free one is used.
+- **Stable port.** Each project prefers the same port, between 8800 and 9799, so the
+  browser keeps its open tabs and chat per project. If it is unavailable, nearby ports are
+  tried next. If all 20 project ports (10 for Home) are taken or reserved by the operating
+  system, the launcher uses an OS-assigned free port and opens the actual address. Opening
+  it again reuses that running server. Internal restarts keep the current port so open
+  pages can reconnect.
 - **Logs.** `%LOCALAPPDATA%\prism-local\logs\<project>-<hash>.log` (`~/.local/state/prism-local/logs`
   on Linux), the previous run as `.log.1`. If a server cannot start, a dialog shows the log's end.
 - **Environment.** The shortcut runs in your normal user environment: TeX (`pdflatex`, `bibtex`
@@ -887,7 +891,9 @@ python launcher/prism_launcher.pyw [project | --home] [--browser window|app|defa
 ```
 
 - `--port 8765`: the port (`0`: any free port). The Home page uses 8790.
-- `--port-tries N`: if the port is taken, try the next N−1 ports.
+- `--port-tries N`: if the port is unavailable, try the next N−1 ports. With N greater
+  than 1, fall back to an OS-assigned free port if all N ports are unavailable. The default
+  of 1 requires the requested port.
 - `--no-browser`: do not open a browser page.
 - `--exit-when-idle`: exit about 10 seconds after the last page is closed. Without it, stop the
   server with Ctrl-C.
