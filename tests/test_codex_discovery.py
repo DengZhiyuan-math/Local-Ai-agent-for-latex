@@ -162,6 +162,41 @@ class CodexProtectedPaths(unittest.TestCase):
 
 
 class CodexIsolation(unittest.TestCase):
+    def test_child_turn_uses_its_own_runtime_and_keeps_security_and_login_environment(self):
+        inherited = {
+            "CODEX_WINDOWS_REGISTERED_CORE": "1",
+            "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY": "parent-app-package",
+            "CODEX_SANDBOX_NETWORK_DISABLED": "1",
+            "OPENAI_API_KEY": "fixture-key",
+        }
+
+        class Capture(Codex):
+            def command(self, job):
+                script = ("import json, os; print(json.dumps({k: os.environ[k] "
+                          "for k in " + repr([*inherited, "CODEX_HOME", "GIT_ALLOW_PROTOCOL"]) +
+                          " if k in os.environ}))")
+                return [sys.executable, "-c", script], ""
+
+            def handle(self, data, job, state):
+                self.child_env = data
+
+        with tempfile.TemporaryDirectory() as tmp:
+            inherited["CODEX_HOME"] = str(Path(tmp) / "separate-home")
+            job = Job(1)
+            job.root = Path(tmp)
+            backend = Capture("codex")
+            with mock.patch.dict(os.environ, inherited):
+                self.assertEqual(backend.run(job)["exit"], 0)
+                # Child isolation must not mutate the editor's environment.
+                for key, value in inherited.items():
+                    self.assertEqual(os.environ[key], value)
+            self.assertNotIn("CODEX_WINDOWS_REGISTERED_CORE", backend.child_env)
+            self.assertNotIn("CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY", backend.child_env)
+            for key in ("CODEX_HOME", "CODEX_SANDBOX_NETWORK_DISABLED", "OPENAI_API_KEY"):
+                self.assertEqual(backend.child_env[key], inherited[key])
+            self.assertEqual(backend.child_env["GIT_ALLOW_PROTOCOL"],
+                             "prism-local-agents-do-not-reach-remotes")
+
     def test_turn_disables_global_hooks_without_changing_user_settings(self):
         command, _ = Codex("codex", {"bin": "codex"}).command(Job(1))
         self.assertIn("--ignore-user-config", command)

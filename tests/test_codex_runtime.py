@@ -4,6 +4,7 @@ PRISM_NATIVE_CODEX=1 enables host sandbox startup. No login or AI API is used.
 """
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
@@ -17,6 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "prism_local"))
 from backend_codex import Codex
 from backends import Job
+from tmpdirs import tmpdir
 
 
 @unittest.skipUnless(os.name == "nt" and os.environ.get("PRISM_NATIVE_CODEX"),
@@ -89,8 +91,10 @@ $result | ConvertTo-Json -Compress
             index = command.index(setting)
             del command[index - 1:index + 1]  # with its -c
         # Keep native helper caches and sessions away from the user's active CLI/app.
-        with tempfile.TemporaryDirectory(prefix="prism-codex-home-") as probe_home, \
-                ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
+        # Native helper secrets have OS-protected ACLs. Best-effort cleanup at exit
+        # must not mask a tool's result with a TemporaryDirectory cleanup exception.
+        probe_home = home or tmpdir()
+        with ThreadingHTTPServer(("127.0.0.1", 0), Handler) as server:
             thread = threading.Thread(target=server.serve_forever, daemon=True)
             thread.start()
             # Use known metadata so Codex registers the native apply_patch tool.
@@ -103,8 +107,8 @@ $result | ConvertTo-Json -Compress
                 f'base_url="http://127.0.0.1:{server.server_port}/v1",'
                 'wire_api="responses",requires_openai_auth=false}']
             try:
-                env = dict(os.environ)
-                env["CODEX_HOME"] = str(home or probe_home)
+                env = backend.env(job)
+                env["CODEX_HOME"] = str(probe_home)
                 result = subprocess.run(command, cwd=root, input="Run the fixture tool.",
                     capture_output=True, text=True, encoding="utf-8", timeout=45, env=env)
             finally:
@@ -186,7 +190,7 @@ $result | ConvertTo-Json -Compress
     def test_resuming_replaces_earlier_full_edit_permissions_with_this_turn_scope(self):
         with tempfile.TemporaryDirectory(prefix="prism-codex-probe-") as tmp:
             base = Path(tmp)
-            root, home = base / "paper with spaces", base / "codex-home"
+            root, home = base / "paper with spaces", tmpdir() / "codex-home"
             root.mkdir()
             home.mkdir()
             sid = None
@@ -248,10 +252,34 @@ $result | ConvertTo-Json -Compress
             self.assertEqual(builds, [("/api/build", {"mode": "draft", "clean": False, "by": "agent"})], output)
             self.assertIn("Build OK", output)
 
+    def test_native_command_cannot_connect_to_a_public_port_reachable_by_the_editor(self):
+        # TCP handshake only, no application data or model API. Host-local TCP is
+        # not blocked by every Windows runtime; it cannot prove public-network denial.
+        address, port = "1.1.1.1", 443
+        try:
+            with socket.create_connection((address, port), timeout=3):
+                pass
+        except OSError as error:
+            self.skipTest(f"public TCP control unavailable: {error}")
+        with tempfile.TemporaryDirectory(prefix="prism-codex-probe-") as tmp:
+            root = Path(tmp)
+            self.fixture(root)
+            output = self.probe(root, "edit", None, script=f"""
+$client = [System.Net.Sockets.TcpClient]::new()
+try {{
+    $task = $client.ConnectAsync('{address}', {port})
+    if ($task.Wait(2000) -and $client.Connected) {{ 'NETWORK_ALLOWED' }}
+    else {{ 'NETWORK_DENIED' }}
+}} catch {{ 'NETWORK_DENIED' }}
+finally {{ $client.Dispose() }}
+""")
+            self.assertIn("NETWORK_DENIED", output)
+            self.assertNotIn("NETWORK_ALLOWED", output)
+
     def test_user_mcp_configuration_is_ignored_without_modifying_it(self):
         with tempfile.TemporaryDirectory(prefix="prism-codex-probe-") as tmp:
             base = Path(tmp)
-            root, home, marker = base / "project", base / "codex-home", base / "unwanted-started"
+            root, home, marker = base / "project", tmpdir() / "codex-home", base / "unwanted-started"
             root.mkdir()
             home.mkdir()
             self.fixture(root)
@@ -273,7 +301,7 @@ $result | ConvertTo-Json -Compress
     def test_global_hooks_do_not_run_in_editor_turns(self):
         with tempfile.TemporaryDirectory(prefix="prism-codex-probe-") as tmp:
             base = Path(tmp)
-            root, home, marker = base / "project", base / "codex-home", base / "hooks-ran.txt"
+            root, home, marker = base / "project", tmpdir() / "codex-home", base / "hooks-ran.txt"
             root.mkdir()
             home.mkdir()
             self.fixture(root)

@@ -1,5 +1,6 @@
 """Model discovery and request capability regressions; no paid inference calls."""
 import json
+import os
 import sys
 import tempfile
 import threading
@@ -115,7 +116,9 @@ class CodexDiscovery(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cli = root / "fake_codex.py"
-            cli.write_text("""import json, sys
+            cli.write_text("""import json, os, sys
+assert 'CODEX_WINDOWS_REGISTERED_CORE' not in os.environ
+assert 'CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY' not in os.environ
 initialized = False
 for line in sys.stdin:
     d = json.loads(line)
@@ -139,7 +142,9 @@ for line in sys.stdin:
             real_start = backend_codex.start
             def launch(cmd, **kwargs):
                 return real_start([sys.executable, str(cli)], **kwargs)
-            with mock.patch("backend_codex.start", side_effect=launch):
+            with mock.patch.dict(os.environ, {"CODEX_WINDOWS_REGISTERED_CORE": "1",
+                                               "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY": "parent-package"}), \
+                    mock.patch("backend_codex.start", side_effect=launch):
                 catalog = backend.model_catalog(root, refresh=True)
             self.assertNotIn("error", catalog)
             self.assertEqual([m["id"] for m in catalog["models"]], ["fast", "deep"])

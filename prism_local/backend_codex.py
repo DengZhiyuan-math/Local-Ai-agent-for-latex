@@ -36,6 +36,20 @@ import sessionmeta
 PROFILE = "prism-editor"
 
 
+def codex_env(root: Path) -> dict:
+    """Launch an independent CLI, rather than reuse the parent desktop runtime.
+
+    Registered Core provisioning belongs to the desktop application's package and
+    CODEX_HOME. Inheriting its startup selectors with another home makes native
+    sandbox startup fail. The CLI still enforces the turn's named permission profile
+    and, on Windows, the explicitly configured elevated sandbox.
+    """
+    env = agent_env(root=root)
+    for key in ("CODEX_WINDOWS_REGISTERED_CORE", "CODEX_WINDOWS_SANDBOX_PACKAGE_FAMILY"):
+        env.pop(key, None)
+    return env
+
+
 @lru_cache(maxsize=8)
 def runtime_support(bin_path: str, stamp: int) -> str | None:
     try:
@@ -116,6 +130,9 @@ def _rel(p: str, root: Path) -> str:
 
 
 class Codex(CliBackend):
+    def env(self, job: Job) -> dict:
+        return codex_env(job.root)
+
     def check_scope(self, root: Path, scope: list[str]) -> str | None:
         blocked = [rel for rel in scope if protected_scope(root, rel)]
         if blocked:
@@ -180,7 +197,7 @@ class Codex(CliBackend):
     def _read_models(self, root: Path) -> list[dict]:
         """Metadata RPC only; no thread is started and no inference request is made."""
         proc = start([self.bin(), "app-server", "--listen", "stdio://", "-c", "features.hooks=false",
-                      "-c", "features.apps=false"], cwd=root, env=agent_env(root=root), stdin=subprocess.PIPE,
+                      "-c", "features.apps=false"], cwd=root, env=codex_env(root), stdin=subprocess.PIPE,
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True, encoding="utf-8")
         responses = queue.Queue()
         def read():

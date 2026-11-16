@@ -483,6 +483,9 @@ def attachment_type(path: Path) -> str:
 class CliBackend(Backend):
     """A local CLI that takes the prompt on stdin and prints one JSON object per line."""
 
+    def env(self, job: Job) -> dict:
+        return agent_env(root=job.root)
+
     def command(self, job: Job) -> tuple[list[str], str]:
         """The argv to start and the text to write to its stdin."""
         raise NotImplementedError
@@ -494,7 +497,7 @@ class CliBackend(Backend):
     def run(self, job: Job) -> dict:
         cmd, stdin = self.command(job)
         st: dict = {}
-        with cli_process(job, cmd, stdin, agent_env(root=job.root), bufsize=1) as (proc, lines, stderr_lines):
+        with cli_process(job, cmd, stdin, self.env(job), bufsize=1) as (proc, lines, stderr_lines):
             if proc is None:
                 return st                        # stopped before it started
             for line in lines:

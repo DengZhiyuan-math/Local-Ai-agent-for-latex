@@ -570,6 +570,11 @@ and turns Codex hooks off for editor turns (`features.hooks=false`): `--ignore-u
 alone still runs hooks from `~/.codex/hooks.json`. Your terminal hook settings are unchanged.
 On Windows the adapter explicitly selects the native `elevated` sandbox, since ignoring
 user configuration would otherwise also discard `windows.sandbox` and block shell reads.
+When launched from the Codex desktop app, the adapter clears that app's runtime selectors
+in its child CLI environment so the CLI can provision its own native sandbox. The named
+file permissions and network-disabled profile still apply; the app's environment is unchanged.
+In Windows native tests with Codex CLI 0.166.0, public TCP was blocked while host-local TCP
+(including localhost) remained reachable. Do not rely on this profile to isolate local services.
 Set up that sandbox once in the Codex CLI or desktop app before using the editor agent.
 Commands in that sandbox run as a separate sandbox user, which cannot start programs
 installed only for your account (for example a per-user Python under

@@ -12,6 +12,7 @@ from test_agent import manager, wait_done
 from test_agent import FakeAPI
 from backends import Backend
 from backend_codex import Codex
+from tmpdirs import tmpdir
 from backend_deepcode import DeepCode
 import json
 import subprocess
@@ -245,7 +246,7 @@ class CodexPermissions(unittest.TestCase):
             self.skipTest("Codex CLI is not installed")
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp).resolve()
-            root, home = base / "project", base / "codex-home"
+            root, home = base / "project", tmpdir() / "codex-home"
             root.mkdir()
             home.mkdir()
             for rel in ("main.tex", "other.tex", "figure.png"):
@@ -287,7 +288,7 @@ print(json.dumps(result))
                     sandbox += ["-c", value]
             p = subprocess.run(sandbox + ["--", *program],
                                capture_output=True, text=True, timeout=30,
-                               env={**os.environ, "CODEX_HOME": str(home)})
+                               env={**codex.env(job), "CODEX_HOME": str(home)})
             self.assertEqual(p.returncode, 0, p.stderr)
             self.assertEqual(json.loads(p.stdout), {"main.tex": "allowed", "other.tex": "denied",
                                                    "figure.png": "denied"})
