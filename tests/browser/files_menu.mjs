@@ -46,6 +46,17 @@ await ev(`
 const ready = await ev(`return { key: typeof projectKey !== "undefined" && !!projectKey, files: T.files(), folders: S.folders }`);
 check("page ready with folders listed", ready.key && ready.folders.includes("figs"), JSON.stringify(ready));
 check("empty folder shown in tree", await ev(`return !!document.querySelector('#tree li[data-dir="figs"]')`));
+check("folders initially collapsed", await ev(`return document.querySelector('#tree li[data-dir="sec"] button').getAttribute('aria-expanded') === 'false' && !document.querySelector('#tree li[data-dir="sec/nested"]') && !document.querySelector('#tree li[data-path="sec/a.tex"]')`));
+await ev(`document.querySelector('#tree li[data-dir="sec"] button').click(); return true`);
+check("expanding shows direct children", await ev(`return !!document.querySelector('#tree li[data-path="sec/a.tex"]') && !!document.querySelector('#tree li[data-dir="sec/nested"]') && !document.querySelector('#tree li[data-path="sec/nested/a.tex"]')`));
+await ev(`document.querySelector('#tree li[data-dir="sec/nested"] button').click(); return true`);
+check("nested folder shows its own file", await ev(`return !!document.querySelector('#tree li[data-path="sec/nested/a.tex"]') && document.querySelector('#tree li[data-dir="sec/nested"]').textContent.trim() === '▾nested'`));
+await ev(`renderTree(); return true`);
+check("redraw keeps folders expanded", await ev(`return !!document.querySelector('#tree li[data-path="sec/nested/a.tex"]')`));
+await ev(`document.querySelector('#tree li[data-dir="sec"] button').click(); return true`);
+check("collapsing hides descendants", await ev(`return !document.querySelector('#tree li[data-path="sec/nested/a.tex"]') && !document.querySelector('#tree li[data-path="sec/a.tex"]')`));
+await ev(`await openFile('sec/nested/a.tex'); return true`);
+check("opening a nested file reveals its parents", await ev(`return !!document.querySelector('#tree li.active[data-path="sec/nested/a.tex"]')`));
 
 const fileMenu = await ev(`return T.menu('#tree li[data-path="main.tex"]')`);
 check("file menu", JSON.stringify(fileMenu) === JSON.stringify(["Open", "Show in File Explorer", "Copy", "Paste", "Rename…", "Delete (to Recycle Bin)"]), JSON.stringify(fileMenu));
@@ -70,6 +81,7 @@ await ev(`T.menu('#tree li[data-path="sec/a.tex"]'); T.pick("Open"); await T.unt
 await ev(`T.menu('#tree li[data-dir="sec"]'); T.pick("Rename…"); await T.sleep(100); await T.type("chapters"); return true`);
 check("folder renamed, open tab follows", await ev(`return T.until(() => T.files().includes("chapters/a.tex") && S.active === "chapters/a.tex" && S.tabs.some((t) => t.path === "chapters/a.tex"))`),
   JSON.stringify(await ev(`return { files: T.files(), active: S.active, tabs: S.tabs.map((t) => t.path) }`)));
+check("renamed folder retains its expanded children", await ev(`return !!document.querySelector('#tree li[data-path="chapters/nested/a.tex"]')`));
 await ev(`cm.setValue("edited after rename\\n"); await T.sleep(2500); return true`);
 const disk = await ev(`return (await api("/api/file?path=chapters/a.tex")).content`);
 check("autosave goes to the new path", disk === "edited after rename\n", JSON.stringify(disk));

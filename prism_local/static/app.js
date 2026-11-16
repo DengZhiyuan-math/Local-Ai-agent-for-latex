@@ -842,6 +842,7 @@ async function openFile(path, line, following = false) {
   if (asked !== openAsked) { renderTabs(); return; }   // another file asked for since: it goes in front
   if (!t) return;
   S.active = path;
+  expandFileParents(path);
   cm.swapDoc(t.doc);
   AH.apply(path);
   findRun(false);                    // the find bar, open, counts in this file
@@ -1001,34 +1002,77 @@ function showBanner(t) {
 }
 
 /* ------------------------------------------------------------------ file tree & outline */
+// Keep a user's choices when the filesystem watcher redraws the tree.
+const expandedFolders = new Set();
+// The conventional build folder may be left behind after changing output directories.
+// Treat these as build outputs only inside that folder; keep other files visible.
+const buildOutput = (path) => path.startsWith("build/") && /(?:\.(?:pdf|aux|log|toc|lof|lot|loa|lol|out|bbl|ind|gls|acr|nls|nav|snm|vrb|thm|brf|ent|tdo|loe|cpt|xref|mw|blg|bcf|idx|ilg|glo|glg|acn|alg|nlo|nlg|fls|fdb_latexmk|xdv|dvi|synctex|synctex\.gz|run\.xml|prism-build\.json))$/i.test(path);
+let showBuildFiles = store.get("files.showBuild", false);
+function updateBuildButton() {
+  const b = $("#btn-build-files");
+  b.hidden = !S.files.some((f) => buildOutput(f.path)) && !S.folders.some((d) => d === "build" || d.startsWith("build/"));
+  b.setAttribute("aria-pressed", String(showBuildFiles));
+  b.title = showBuildFiles ? "Hide build output files" : "Show build output files";
+}
+updateBuildButton();
+$("#btn-build-files").addEventListener("click", () => {
+  showBuildFiles = !showBuildFiles; store.set("files.showBuild", showBuildFiles);
+  updateBuildButton(); renderTree();
+});
+function expandFileParents(path) {
+  const parts = path.split("/"); parts.pop();
+  for (let i = 1; i <= parts.length; i++) expandedFolders.add(parts.slice(0, i).join("/"));
+}
 function renderTree() {
   if ($("#tree input")) return;        // a name is being typed (askName draws it afterwards)
-  const groups = new Map();
+  updateBuildButton();
+  const groups = new Map([["", { folders: [], files: [] }]]);
+  const ensureDir = (dir) => {
+    if (groups.has(dir)) return;
+    const parent = dir.includes("/") ? dir.slice(0, dir.lastIndexOf("/")) : "";
+    ensureDir(parent);
+    groups.set(dir, { folders: [], files: [] });
+    groups.get(parent).folders.push(dir);
+  };
   const rank = (p) => { const i = S.order.indexOf(p); return i < 0 ? 999 : i; };
-  const files = [...S.files].sort((a, b) => rank(a.path) - rank(b.path) || a.path.localeCompare(b.path));
-  for (const d of S.folders) groups.set(d, []);          // empty folders are shown too
+  const files = S.files.filter((f) => showBuildFiles || !buildOutput(f.path))
+    .sort((a, b) => rank(a.path) - rank(b.path) || a.path.localeCompare(b.path));
+  // Empty directories under build are commonly mirrors made for compiler output.
+  // Visible non-output files will add their parent directories below.
+  for (const d of S.folders) if (showBuildFiles || (d !== "build" && !d.startsWith("build/"))) ensureDir(d);
   for (const f of files) {
     const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
-    if (!groups.has(dir)) groups.set(dir, []);
-    groups.get(dir).push(f);
+    ensureDir(dir);
+    groups.get(dir).files.push(f);
   }
-  const dirOrder = ["", "tex", "tex/sections", "bib", "notes"];
-  const dirs = [...groups.keys()].sort((a, b) => {
-    const ia = dirOrder.indexOf(a), ib = dirOrder.indexOf(b);
-    return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib) || a.localeCompare(b);
-  });
   let html = "";
-  for (const d of dirs) {
-    if (d) html += `<li class="folder" data-dir="${esc(d)}" title="${esc(d)}">${esc(d)}/</li>`;
-    for (const f of groups.get(d)) {
-      html += `<li data-path="${esc(f.path)}" class="${f.path === S.active ? "active" : ""}" title="${esc(f.path)}">
+  function draw(dir, depth) {
+    const group = groups.get(dir);
+    for (const d of group.folders.sort((a, b) => a.localeCompare(b))) {
+      const open = expandedFolders.has(d), name = d.split("/").pop();
+      html += `<li class="folder" data-dir="${esc(d)}" title="${esc(d)}" style="padding-left:${8 + depth * 14}px"><button type="button" class="tree-folder" aria-expanded="${open}"><span class="tree-arrow" aria-hidden="true">${open ? "▾" : "▸"}</span>${esc(name)}</button></li>`;
+      if (open) draw(d, depth + 1);
+    }
+    for (const f of group.files) {
+      html += `<li data-path="${esc(f.path)}" class="${f.path === S.active ? "active" : ""}" title="${esc(f.path)}" style="padding-left:${24 + depth * 14}px">
         ${esc(f.path.split("/").pop())}${f.git ? `<span class="git" title="git status">${esc(f.git)}</span>` : ""}</li>`;
     }
   }
+  draw("", 0);
   $("#tree").innerHTML = html;
   AH.refresh();
 }
-$("#tree").addEventListener("click", (e) => { const li = e.target.closest("li[data-path]"); if (li && !li.querySelector("input")) openFile(li.dataset.path); });
+$("#tree").addEventListener("click", (e) => {
+  const folder = e.target.closest("li[data-dir]");
+  if (folder && !folder.querySelector("input")) {
+    const path = folder.dataset.dir;
+    if (expandedFolders.has(path)) expandedFolders.delete(path); else expandedFolders.add(path);
+    renderTree();
+    $("#tree").querySelector(`li[data-dir="${CSS.escape(path)}"] button`)?.focus();
+    return;
+  }
+  const li = e.target.closest("li[data-path]"); if (li && !li.querySelector("input")) openFile(li.dataset.path);
+});
 
 /* The Files sidebar's menu (right-click), as Explorer or Finder offers it. Copy and Paste
    use the system's clipboard, so files go to and come from Explorer, Finder and other
@@ -1075,6 +1119,7 @@ async function copyItems(paths) {
 }
 async function pasteInto(folder) {
   const r = await fileAction("paste", { folder, paths: fileClip || undefined }); if (!r) return;
+  if (folder) { expandFileParents(folder + "/_"); renderTree(); }
   await poll();
   toast((r.pasted.length ? `Pasted ${r.pasted.join(", ")}` : "Nothing was pasted")
     + (r.skipped.length ? `\nLeft out: ${r.skipped.join("; ")}` : ""));
@@ -1114,14 +1159,19 @@ function askRename(target) {
     for (const t of tabs) if (isDirty(t) && !t.conflict) { const saved = await TABS.save(t); if (!saved.ok) return toast(Tabs.unsavedWhy(saved)); }   // its text goes with it
     const r = await fileAction("rename", { path: target.path, name }); if (!r) return;
     const moved = (p) => r.path + p.slice(target.path.length);
+    if (target.dir) for (const dir of [...expandedFolders]) if (within(dir, target.path)) {
+      expandedFolders.delete(dir); expandedFolders.add(moved(dir));
+    }
     for (const t of tabs) t.path = moved(t.path);
     if (S.active && within(S.active, target.path)) S.active = moved(S.active);
     renderTabs(); persistSession(); await poll();
   });
 }
 function askNew(folder, kind) {
+  if (folder) { expandFileParents(folder + "/_"); renderTree(); }
   const li = document.createElement("li");
   const header = folder && $("#tree").querySelector(`li[data-dir="${CSS.escape(folder)}"]`);
+  if (header) li.style.paddingLeft = `${24 + folder.split("/").length * 14}px`;
   if (header) header.after(li); else $("#tree").prepend(li);
   askName(li, "", kind === "folder" ? "folder name" : "name.tex", async (name) => {
     const r = await fileAction("new", { folder, name, kind }); if (!r) return;

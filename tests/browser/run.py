@@ -22,10 +22,12 @@ scripts = here
 if work.exists() and any(work.iterdir()):
     raise ValueError("Use a new or empty browser-test folder; existing contents are never removed")
 (work / "proj/sec").mkdir(parents=True)
+(work / "proj/sec/nested").mkdir()
 (work / "proj/figs").mkdir()
 (work / "proj2").mkdir()
 (work / "proj/main.tex").write_text("\\documentclass{article}\n\\begin{document}\nHi\n\\end{document}\n", encoding="utf-8")
 (work / "proj/sec/a.tex").write_text("section\n", encoding="utf-8")
+(work / "proj/sec/nested/a.tex").write_text("nested section\n", encoding="utf-8")
 (work / "proj2/main.tex").write_text("x\n", encoding="utf-8")
 (work / "agents.json").write_text(json.dumps({"default": "slow", "providers": {"slow": {
     "type": "openai", "label": "Slow", "base_url": "http://127.0.0.1:18765/v1", "api_key_env": "SLOW_KEY",
