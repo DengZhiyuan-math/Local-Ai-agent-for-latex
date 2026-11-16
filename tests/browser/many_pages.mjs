@@ -68,7 +68,7 @@ try {
 
   // A turn followed by a hidden page: it asks for events without the server waiting.
   const [a, b] = pages;
-  await a.ev(`$("#chat-mode").value = "ask"; $("#chat-input").value = "hello"; chatSend();
+  await a.ev(`$("#chat-mode").value = "ask"; chatEditor.setValue("hello"); chatSend();
     for (let i = 0; i < 50 && !C.job; i++) await new Promise((r) => setTimeout(r, 100)); return true`);
   await b.ev(`location.reload(); return true`);
   await sleep(500);

@@ -15,7 +15,8 @@
    tests/frontend_check.js runs it under Node.
 
      MathText.render(text, { markdown, katex, macros })   HTML; markdown: (text) => HTML
-     MathText.split(text)        { text: with each formula a placeholder, math: [{raw, tex, display}] } */
+     MathText.split(text)        { text: with each formula a placeholder, math: [{raw, tex, display, from, to}] }
+     MathText.ranges(text)       the formulas and their offsets in the original text */
 "use strict";
 
 const MathText = (() => {
@@ -26,12 +27,12 @@ const MathText = (() => {
   const PLACE = /[]/g;
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 
-  function split(source) {
-    const src = String(source).replace(PLACE, ""), n = src.length, math = [];
+  function split(source, { preserveSource = false } = {}) {
+    const src = preserveSource ? String(source) : String(source).replace(PLACE, ""), n = src.length, math = [];
     let out = "", i = 0;
     const put = (end, tex, display) => {
       out += OPEN + math.length + CLOSE;
-      math.push({ raw: src.slice(i, end), tex, display });
+      math.push({ raw: src.slice(i, end), tex, display, from: i, to: end });
       i = end;
     };
     // A blank line at j (a newline, then only spaces up to the next one): the paragraph ends.
@@ -199,7 +200,8 @@ const MathText = (() => {
     });
   }
 
-  return { split, render, prepare, ENVS };
+  const ranges = (source) => split(source, { preserveSource: true }).math;
+  return { split, ranges, render, prepare, ENVS };
 })();
 
 if (typeof module !== "undefined") module.exports = MathText;

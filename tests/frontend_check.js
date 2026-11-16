@@ -515,6 +515,13 @@ check("math: what is not math", () => {
   assert.ok(!MathText.split("a \uE000 b").text.includes("\uE000"), "a reply's own placeholder characters go");
 });
 
+check("math: source ranges identify repeated formulas and preserve original offsets", () => {
+  const text = "`$x$` \uE000$x$ and $x$";
+  const ranges = MathText.ranges(text);
+  assert.deepStrictEqual(ranges.map((f) => [f.from, f.to, text.slice(f.from, f.to)]),
+    [[7, 10, "$x$"], [15, 18, "$x$"]]);
+});
+
 check("math: KaTeX gets the project's macros and what it lacks, mapped", () => {
   const html = MathText.render("$\\norm{x}$ $\\eqref{eq:a}$\n\\begin{equation}\\label{eq:a} a \\end{equation}\n"
     + "\\begin{multline} a \\\\ b \\end{multline}\n\\begin{eqnarray} a &=& b \\end{eqnarray}",

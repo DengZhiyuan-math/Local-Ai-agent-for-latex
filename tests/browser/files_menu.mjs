@@ -45,6 +45,12 @@ await ev(`
 
 const ready = await ev(`return { key: typeof projectKey !== "undefined" && !!projectKey, files: T.files(), folders: S.folders }`);
 check("page ready with folders listed", ready.key && ready.folders.includes("figs"), JSON.stringify(ready));
+const resizeBefore = await ev(`const h = document.querySelector('#chat-resize').getBoundingClientRect(); return { x: h.x + h.width / 2, y: h.y + h.height / 2, height: document.querySelector('#chat-input-box').getBoundingClientRect().height }`);
+await send("Input.dispatchMouseEvent", { type: "mouseMoved", x: resizeBefore.x, y: resizeBefore.y });
+await send("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", buttons: 1, clickCount: 1, x: resizeBefore.x, y: resizeBefore.y });
+await send("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: resizeBefore.x, y: resizeBefore.y - 45 });
+await send("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", buttons: 0, clickCount: 1, x: resizeBefore.x, y: resizeBefore.y - 45 });
+check("dragging the input handle upward increases its height", await ev(`return document.querySelector('#chat-input-box').getBoundingClientRect().height > ${resizeBefore.height} + 20`));
 check("empty folder shown in tree", await ev(`return !!document.querySelector('#tree li[data-dir="figs"]')`));
 check("folders initially collapsed", await ev(`return document.querySelector('#tree li[data-dir="sec"] button').getAttribute('aria-expanded') === 'false' && !document.querySelector('#tree li[data-dir="sec/nested"]') && !document.querySelector('#tree li[data-path="sec/a.tex"]')`));
 await ev(`document.querySelector('#tree li[data-dir="sec"] button').click(); return true`);

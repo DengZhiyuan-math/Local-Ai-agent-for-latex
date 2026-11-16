@@ -80,6 +80,7 @@ try:
         return out + (f"\nFAIL script exited {r.returncode}" if r.returncode else "")
     results["frontend audit"] = node(scripts / "frontend_audit.mjs", editor)
     results["editor files menu"] = node(scripts / "files_menu.mjs", editor)
+    results["chat input"] = node(scripts / "chat_input.mjs", editor)
     results["turn reload, double send"] = node(scripts / "agent_turn.mjs", editor)
     results["turn view"] = node(scripts / "turn_view.mjs", editor)
     results["agent change highlights"] = node(scripts / "agent_marks.mjs", editor)

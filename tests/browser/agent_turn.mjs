@@ -30,7 +30,7 @@ await ev(`
   const orig = window.fetch;
   window.fetch = (u, o) => { if (String(u) === "/api/agent") posts++; return orig(u, o); };
   $("#chat-mode").value = "ask";
-  $("#chat-input").value = "hello";
+  chatEditor.setValue("hello");
   chatSend(); chatSend();
   for (let i = 0; i < 50 && !C.job; i++) await new Promise((r) => setTimeout(r, 100));
   return true;`);

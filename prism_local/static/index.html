@@ -206,10 +206,14 @@
     <div id="chat-log"></div>
     <div id="chat-drop" hidden><div>Drop files to add them to your message</div></div>
     <div id="chat-foot">
+      <div id="chat-resize" role="separator" aria-label="Resize message input" aria-orientation="horizontal" aria-valuemin="48" aria-valuenow="48" tabindex="0" title="Drag to resize the message input; use arrow keys when focused"></div>
       <div id="chat-scope"></div>
       <div id="slash-menu" role="listbox" hidden></div>
       <div id="chat-files"></div>
-      <textarea id="chat-input" rows="3" placeholder="Ask the agent… @ a file or the selection to limit its edits, / for commands (↵ send, ⇧↵ newline)"></textarea>
+      <div id="chat-input-box">
+        <textarea id="chat-input" aria-label="Message to the agent"></textarea>
+        <span id="chat-placeholder">Ask the agent… @ a file or the selection, / for commands (↵ send, ⇧↵ newline)</span>
+      </div>
       <div class="chat-actions">
         <button id="chat-add" class="icon ghost" data-icon="plus" title="Add files to this message (or drag them onto the panel, or paste an image)" aria-label="Add files"></button>
         <input type="file" id="chat-file" multiple hidden>

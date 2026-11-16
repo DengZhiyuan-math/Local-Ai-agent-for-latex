@@ -13,6 +13,11 @@ STATIC = HERE.parent / "prism_local" / "static"
 
 @unittest.skipUnless(shutil.which("node"), "needs Node.js")
 class Frontend(unittest.TestCase):
+    def test_chat_resize(self):
+        r = subprocess.run([shutil.which("node"), str(HERE / "chat_resize_check.js")],
+                           capture_output=True, text=True, encoding="utf-8", timeout=10)
+        self.assertEqual(r.returncode, 0, r.stderr)
+
     def test_folder_tree(self):
         r = subprocess.run([shutil.which("node"), str(HERE / "tree_check.js")],
                            capture_output=True, text=True, encoding="utf-8", timeout=10)

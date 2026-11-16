@@ -104,17 +104,17 @@ try {
   check("attachments and a draft added while sending remain for the next message", await p.ev(`
     const realAgent = Q.agent, realEvents = Q.events; let release;
     ATT.files = [{ id: 100, name: "first.txt", path: "first.txt", size: 1 }];
-    $("#chat-input").value = "first message";
+    chatEditor.setValue("first message");
     Q.agent = () => new Promise(r => { release = r; });
     Q.events = async () => ({ _status: 200, done: true, events: [{ t: "done", outcome: "ok", exit: 0, changed: [] }] });
     const sending = sendMessage();
     for (let i = 0; i < 100 && !release; i++) await new Promise(r => setTimeout(r, 10));
     if (!release) throw Error("message was not sent");
     ATT.files.push({ id: 101, name: "next.txt", path: "next.txt", size: 2 });
-    $("#chat-input").value = "next draft";
+    chatEditor.setValue("next draft");
     release({ _status: 200, job: 9004 }); await sending;
-    const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && $("#chat-input").value === "next draft";
-    ATT.files = []; ATT.render(); $("#chat-input").value = ""; Q.agent = realAgent; Q.events = realEvents;
+    const kept = ATT.files.length === 1 && ATT.files[0].id === 101 && chatEditor.getValue() === "next draft";
+    ATT.files = []; ATT.render(); chatEditor.setValue(""); Q.agent = realAgent; Q.events = realEvents;
     return kept;`));
   check("removing an attachment takes its upload back, whether it was still uploading or done", await p.ev(`
     const realUpload = Q.upload, realCancel = Q.uploadCancel, ids = [], cancelled = []; let finish = null;
@@ -160,7 +160,7 @@ try {
     return true;`));
   check("performance changes raise no page errors", p.errors.length === 0);
   check("a turn you leave alone shows the agent's step and follows it to its file", await p.ev(`
-    await openFile("sec/a.tex"); $("#chat-input").focus();          // where a message is sent from
+    await openFile("sec/a.tex"); chatEditor.focus();          // where a message is sent from
     C.job = 9199; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
     await AV.begin("follow-test", "Write", "main.tex");
     const shown = !$("#agent-view").hidden;
@@ -168,26 +168,26 @@ try {
     const followed = shown && S.active === "main.tex";
     C.job = null; return followed;`));
   check("typing on in the message box ends following the agent", await p.ev(`
-    await openFile("sec/a.tex"); $("#chat-input").focus();
+    await openFile("sec/a.tex"); chatEditor.focus();
     C.job = 9198; C.follow = true; C.followOpened = openAsked; AV.hidden = false;
     await AV.begin("type-test", "Write", "main.tex");
-    $("#chat-input").value = "next"; $("#chat-input").dispatchEvent(new Event("input"));
+    chatEditor.replaceSelection("next", "end", "+input");
     const hidden = $("#agent-view").hidden;
     await AV.end("type-test", true);
     const kept = hidden && S.active === "sec/a.tex" && $("#chat-log").textContent.includes("Jump to main.tex");
-    $("#chat-input").value = ""; C.job = null; return kept;`));
+    chatEditor.setValue(""); C.job = null; return kept;`));
   check("typing in chat keeps the selected file and focus when an agent step ends", await p.ev(`
     await openFile("sec/a.tex"); C.job = 9200; C.follow = true; C.followOpened = openAsked;
     await AV.begin("focus-test", "Write", "main.tex");
-    $("#chat-input").focus(); await AV.end("focus-test", true);
-    const kept = S.active === "sec/a.tex" && document.activeElement === $("#chat-input")
+    chatEditor.focus(); await AV.end("focus-test", true);
+    const kept = S.active === "sec/a.tex" && chatEditor.hasFocus()
       && $("#chat-log").textContent.includes("Jump to main.tex");
     C.job = null; return kept;`));
   check("local command chips preserve an unfinished draft", await p.ev(`
-    const model = C.model; $("#chat-input").value = "unfinished draft";
+    const model = C.model; chatEditor.setValue("unfinished draft");
     const chip = document.createElement("a"); chip.dataset.insert = "/model audit-model"; $("#chat-log").append(chip); chip.click();
-    const kept = $("#chat-input").value === "unfinished draft" && C.model === "audit-model";
-    C.model = model; provSet("model", model); $("#chat-input").value = ""; chip.remove(); return kept;`));
+    const kept = chatEditor.getValue() === "unfinished draft" && C.model === "audit-model";
+    C.model = model; provSet("model", model); chatEditor.setValue(""); chip.remove(); return kept;`));
   check("an edited tab stays open while its saves are held", await p.ev(`
     const t = activeTab(), text = t.doc.getValue(); t.doc.replaceRange("draft", { line: 0, ch: 0 });
     C.editTurn = true; await closeTab(t.path);

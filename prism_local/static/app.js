@@ -771,6 +771,19 @@ const SNIP_SET = { on: true, fraction: true, matrix: true };
 const SNIP = Snippets.attach(cm, {
   enabled: () => SNIP_SET.on, fraction: () => SNIP_SET.fraction, matrix: () => SNIP_SET.matrix,
 });
+const chatEditor = CodeMirror.fromTextArea($("#chat-input"), {
+  mode: "stex", lineWrapping: true, indentUnit: 2, tabSize: 2,
+  extraKeys: {
+    Tab: () => CHAT_SNIP.tab((ed) => ed.replaceSelection("  ")),
+    "Shift-Tab": () => CHAT_SNIP.shiftTab(),
+    Esc: () => CHAT_SNIP.escape(),
+    "Shift-Enter": "newlineAndIndent",
+  },
+});
+chatEditor.getInputField().setAttribute("aria-label", "Message to the agent");
+const CHAT_SNIP = Snippets.attach(chatEditor, {
+  enabled: () => SNIP_SET.on, fraction: () => SNIP_SET.fraction, matrix: () => SNIP_SET.matrix,
+});
 let snipContent;                 // the file as last read: unchanged, it is not compiled again
 async function loadSnippets() {
   const r = await Q.snippets();
@@ -781,8 +794,10 @@ async function loadSnippets() {
   try {
     const u = Snippets.load(r.content);
     SNIP.setUser(u.list, u.defaults);
+    CHAT_SNIP.setUser(u.list, u.defaults);
   } catch (e) {                  // Home → Settings says what is wrong; the built-in ones work
     SNIP.setUser([], true);
+    CHAT_SNIP.setUser([], true);
     console.warn("snippets file:", e.message || e);
   }
 }
@@ -1283,6 +1298,7 @@ async function loadSymbols() {
     S.symbols = r; renderOutline();
     if (labels._status === 200) S.labelVersion = labels.version;
     redrawReplies();
+    renderChatMath();
     // Re-link older replies when a new label appears in project sources.
     for (const el of $("#chat-log").querySelectorAll(".msg.assistant")) linkLabels(el);
   }
@@ -1963,6 +1979,42 @@ document.querySelectorAll(".gutter").forEach((g) => {
 });
 for (const [k, sel] of [["sidebar", "#sidebar"], ["pdf", "#pdf-pane"], ["chat", "#chat"]]) { const w = store.get("w." + k, null); if (w) $(sel).style.width = w; }
 
+// Dragging the top edge grows the input upward, leaving the Send button in place.
+const chatInput = $("#chat-input-box"), chatResize = $("#chat-resize");
+const savedChatHeight = Number(store.get("chat.inputHeight", 0));
+if (Number.isFinite(savedChatHeight) && savedChatHeight >= 48) chatInput.style.height = savedChatHeight + "px";
+chatResize.setAttribute("aria-valuenow", String(Math.round(chatInput.getBoundingClientRect().height)));
+function setChatHeight(height) {
+  const available = chatInput.getBoundingClientRect().height + $("#chat-log").getBoundingClientRect().height - 60;
+  const max = Math.max(48, Math.min($("#chat").clientHeight * .65, available));
+  chatInput.style.height = Math.round(Math.max(48, Math.min(max, height))) + "px";
+  chatEditor.refresh();
+  chatResize.setAttribute("aria-valuemax", String(Math.round(max)));
+  chatResize.setAttribute("aria-valuenow", String(Math.round(chatInput.getBoundingClientRect().height)));
+}
+chatResize.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const startY = e.clientY, startHeight = chatInput.getBoundingClientRect().height;
+  chatResize.setPointerCapture(e.pointerId);
+  const move = (ev) => setChatHeight(startHeight + startY - ev.clientY);
+  const end = () => {
+    chatResize.removeEventListener("pointermove", move);
+    chatResize.removeEventListener("pointerup", end);
+    chatResize.removeEventListener("pointercancel", end);
+    store.set("chat.inputHeight", parseFloat(chatInput.style.height) || startHeight);
+  };
+  chatResize.addEventListener("pointermove", move);
+  chatResize.addEventListener("pointerup", end);
+  chatResize.addEventListener("pointercancel", end);
+});
+chatResize.addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  e.preventDefault();
+  setChatHeight(chatInput.getBoundingClientRect().height + (e.key === "ArrowUp" ? 20 : -20));
+  store.set("chat.inputHeight", parseFloat(chatInput.style.height));
+});
+
 document.addEventListener("keydown", (e) => {
   if (e.defaultPrevented) return;          // CodeMirror already handled it (its own ⌘S, ⌘↵)
   const mod = e.metaKey || e.ctrlKey;
@@ -2115,7 +2167,7 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#ctx")) { $("
 
 function chatHidden(h) {
   $("#chat").classList.toggle("hidden", h); $("#chat-gutter").classList.toggle("hidden", h);
-  store.set("chat.hidden", h); cm.refresh();
+  store.set("chat.hidden", h); cm.refresh(); if (!h) chatEditor.refresh();
 }
 chatHidden(store.get("chat.hidden", false));
 $("#btn-chat").onclick = () => chatHidden(!$("#chat").classList.contains("hidden"));
@@ -2290,7 +2342,7 @@ function describeScope(mentions, mode, activeFile = S.active) {
     + (prov().enforces_scope === false ? " (restored after the turn; not a write boundary)" : "");
 }
 function updateScope() {
-  const ms = parseMentions($("#chat-input").value), mode = $("#chat-mode").value;
+  const ms = parseMentions(chatEditor.getValue()), mode = $("#chat-mode").value;
   const el = $("#chat-scope");
   el.textContent = describeScope(ms, mode);
   el.className = mode === "ask" ? "ask" : ms.length ? "narrow" : "wide";
@@ -2300,24 +2352,92 @@ function updateScope() {
 function mentionHtml(text) {
   return esc(text).replace(/(^|\s)(@[^\s@]+)/g, '$1<span class="mention">$2</span>');
 }
-$("#chat-input").addEventListener("input", updateScope);
 $("#chat-mode").addEventListener("change", updateScope);
+
+// A widget replaces the visible text only; the document, selections and sent message
+// still contain the original TeX. Show source while a selection or the cursor is inside.
+let chatMathMarks = [], chatMathTimer, chatMathUpdating = false, chatComposing = false;
+function scheduleChatMath() {
+  if (chatMathUpdating || chatComposing) return;
+  clearTimeout(chatMathTimer); chatMathTimer = setTimeout(renderChatMath, 80);
+}
+function renderChatMath() {
+  if (chatComposing) return;
+  const value = chatEditor.getValue(), macros = S.symbols.katex_macros || {};
+  const macroKey = JSON.stringify(macros);
+  $("#chat-placeholder").hidden = !!value;
+  const selections = chatEditor.listSelections().map((s) => {
+    const a = chatEditor.indexFromPos(s.anchor), b = chatEditor.indexFromPos(s.head);
+    return { from: Math.min(a, b), to: Math.max(a, b) };
+  });
+  const editing = (f) => selections.some((s) => s.from === s.to
+    ? chatEditor.hasFocus() && f.from < s.from && s.from < f.to
+    : s.from < f.to && s.to > f.from);
+  const wanted = new Map(MathText.ranges(value).filter((f) => !editing(f))
+    .map((f) => [JSON.stringify([f.from, f.to, f.raw, macroKey]), f]));
+  const kept = [];
+  chatMathUpdating = true;
+  try {
+    chatEditor.operation(() => {
+      for (const item of chatMathMarks) {
+        const r = item.mark.find();
+        const key = r && JSON.stringify([chatEditor.indexFromPos(r.from), chatEditor.indexFromPos(r.to), item.raw, item.macroKey]);
+        if (key && wanted.has(key)) { kept.push(item); wanted.delete(key); }
+        else item.mark.clear();
+      }
+      for (const f of wanted.values()) {
+        const widget = document.createElement("span");
+        widget.className = "chat-math-widget";
+        widget.title = "Click to edit formula";
+        widget.innerHTML = MathText.render(f.raw, { markdown: esc, katex, macros });
+        let mark;
+        widget.addEventListener("mousedown", (e) => {
+          if (e.button !== 0) return;
+          e.preventDefault(); e.stopPropagation();
+          const range = mark.find(); if (!range) return;
+          const start = chatEditor.indexFromPos(range.from);
+          mark.clear();
+          chatEditor.focus();
+          const delimiter = f.raw.startsWith("$$") || f.raw.startsWith("\\(") || f.raw.startsWith("\\[") ? 2 : 1;
+          chatEditor.setCursor(chatEditor.posFromIndex(start + delimiter));
+        });
+        mark = chatEditor.markText(chatEditor.posFromIndex(f.from), chatEditor.posFromIndex(f.to), {
+          replacedWith: widget, clearOnEnter: true,
+        });
+        kept.push({ mark, raw: f.raw, macroKey });
+      }
+    });
+    chatMathMarks = kept;
+  } finally { chatMathUpdating = false; }
+}
+chatEditor.on("cursorActivity", scheduleChatMath);
+chatEditor.on("focus", scheduleChatMath);
+chatEditor.on("blur", scheduleChatMath);
+chatEditor.getInputField().addEventListener("compositionstart", () => { chatComposing = true; clearTimeout(chatMathTimer); });
+chatEditor.getInputField().addEventListener("compositionend", () => { chatComposing = false; scheduleChatMath(); });
+chatEditor.on("change", (ed, change) => {
+  updateScope();
+  $("#chat-placeholder").hidden = !!ed.getValue();
+  scheduleChatMath();
+  if (change.origin !== "setValue") { stopFollowing(); SM.sel = 0; renderPicker(); }
+});
 
 // Insert a mention at the caret (⌘L, or picking one from the @ menu).
 function insertMention(token, snip, replaceFrom) {
-  const inp = $("#chat-input"), v = inp.value, caret = inp.selectionStart ?? v.length;
+  const v = chatEditor.getValue(), caret = chatEditor.indexFromPos(chatEditor.getCursor());
   const start = replaceFrom ?? caret;
   const before = v.slice(0, start), after = v.slice(caret);
   const pad = before && !/\s$/.test(before) ? " " : "";
-  inp.value = before + pad + token + " " + after.replace(/^\s+/, "");
+  const trim = after.length - after.replace(/^\s+/, "").length;
+  chatEditor.replaceRange(pad + token + " ", chatEditor.posFromIndex(start), chatEditor.posFromIndex(caret + trim), "+mention");
   const pos = (before + pad + token + " ").length;
-  inp.setSelectionRange(pos, pos);
+  chatEditor.setCursor(chatEditor.posFromIndex(pos));
   if (snip !== undefined) {
     delete C.snips[token]; C.snips[token] = snip;             // newest last; keep the latest 50
     C.snips = Object.fromEntries(Object.entries(C.snips).slice(-50));
     provSet("snips", C.snips);
   }
-  updateScope(); inp.focus();
+  updateScope(); chatEditor.focus();
 }
 
 /* Where the agent works, marked in the editor: the lines it reads (blue), the passage it is
@@ -2498,7 +2618,6 @@ function stopFollowing() { if (C.job) { C.follow = false; $("#agent-view").hidde
 document.addEventListener("focusin", (e) => {
   if (!cm.getWrapperElement().contains(e.target) && !$("#agent-view").contains(e.target)) stopFollowing();
 });
-$("#chat-input").addEventListener("input", stopFollowing);
 
 /* Files added to a message: the + button, files dragged onto the panel, an image pasted
    into the box. Each is saved in the project's prism-uploads/ folder (/api/upload),
@@ -2582,7 +2701,7 @@ const ATT = {
       } catch (e) { f.error = String(e.message || e); }
       this.render();
     }
-    $("#chat-input").focus();
+    chatEditor.focus();
   },
 
   // For the prompt: where the files are. Null when there are none.
@@ -2600,7 +2719,7 @@ $("#chat-files").addEventListener("click", (e) => {
   ATT.remove(+b.dataset.att);
 });
 // A pasted image (a screenshot) becomes a file too; pasted text stays text.
-$("#chat-input").addEventListener("paste", (e) => {
+chatEditor.getInputField().addEventListener("paste", (e) => {
   const files = [...(e.clipboardData && e.clipboardData.files) || []];
   if (!files.length) return;
   e.preventDefault();
@@ -2620,13 +2739,13 @@ async function chatSend() {
 async function sendMessage() {
   if (C.configSaving) await C.configSaving;
   if (prov().modelsPending) await prov().modelsPending;
-  const text = $("#chat-input").value.trim();
+  const text = chatEditor.getValue().trim();
   if (!text) return;
   const activeFile = S.active;                 // capture before saving or fetching references
   $("#slash-menu").hidden = true;
   const slash = /^\/([\w:.-]+)(?:\s+([\s\S]*))?$/.exec(text);
   if (slash && LOCAL[slash[1]]) {          // handled here, without running the agent
-    $("#chat-input").value = "";
+    chatEditor.setValue("");
     chatAppend(esc(text), "msg user");
     return runLocal(slash[1], (slash[2] || "").trim());
   }
@@ -2647,7 +2766,7 @@ async function sendMessage() {
   const r = await Q.agent({ prompt, session_id: C.session, mode, model: C.model, effort: C.effort, scope, provider,
     project_key: P.projectKey, attachments: sentFiles.map((f) => f.path), active_file: activeFile });
   if (r.error) return chatAppend(`<div class="err">${esc(r.error)}</div>`, "card");
-  if ($("#chat-input").value.trim() === text) $("#chat-input").value = ""; updateScope();
+  if (chatEditor.getValue().trim() === text) chatEditor.setValue(""); updateScope();
   const sentIds = new Set(sentFiles.map((f) => f.id));
   ATT.files = ATT.files.filter((f) => !sentIds.has(f.id)); ATT.render();
   setTimeout(() => ATT.showSync(), 0);           // the badges on the sent message's chips
@@ -3174,13 +3293,12 @@ function mentionItems(q) {
   return out.slice(0, 60);
 }
 function renderPicker() {
-  const m = $("#slash-menu"), inp = $("#chat-input");
-  const v = inp.value, caret = inp.selectionStart ?? v.length;
+  const m = $("#slash-menu"), v = chatEditor.getValue(), caret = chatEditor.indexFromPos(chatEditor.getCursor());
   const slash = /^\/([\w:.-]*)$/.exec(v);
   const at = /(^|\s)@([^\s@]*)$/.exec(v.slice(0, caret));
   if (slash) {
     SM.kind = "slash";
-    if (!catalog) loadCatalog().then(() => { if (/^\/[\w:.-]*$/.test(inp.value)) renderPicker(); });
+    if (!catalog) loadCatalog().then(() => { if (/^\/[\w:.-]*$/.test(chatEditor.getValue())) renderPicker(); });
     SM.items = slashItems(slash[1]);
   } else if (at) {
     SM.kind = "mention"; SM.at = caret - at[2].length - 1;
@@ -3198,11 +3316,10 @@ function renderPicker() {
 function acceptPick(i) {
   const it = SM.items[i]; if (!it) return;
   $("#slash-menu").hidden = true;
-  if (SM.kind === "slash") { $("#chat-input").value = it.insert; $("#chat-input").focus(); updateScope(); }
+  if (SM.kind === "slash") { chatEditor.setValue(it.insert); chatEditor.setCursor(chatEditor.posFromIndex(it.insert.length)); chatEditor.focus(); updateScope(); }
   else insertMention(it.insert, it.snip, SM.at);
 }
-$("#chat-input").addEventListener("input", () => { SM.sel = 0; renderPicker(); });
-$("#chat-input").addEventListener("keydown", (e) => {
+chatEditor.getInputField().addEventListener("keydown", (e) => {
   if ($("#slash-menu").hidden) return;
   if (e.key === "ArrowDown" || e.key === "ArrowUp") {
     e.preventDefault(); e.stopImmediatePropagation();
@@ -3210,18 +3327,18 @@ $("#chat-input").addEventListener("keydown", (e) => {
   } else if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey && !e.isComposing)) {
     e.preventDefault(); e.stopImmediatePropagation(); acceptPick(SM.sel);
   } else if (e.key === "Escape") { e.stopImmediatePropagation(); $("#slash-menu").hidden = true; }
-});
+}, true);
 $("#slash-menu").addEventListener("mousedown", (e) => {
   const it = e.target.closest(".sm-item"); if (it) { e.preventDefault(); acceptPick(+it.dataset.i); }
 });
-$("#chat-input").addEventListener("blur", () => setTimeout(() => { $("#slash-menu").hidden = true; }, 150));
+chatEditor.on("blur", () => setTimeout(() => { $("#slash-menu").hidden = true; }, 150));
 $("#chat-log").addEventListener("click", (e) => {
   const a = e.target.closest("[data-insert]"); if (!a) return;
   const v = a.dataset.insert;
   // "/model opus" style chips run at once; skill chips are filled in for you to finish.
   const local = /^\/(model|effort|provider)\s+([\s\S]+)$/.exec(v);
   if (local) runLocal(local[1], local[2].trim());
-  else { $("#chat-input").value = v; $("#chat-input").focus(); updateScope(); }
+  else { chatEditor.setValue(v); chatEditor.setCursor(chatEditor.posFromIndex(v.length)); chatEditor.focus(); updateScope(); }
 });
 
 async function stopTurn() {
@@ -3234,9 +3351,9 @@ async function stopTurn() {
   }
 }
 $("#chat-send").onclick = () => { if (C.job) stopTurn(); else chatSend(); };
-$("#chat-input").addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); chatSend(); }
-});
+chatEditor.getInputField().addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); e.stopImmediatePropagation(); chatSend(); }
+}, true);
 $("#chat-new").onclick = () => {
   if (C.job) return;
   C.session = null; provSet("session", null);
@@ -3249,7 +3366,7 @@ function askAboutSelection() {
   chatHidden(false);
   const sel = selectionMention();
   if (sel) insertMention(sel.token, sel.text);
-  else { const t = activeTab(); if (t) insertMention("@" + t.path); else $("#chat-input").focus(); }
+  else { const t = activeTab(); if (t) insertMention("@" + t.path); else chatEditor.focus(); }
 }
 cm.setOption("extraKeys", { ...cm.getOption("extraKeys"), "Cmd-L": askAboutSelection, "Ctrl-L": askAboutSelection });
 // The providers and the project's identity, without which nothing can be sent: asked for

@@ -534,7 +534,7 @@ li.CodeMirror-hint-active { background: var(--accent); color: var(--accent-text)
 #quota .q-sum .warn { color: var(--warn); } #quota .q-sum .err { color: var(--err); font-weight: 600; }
 #quota .q-open { margin-left: auto; display: inline-flex; }
 #quota .q-open .ico { width: 12px; height: 12px; }
-#chat-log { flex: 1; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
+#chat-log { flex: 1; min-height: 40px; overflow: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 .msg { border-radius: 8px; padding: 8px 10px; white-space: pre-wrap; word-wrap: break-word; line-height: 1.5; }
 .msg.user { background: var(--sel); align-self: flex-end; max-width: 92%; }
 .msg.user .ctx { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
@@ -584,6 +584,9 @@ details.live-file > pre { font: 11.5px/1.4 var(--mono); color: var(--text); whit
 .card .warn { color: var(--warn); }
 .card .err { color: var(--err); white-space: pre-wrap; }
 #chat-foot { border-top: 1px solid var(--border); padding: 8px; display: flex; flex-direction: column; gap: 6px; position: relative; }
+#chat-resize { position: absolute; top: -5px; left: 0; right: 0; height: 10px; cursor: ns-resize; touch-action: none; z-index: 2; }
+#chat-resize::after { content: ""; display: block; width: 36px; height: 3px; margin: 3px auto; border-radius: 2px; background: var(--muted); opacity: .6; }
+#chat-resize:hover::after, #chat-resize:focus-visible::after { background: var(--accent); opacity: 1; }
 #slash-menu {
   position: absolute; left: 8px; right: 8px; bottom: calc(100% - 4px); z-index: 60; max-height: 300px; overflow: auto;
   background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 -6px 20px rgba(0, 0, 0, .16); padding: 4px;
@@ -629,8 +632,14 @@ details.live-file > pre { font: 11.5px/1.4 var(--mono); color: var(--text); whit
 #chat-scope.narrow::before { color: var(--ok); }
 #chat-scope.ask::before { color: var(--muted); }
 .mention { color: var(--accent); font-family: var(--mono); font-size: 12px; background: rgba(127, 127, 127, .12); border-radius: 3px; padding: 0 3px; }
-#chat-input { width: 100%; resize: vertical; font: 13px/1.4 var(--sans); color: var(--text); background: var(--cm-bg); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
-#chat-input:focus { outline: none; border-color: var(--accent); }
+#chat-input-box { position: relative; display: flex; flex-direction: column; height: 80px; min-height: 48px; max-height: 55vh; width: 100%; overflow: hidden; background: var(--cm-bg); border: 1px solid var(--border); border-radius: 6px; }
+#chat-input-box:focus-within { border-color: var(--accent); }
+#chat-input-box .CodeMirror { flex: 1; min-height: 25px; height: auto; font: 13px/1.4 var(--sans); background: transparent; }
+#chat-input-box .CodeMirror-lines { padding: 6px 4px; }
+#chat-placeholder { position: absolute; top: 6px; left: 8px; right: 8px; color: var(--muted); pointer-events: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#chat-input-box .chat-math-widget { display: inline-block; cursor: text; vertical-align: middle; max-width: 100%; }
+#chat-input-box .chat-math-widget .katex-display { margin: 3px 0; }
+#chat-input-box .chat-math-widget:hover { background: var(--sel); border-radius: 3px; }
 .chat-actions { display: flex; align-items: center; gap: 8px; }
 .chat-actions .status { margin-right: auto; font-size: 11px; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 /* Context window ring (renderContext in app.js), after the Claude desktop app. */
