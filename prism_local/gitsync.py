@@ -595,8 +595,9 @@ class GitSync:
             if healed is None:               # a rewrite to keep: this copy waits
                 return self._failed(error), False
             if not self.behind:
-                if self.clash:               # resolved elsewhere (a terminal, a co-author)
-                    self.error, self.clash = None, []
+                # The fetch succeeded and there is nothing to merge, including when a
+                # terminal fixed an earlier failure that never set a source clash.
+                self.error, self.clash = None, []
             else:
                 with self._changing():
                     try:

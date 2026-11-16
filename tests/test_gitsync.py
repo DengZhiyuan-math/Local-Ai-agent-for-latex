@@ -509,6 +509,57 @@ class GitSyncTest(unittest.TestCase):
         self.assertEqual(self.g.behind, 0)
         self.assertIn("Brought in 1 change from GitHub", self.g.notice)
 
+    def test_automatic_pull_clears_a_merge_error_resolved_in_a_terminal(self):
+        """A generated file blocks a pull; a terminal sync fixes it without a new commit."""
+        other = tmpdir()
+        git(other, "clone", "-q", str(self.remote), ".")
+        identity(other)
+        (other / "build").mkdir()
+        (other / "build/main.pdf").write_bytes(b"%PDF remote")
+        git(other, "add", "build/main.pdf")
+        git(other, "commit", "-qm", "Compiled elsewhere")
+        git(other, "push", "-q")
+        (self.root / "build").mkdir()
+        (self.root / "build/main.pdf").write_bytes(b"%PDF local")
+
+        failed = self.g.pull()
+        self.assertEqual(failed.state, "failed")
+        self.assertIn("build/main.pdf", self.g.status()["error_details"])
+        self.assertEqual(self.g.clash, [], "an overwritten output is not a source clash")
+        self.assertEqual(self.g.pull().state, "failed", "fetching alone does not fix the merge")
+
+        (self.root / "build/main.pdf").unlink()
+        git(self.root, "merge", "--ff-only", "origin/main")
+        head = git(self.root, "rev-parse", "HEAD")
+        self.clock.advance(gitsync.FETCH_EVERY + 1)
+        self.g.tick()
+
+        st = self.g.status()
+        self.assertEqual((st["ahead"], st["behind"]), (0, 0))
+        self.assertIsNone(st["error"])
+        self.assertIsNone(st["error_details"])
+        self.assertEqual(git(self.root, "rev-parse", "HEAD"), head, "no new edit needed")
+        self.assertEqual(failed.state, "failed", "the earlier outcome keeps its own failure")
+
+    def test_manual_pull_clears_a_network_error_without_new_commits(self):
+        away = self.remote.with_name(self.remote.name + "-away")
+        self.remote.rename(away)
+        try:
+            failed = self.g.now("pull")
+            self.assertEqual(failed.state, "failed")
+            self.assertIn("Could not reach GitHub", self.g.status()["error"])
+            self.g.push()
+            self.assertIn("Could not reach GitHub", self.g.status()["error"],
+                          "an idle push does not verify connectivity")
+        finally:
+            away.rename(self.remote)
+
+        done = self.g.now("pull")
+        self.assertEqual((done.state, done.error), ("synced", None))
+        self.assertIsNone(self.g.status()["error"])
+        self.assertIsNone(self.g.status()["error_details"])
+        self.assertIn("Could not reach GitHub", failed.error)
+
     def test_a_pull_and_a_button_say_what_they_did(self):
         """What a pull or a button met is returned to whoever asked; status() keeps it too,
         until a step succeeds (the worker's commit, say)."""
