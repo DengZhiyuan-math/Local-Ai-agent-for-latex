@@ -1,5 +1,7 @@
 """Provenance is compiler-recorded, read-only and local to the successful result."""
 import sys
+import os
+import types
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -15,6 +17,34 @@ DOC = r"\documentclass{article}\begin{document}\input{section}\end{document}"
 
 
 class Results(unittest.TestCase):
+    @unittest.skipUnless(os.name == "nt", "Windows stat/fstat timestamp semantics")
+    def test_windows_path_and_handle_ctime_need_not_match(self):
+        real = os.fstat
+
+        def handle_stat(fd):
+            s = real(fd)
+            return types.SimpleNamespace(**{n: getattr(s, n) for n in (
+                "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode")},
+                st_ctime_ns=s.st_ctime_ns + 1_000_000)
+
+        with mock.patch.object(build_results.os, "fstat", side_effect=handle_stat):
+            self.compile()
+            self.assertEqual(build_results.read(self.project.config)["status"], "complete")
+
+    def test_handle_metadata_change_during_read_is_rejected(self):
+        real, calls = os.fstat, []
+
+        def changing_stat(fd):
+            s = real(fd)
+            calls.append(fd)
+            return types.SimpleNamespace(**{n: getattr(s, n) for n in (
+                "st_dev", "st_ino", "st_size", "st_mtime_ns", "st_mode")},
+                st_ctime_ns=s.st_ctime_ns + len(calls))
+
+        with mock.patch.object(build_results.os, "fstat", side_effect=changing_stat):
+            with self.assertRaisesRegex(ValueError, "changed while reading"):
+                build_results._plain(self.root, "main.tex")
+
     def setUp(self):
         self.root = tmpdir()
         (self.root / "main.tex").write_text(DOC)
@@ -166,7 +196,9 @@ class Results(unittest.TestCase):
         self.assertEqual(build_results.read(self.project.config)["status"], "unknown")
 
     def test_system_distribution_inputs_are_historical_environment(self):
-        self.compile(extra="INPUT /usr/local/texlive/2026/texmf-dist/tex/latex/base/article.cls\n")
+        system = ("C:/Program Files/MiKTeX/tex/latex/base/article.cls" if os.name == "nt" else
+                  "/usr/local/texlive/2026/texmf-dist/tex/latex/base/article.cls")
+        self.compile(extra=f"INPUT {system}\n")
         self.assertEqual(build_results.read(self.project.config)["status"], "complete")
 
     def test_tectonic_uses_native_rules_and_does_not_assume_fls(self):

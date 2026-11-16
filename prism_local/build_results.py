@@ -42,7 +42,12 @@ def _plain(root, name, limit=MAX_FILE):
         raw = stream.read(limit + 1)
         after = os.fstat(stream.fileno())
     fields = lambda s: (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
-    if len(raw) > limit or fields(before) != fields(after) or fields(path.stat()) != fields(after):
+    named, opened = fields(path.stat()), fields(after)
+    # Windows Python exposes ctime differently through stat and fstat. Compare ctime
+    # between handle snapshots, while the named path must still identify the same inode,
+    # size and modification time. Content hashes and pre/post-build identities stay intact.
+    same_path = named[:-1] == opened[:-1] if os.name == "nt" else named == opened
+    if len(raw) > limit or fields(before) != opened or not same_path:
         raise ValueError("input changed while reading")
     return _sha(raw), fields(after)
 
