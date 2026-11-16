@@ -868,7 +868,7 @@ async function openFile(path, line, following = false) {
   renderTabs(); renderTree(); showBanner(t);
   persistSession();
   if (line) jumpToLine(line);
-  if (!$("#history").hidden && !$("#panel").classList.contains("collapsed")) showHistory(path);   // follows the file
+  if (!$("#history").hidden && !$("#panel").classList.contains("collapsed") && histScope === "file") showHistory(path);   // follows the file
   cm.focus();
   cm.refresh();
 }
@@ -1488,6 +1488,8 @@ $("#sync-menu").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-sync]"); if (!b) return;
   syncMenu(false);
   if (b.dataset.sync === "history") return showHistory();
+  if (b.dataset.sync === "versions") return showVersions();
+  if (b.dataset.sync === "pin") return pinVersion();
   if (b.dataset.sync === "bind" && !confirm(`Sync this project with ${S.sync.target.repository_identity} on GitHub from now on?\n\nDetails: branch ${S.sync.target.branch_ref}, fetch ${S.sync.target.fetch_url}, push ${S.sync.target.push_url}`)) return;
   if (b.dataset.sync === "resolve" && !confirm("Keep your version of the lines you and GitHub both changed?\n\n"
       + "Do this after editing the file so it holds what both of you want: where both changed the same lines, "
@@ -1568,25 +1570,184 @@ document.addEventListener("click", (e) => { if (!e.target.closest("#sync-box")) 
 // can be put back (as an edit of yours, which is saved and committed like any other).
 // Only the latest request's answer is shown: of the list (the file can change while its
 // history loads), and of the commit shown (a newer click, or a new list).
-let histSeq = 0, histShowSeq = 0;
+let histSeq = 0, histShowSeq = 0, histScope = "file", histPins = [];
+// Which version groups are unfolded, per view ("project", or the file's path): the newest
+// one at first, then as you leave them.
+const histOpen = new Map();
+// The panel's top row: the whole project's versions or the open file's, and pinning.
+const histTools = (scope) => `<li class="hist-tools"><span class="seg">`
+  + `<button class="tiny${scope === "project" ? " on" : ""}" data-hscope="project" title="The project's pinned versions and commits">Project</button>`
+  + `<button class="tiny${scope === "file" ? " on" : ""}" data-hscope="file" title="The commits that changed the open file">This file</button></span>`
+  + `<button class="tiny" data-hpin="1" title="Give the project as it is now a name (v1, submitted, …) to come back to later">Pin this version…</button></li>`;
+const histWhen = (at) => `<span class="hist-when" title="${esc(new Date(at * 1000).toLocaleString())}">${esc(ago(at))}</span>`;
+const histTags = (names) => (names || []).map((n) => `<b class="hist-pin">${esc(n)}</b>`).join("");
+// The history folded by pinned version (versions.py grouped): a group per version, holding
+// what was done between the version before it and itself; on top, the work since the last
+// pin. Each group's header folds it; in the project view it is the version too (select it
+// to see, compare or restore it). `path`: the file view's file (its commits put that file
+// back in the editor).
+function histFolded(r, view, path) {
+  const commits = r.commits || [], groups = (r.groups || []).filter((g) => !path || g.count);
+  const row = (c, i, key) => `<li data-rev="${esc(c.hash)}"${path ? ` data-path="${esc(path)}"` : ""}`
+    + `${key ? ` data-in="${esc(key)}"` : ""}>${histWhen(c.at)}<span class="hist-msg">${histTags(c.pins)}${esc(c.message)}</span>`
+    + `<span class="hist-hash">${esc(c.hash.slice(0, 7))}${i === 0 ? " · latest" : ""}</span></li>`;
+  if (!(r.groups || []).length) return commits.map((c, i) => row(c, i, "")).join("");     // nothing pinned: no folds
+  const fresh = commits.filter((c) => !c.version);
+  const all = [...(fresh.length ? [{ key: "new", commits: fresh }] : []),
+    ...groups.map((g) => ({ key: g.hash, group: g, commits: commits.filter((c) => c.version === g.hash) }))];
+  if (!histOpen.has(view)) histOpen.set(view, new Set(all.length ? [all[0].key] : []));
+  const open = histOpen.get(view);
+  return all.map(({ key, group, commits: inside }) => {
+    const shut = !open.has(key);
+    const head = group
+      ? `${histTags(group.names)}<span class="hist-note">${esc(group.note)}</span>`
+      : `<span class="hist-note">Not pinned yet: since ${esc(groups[0] ? groups[0].names.join(" / ") : "the start")}</span>`;
+    const pin = group && !path ? ` data-rev="${esc(group.names[0])}" data-pin="${esc(group.names[0])}"` : "";
+    return `<li class="hist-group${shut ? "" : " open"}" data-group="${esc(key)}"${pin}>`
+      + `<span class="hist-caret" title="${shut ? "Unfold" : "Fold"}">${shut ? "▸" : "▾"}</span>`
+      + `${group ? histWhen(group.at) : `<span class="hist-when"></span>`}<span class="hist-msg">${head}</span>`
+      + `<span class="hist-hash">${Util.plural(inside.length, "commit")}</span></li>`
+      + inside.map((c) => row(c, commits.indexOf(c), key).replace("<li ", `<li${shut ? " hidden" : ""} `)).join("");
+  }).join("");
+}
+function histToggle(li, force) {
+  const key = li.dataset.group, view = histScope === "project" ? "project" : S.histPath;
+  if (!histOpen.has(view)) histOpen.set(view, new Set());
+  const open = histOpen.get(view);
+  const now = force ?? !open.has(key);
+  if (now) open.add(key); else open.delete(key);
+  li.classList.toggle("open", now);
+  li.querySelector(".hist-caret").textContent = now ? "▾" : "▸";
+  li.querySelector(".hist-caret").title = now ? "Fold" : "Unfold";
+  document.querySelectorAll(`#hist-list li[data-in="${CSS.escape(key)}"]`).forEach((x) => { x.hidden = !now; });
+}
 async function showHistory(path = S.active) {
   openPanel("history");
+  histScope = "file"; S.histPath = path;
   const list = $("#hist-list"), view = $("#hist-view");
   const seq = ++histSeq; histShowSeq++;
   view.innerHTML = "";
-  if (!path) { list.innerHTML = `<li class="none">Open a file to see its history.</li>`; return; }
-  list.innerHTML = `<li class="none">Loading the history of ${esc(path)}…</li>`;
-  const r = await Q.log(path);
+  if (!path) { list.innerHTML = histTools("file") + `<li class="none">Open a file to see its history.</li>`; return; }
+  list.innerHTML = histTools("file") + `<li class="none">Loading the history of ${esc(path)}…</li>`;
+  const r = await Q.history(path, 300);
   if (seq !== histSeq) return;
   const commits = r.commits || [];
-  if (!commits.length) { list.innerHTML = `<li class="none">${esc(r.error || `No commits of ${path} yet.`)}</li>`; return; }
-  list.innerHTML = `<li class="hist-file">${esc(path)} · ${commits.length} version${commits.length > 1 ? "s" : ""}</li>` + commits.map((c, i) =>
-    `<li data-rev="${esc(c.hash)}" data-path="${esc(path)}"><span class="hist-when" title="${esc(new Date(c.at * 1000).toLocaleString())}">${esc(ago(c.at))}</span>`
-    + `<span class="hist-msg">${esc(c.message)}</span><span class="hist-hash">${esc(c.hash.slice(0, 7))}${i === 0 ? " · latest" : ""}</span></li>`).join("");
+  if (r._status !== 200 || !commits.length) { list.innerHTML = histTools("file") + `<li class="none">${esc(r.error || `No commits of ${path} yet.`)}</li>`; return; }
+  histPins = r.pins || histPins;
+  list.innerHTML = histTools("file") + `<li class="hist-file">${esc(path)} · ${commits.length} version${commits.length > 1 ? "s" : ""}</li>`
+    + histFolded(r, path, path);
+}
+// The whole project's versions, folded by pinned version (v1, …). One shows what it
+// changed and has; it can be compared with now, pinned, or the project restored to it.
+// Restoring and pinning commit what is there first: going back is itself a new version,
+// and nothing in the history is lost.
+async function showVersions() {
+  openPanel("history");
+  histScope = "project";
+  const list = $("#hist-list"), view = $("#hist-view");
+  const seq = ++histSeq; histShowSeq++;
+  view.innerHTML = "";
+  list.innerHTML = histTools("project") + `<li class="none">Loading the project's versions…</li>`;
+  const r = await Q.history(undefined, 300);
+  if (seq !== histSeq) return;
+  if (r._status !== 200) { list.innerHTML = histTools("project") + `<li class="none">${esc(r.error || "HTTP " + r._status)}</li>`; return; }
+  histPins = r.pins || [];
+  const commits = r.commits || [];
+  let h = histTools("project");
+  if (!histPins.length) h += `<li class="hist-file">No pinned versions yet: “Pin this version…” names the project as it is now (v1), and the history folds by version.</li>`;
+  h += commits.length ? histFolded(r, "project", null) : `<li class="none">No commits yet.</li>`;
+  if (r.sync === false) h += `<li class="none">Automatic commits are off for this project (GitHub menu): only the commits made while they were on, by hand, or by pinning are here.</li>`;
+  list.innerHTML = h;
+}
+async function showVersion(li) {
+  const rev = li.dataset.rev, label = li.dataset.pin || rev.slice(0, 7);
+  const seq = ++histShowSeq, view = $("#hist-view");
+  view.innerHTML = `<div class="hist-bar">Loading ${esc(label)}…</div>`;
+  const r = await Q.historyShow(rev);
+  if (seq !== histShowSeq) return;
+  if (r._status !== 200) { view.innerHTML = `<div class="hist-bar">${esc("Could not show this version: " + (r.error || "HTTP " + r._status))}</div>`; return; }
+  const first = (r.message || "").split("\n")[0];
+  const status = { A: "added", D: "deleted", M: "changed", R: "renamed", C: "copied", T: "type changed" };
+  view.innerHTML = `<div class="hist-bar"><b>${(r.pins || []).map((n) => `<span class="hist-pin">${esc(n)}</span>`).join("")}${esc(first)}</b><span class="hist-actions">`
+    + `<button class="tiny" data-hact="compare">Compare with now</button>`
+    + (li.dataset.pin ? `<button class="tiny" data-hact="unpin">Unpin</button>` : "")
+    + `<button class="tiny" data-hact="restore" title="Put every file of the project back as it was in this version (your current files are committed first)">Restore the project to this version</button></span></div>`
+    + `<div class="hist-meta">${esc(r.hash.slice(0, 10))} · ${esc(new Date(r.at * 1000).toLocaleString())} · ${esc(r.author)} · ${r.file_count} file${r.file_count === 1 ? "" : "s"}</div>`
+    + (r.changed.length ? `<ul class="hist-changed">${r.changed.map((c) => `<li><code title="${esc(status[c.status] || c.status)}">${esc(c.status)}</code>`
+      + `<a data-hfile="${esc(c.path)}">${esc(c.path)}</a>${c.from ? ` <span class="hist-meta">(from ${esc(c.from)})</span>` : ""}</li>`).join("")}</ul>`
+      : `<div class="hist-meta">This commit changed none of the project's files.</div>`)
+    + `<details><summary>The project's files in this version</summary><pre>${esc(r.files.join("\n"))}${r.file_count > r.files.length ? "\n…" : ""}</pre></details>`
+    + `<pre class="hist-out"></pre>`;
+  const out = view.querySelector(".hist-out");
+  view.onclick = async (e) => {
+    const file = e.target.closest("[data-hfile]");
+    if (file) {
+      const d = await Q.show(r.hash, file.dataset.hfile);
+      if (seq !== histShowSeq) return;
+      const diff = (d.diff || "").split("\n").filter((l) => !/^(diff --git|index |--- |\+\+\+ )/.test(l)).join("\n");
+      out.innerHTML = d._status !== 200 ? esc(d.error || "HTTP " + d._status) : diff ? diffHtml(diff) : "(no text change)";
+      return;
+    }
+    const act = e.target.closest("[data-hact]")?.dataset.hact;
+    if (act === "compare") {
+      out.textContent = "Comparing…";
+      const d = await Q.historyDiff(rev);
+      if (seq !== histShowSeq) return;
+      out.innerHTML = d._status !== 200 ? esc(d.error || "HTTP " + d._status)
+        : d.diff ? `What changed from ${esc(label)} to now (− then, + now):\n\n${esc(d.stat)}\n${diffHtml(d.diff)}${d.truncated ? "\n…" : ""}`
+          : `The project's files are the same as in ${esc(label)}.`;
+    } else if (act === "restore") {
+      await restoreVersion(rev, label);
+    } else if (act === "unpin") {
+      if (!confirm(`Unpin ${label}? Its commit stays in the history; only the name goes.`)) return;
+      const d = await Q.historyUnpin(li.dataset.pin);
+      toast(d.error || d.note || `Unpinned ${label}.`);
+      showVersions();
+    }
+  };
+}
+async function restoreVersion(rev, label) {
+  if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
+  if (!confirm(`Restore the whole project to ${label}?\n\n`
+      + "Every file is put back as it was then, and files that version did not have are deleted. "
+      + "Your current files are committed first, so nothing is lost: you can come back to them from this list.")) return;
+  const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
+  const r = await Q.historyRestore(rev);
+  if (r._status !== 200) return toast("Could not restore: " + (r.error || "HTTP " + r._status), true);
+  const n = r.written.length + r.deleted.length;
+  toast(n ? `Restored ${label}: ${Util.plural(r.written.length, "file")} put back, ${r.deleted.length} deleted.`
+    + (r.skipped.length ? ` Skipped: ${r.skipped.map((s) => s.path).join(", ")}.` : "")
+    : `The project already is as in ${label}.`);
+  await poll();
+  showVersions();
+}
+async function pinVersion() {
+  if (C.job || S.building) return toast("Wait until the agent's turn or the build has finished.");
+  if (!histPins.length) { const r = await Q.history(); histPins = r.pins || []; }
+  const used = new Set(histPins.map((p) => p.name));
+  let n = 1; while (used.has("v" + n)) n++;
+  const name = (prompt("Pin the project as it is now under the name (letters, digits, . - _):", "v" + n) || "").trim();
+  if (!name) return;
+  const note = prompt(`A note for ${name} (optional): what this version is`, "");
+  if (note === null) return;
+  const saved = await TABS.saveAll(); if (!saved.ok) return toast(Tabs.unsavedWhy(saved));
+  const r = await Q.historyPin(name, note);
+  if (r._status !== 200) return toast("Could not pin: " + (r.error || "HTTP " + r._status), true);
+  toast(`Pinned ${r.name} (${r.hash.slice(0, 7)}). ${r.upload || ""}`);
+  if (!$("#history").hidden && histScope === "project") showVersions();
 }
 $("#hist-list").addEventListener("click", async (e) => {
+  const scope = e.target.closest("[data-hscope]");
+  if (scope) return scope.dataset.hscope === "project" ? showVersions() : showHistory();
+  if (e.target.closest("[data-hpin]")) return pinVersion();
+  const group = e.target.closest("li.hist-group");
+  // A version's header: its caret folds it; the rest unfolds it and, in the project view,
+  // shows the version.
+  if (group && (e.target.closest(".hist-caret") || !group.dataset.rev)) return histToggle(group);
+  if (group) histToggle(group, true);
   const li = e.target.closest("li[data-rev]"); if (!li) return;
   document.querySelectorAll("#hist-list li.sel").forEach((x) => x.classList.remove("sel")); li.classList.add("sel");
+  if (!li.dataset.path) return showVersion(li);
   const seq = ++histShowSeq;
   const r = await Q.show(li.dataset.rev, li.dataset.path);
   if (seq !== histShowSeq) return;
@@ -1603,7 +1764,7 @@ $("#hist-list").addEventListener("click", async (e) => {
     toast(`Restored ${t.path} as of ${li.querySelector(".hist-when").textContent}. Undo with ⌘Z.`);
   };
 });
-$("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('[data-panel="history"]'); if (b) showHistory(); });
+$("#panel-tabs").addEventListener("click", (e) => { const b = e.target.closest('[data-panel="history"]'); if (b) (histScope === "project" ? showVersions : showHistory)(); });
 
 // prism-local was updated while this server ran: restart it with the new code. Resolves
 // to true once the new server answers (or to an error message). The page then reloads.
@@ -3079,6 +3240,10 @@ function renderTurnCard(e) {
     h += `<div class="warn">Changes exceeded this turn's permissions and could not be restored: ${esc(e.out_of_scope.join(", "))}.</div>`;
   if (e.new_metadata && e.new_metadata.length)
     h += `<div class="warn">New repository or agent metadata appeared during this turn: ${esc(e.new_metadata.join(", "))}. Nothing was removed; delete it if you did not create it.</div>`;
+  for (const p of e.pinned || [])
+    h += `<div class="note">Pinned the project as <b>${esc(p.name)}</b> (${esc(p.hash.slice(0, 7))}). ${esc(p.upload || "")} Find it under GitHub ▸ Versions of the project.</div>`;
+  for (const p of e.pin_errors || [])
+    h += `<div class="warn">Did not pin ${esc(p.name)}: ${esc(p.error)}</div>`;
   if (result.error) h += `<div class="err">${esc(result.error)}</div>`;
   const k = (n) => (n >= 1e6 ? (n / 1e6).toFixed(1) + "M" : n >= 1e4 ? Math.round(n / 1e3) + "k" : n >= 1e3 ? (n / 1e3).toFixed(1) + "k" : String(n));
   const tokens = e.usage && (e.usage.in || e.usage.out) ? `${k(e.usage.in || 0)} in / ${k(e.usage.out || 0)} out tokens` : "";

@@ -60,6 +60,13 @@ const Client = (() => {
       theirs: (path) => get("/api/git/theirs", { path }),
       log: (path) => get("/api/git/log", { path }),
       show: (rev, path) => get("/api/git/show", { rev, path }),
+      // the project's versions: pinned (v1, …) and commits; restoring and pinning commit first
+      history: (path, limit) => get("/api/history", { path, limit }),
+      historyShow: (rev, path) => get("/api/history/show", { rev, path }),
+      historyDiff: (rev, to, path) => get("/api/history/diff", { rev, to, path }),
+      historyRestore: (rev, paths) => post("/api/history/restore", { rev, paths }),
+      historyPin: (name, note) => post("/api/history/pin", { name, note }),
+      historyUnpin: (name) => post("/api/history/unpin", { name }),
       // the agent
       agent: (body) => post("/api/agent", body),
       // wait: seconds the server may wait for new ones (20 if not given)

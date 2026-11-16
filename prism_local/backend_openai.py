@@ -49,6 +49,9 @@ read_file and search, and in edit mode write_file, edit_file and compile.
 Paths are relative to the project root. Read a file before you change it;
 prefer edit_file with a short unique old_string over rewriting a whole file.
 compile runs the editor's own build and returns the errors with file:line.
+versions, version_show and version_diff look at the project's history (its
+commits and pinned versions); in edit mode version_restore and version_pin
+put files back as they were in a version and pin one, when the author asks.
 You cannot run commands.
 """
 
@@ -81,8 +84,12 @@ WRITE_TOOLS = [
 ]
 COMPILE_TOOL = _fn("compile", mcp_compile.TOOL["description"],
                    mcp_compile.TOOL["inputSchema"]["properties"], [])
+# The editor's tools besides compile (the project's history), as the MCP server offers them.
+EDITOR_TOOLS = {t["name"]: _fn(t["name"], t["description"], t["inputSchema"]["properties"],
+                               t["inputSchema"].get("required", []))
+                for t in mcp_compile.HISTORY_TOOLS}
 TOOL_LABELS = {"list_files": "Glob", "read_file": "Read", "search": "Grep",
-               "write_file": "Write", "edit_file": "Edit", "compile": "Compile"}
+               "write_file": "Write", "edit_file": "Edit", **mcp_compile.LABELS}
 
 
 class ToolError(Exception):
@@ -220,6 +227,8 @@ class OpenAICompat(Backend):
         tools = READ_TOOLS + (WRITE_TOOLS if job.mode == "edit" else [])
         if job.may_compile:
             tools = tools + [COMPILE_TOOL]
+        if job.has_tools:
+            tools = tools + [EDITOR_TOOLS[n] for n in mcp_compile.names_for(job.mode) if n in EDITOR_TOOLS]
         usage = {"in": 0, "out": 0}
         denials: list[str] = []
         res = {"session_id": sid, "exit": 0, "usage": usage, "denials": denials}
@@ -430,6 +439,13 @@ class OpenAICompat(Backend):
         return p.relative_to(job.root.resolve()).as_posix(), p
 
     def tool(self, job: Job, name: str, args: dict, denials: list[str]) -> str:
+        if name in EDITOR_TOOLS:
+            if not job.has_tools or name not in mcp_compile.names_for(job.mode):
+                raise ToolError(f"{name} is not available in this turn")
+            text, failed = mcp_compile.call(job.server_url, name, args)
+            if failed:
+                raise ToolError(text)
+            return text
         if name == "compile":
             if not job.may_compile:
                 raise ToolError("compiling is not available in this turn")

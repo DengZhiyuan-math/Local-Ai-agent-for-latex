@@ -317,14 +317,16 @@ class Codex(CliBackend):
         for setting in self.permission_config(job) + platform_config + ['approval_policy="never"',
                 'web_search="disabled"', "features.apps=false", "features.hooks=false", "mcp_servers={}"]:
             cmd += ["-c", setting]
-        if job.may_compile:
-            cfg = mcp_compile.config(job.server_url)
+        if job.has_tools:
+            cfg = mcp_compile.config(job.server_url, job.mode)
+            names = mcp_compile.names_for(job.mode)
             cmd += ["-c", f"mcp_servers.prism.command={json.dumps(cfg['command'])}",
                     "-c", f"mcp_servers.prism.args={json.dumps(cfg['args'])}",
-                    "-c", "mcp_servers.prism.enabled_tools=[\"compile\"]",
-                    "-c", 'mcp_servers.prism.tools.compile.approval_mode="approve"',
+                    "-c", f"mcp_servers.prism.enabled_tools={json.dumps(names)}",
                     "-c", "mcp_servers.prism.tool_timeout_sec=1200",
                     "-c", "mcp_servers.prism.required=true"]
+            for n in names:
+                cmd += ["-c", f'mcp_servers.prism.tools.{n}.approval_mode="approve"']
         model = job.model or self.default_model
         if model:
             cmd += ["-m", model]
@@ -388,7 +390,8 @@ class Codex(CliBackend):
             if completed:
                 job.tool_result(iid, item.get("status") == "failed")
         elif kind == "mcp_tool_call":
-            tool(f"{item.get('server', '')}.{item.get('tool', '')}", "")
+            tool(mcp_compile.LABELS.get(item.get("tool"), f"{item.get('server', '')}.{item.get('tool', '')}")
+                 if item.get("server") == "prism" else f"{item.get('server', '')}.{item.get('tool', '')}", "")
             if completed:
                 result = item.get("result") if isinstance(item.get("result"), dict) else {}
                 content = result.get("content") if isinstance(result.get("content"), list) else []

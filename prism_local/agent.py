@@ -89,6 +89,8 @@ class AgentManager:
         # the server commits them to the project's repository (gitsync.py).
         self.on_start: Callable[[], None] = lambda: None
         self.on_changed: Callable[[list[str], str], None] = lambda paths, why: None
+        # Pins a version (name, note) as the project is now: GitSync.pin_version.
+        self.on_pin: Callable[[str, str], dict] | None = None
         # Held while Undo writes the files: the editor's save lock (repository.FilesLock), which a
         # sync's commit and merge hold too, so a merge never undoes the Undo.
         self.writes = threading.RLock()
@@ -330,6 +332,8 @@ class AgentManager:
                 self.on_changed([c["path"] for c in changed], job.prompt)
             except Exception:  # noqa: BLE001
                 pass
+        if job.pins:
+            ev.update(self._pin_after(job, result))
         self._refresh_rate(job, backend)
         job.emit(ev)
 
@@ -411,6 +415,35 @@ class AgentManager:
         job = self.active
         if job and not job.done:
             job.emit({"t": "build", "result": result})
+
+    def queue_pin(self, name: str, note: str) -> dict:
+        """The agent asks to pin the project as a version (its version_pin tool, in an Edit
+        turn): pinned when the turn ends, once its changes are committed, so the pin has
+        them. A bad or taken name is refused now, while the agent can still say so."""
+        job = self.active
+        if not job or job.done or job.mode != "edit":
+            return {"error": "Pinning a version is available only during an Edit turn"}
+        if self.on_pin is None:
+            return {"error": "This project has no repository to pin versions in"}
+        name = str(name or "").strip()
+        if any(n == name for n, _ in job.pins):
+            return {"error": f"{name} is already to be pinned at the end of this turn"}
+        job.pins.append((name, str(note or "")))
+        return {"queued": name}
+
+    def _pin_after(self, job: Job, result: str) -> dict:
+        """The pins the turn asked for (queue_pin), now that its changes are committed."""
+        pinned, failed = [], []
+        for name, note in job.pins:
+            if result != "ok":
+                failed.append({"name": name, "error": f"not pinned: the turn {'was stopped' if result == 'stopped' else 'failed'}"})
+                continue
+            try:
+                r = self.on_pin(name, note)
+                pinned.append({"name": r["name"], "hash": r["hash"], "upload": r.get("upload")})
+            except Exception as e:  # noqa: BLE001 — said in the turn's summary
+                failed.append({"name": name, "error": say(e)})
+        return {"pinned": pinned, "pin_errors": failed}
 
     def busy(self) -> bool:
         job = self.active

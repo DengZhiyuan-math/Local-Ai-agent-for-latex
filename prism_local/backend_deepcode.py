@@ -16,7 +16,7 @@ permissions). prism-local only adds DEEPCODE_API_KEY from DEEPSEEK_API_KEY when 
 has no key, and DEEPCODE_MODEL / DEEPCODE_REASONING_EFFORT for /model and /effort.
 
 Deep Code has category permissions but no single-file permission. A temporary project
-settings overlay denies Ask writes and registers the editor's compile MCP for Edit.
+settings overlay denies Ask writes and registers the editor's mode-specific MCP tools.
 Scope uses post-turn restoration and is reported as such; it is not a sandbox.
 """
 from __future__ import annotations
@@ -367,11 +367,13 @@ class DeepCode(Backend):
             raise ValueError(bad)
         deny = ["write-out-cwd", "write-in-tmp", "delete-out-cwd", "mutate-git-log", "network"]
         if job.mode != "edit":
-            deny += ["write-in-cwd", "delete-in-cwd", "mcp"]
+            deny += ["write-in-cwd", "delete-in-cwd"]
+        if not job.has_tools:
+            deny.append("mcp")
         previous = settings.get("permissions") or {}
         settings["permissions"] = {**previous, "deny": list(dict.fromkeys(previous.get("deny", []) + deny))}
-        settings["mcpServers"] = {"prism": mcp_compile.config(job.server_url)} \
-            if job.may_compile else {}
+        settings["mcpServers"] = {"prism": mcp_compile.config(job.server_url, job.mode)} \
+            if job.has_tools else {}
         # A project overlay cannot remove user MCP servers because Deep Code merges them.
         # Deny their tool category unless the editor compile server is the only one.
         inherited = user_settings().get("mcpServers") or {}

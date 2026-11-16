@@ -28,6 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent import AgentManager  # noqa: E402
 import gitsync  # noqa: E402
+import versions  # noqa: E402
 from gitsync import GitSync  # noqa: E402
 from project import UPLOAD_DIR, UPLOAD_WAIT, Project, mtime  # noqa: E402
 from repository import FilesLock, RepoBusy  # noqa: E402
@@ -250,6 +251,7 @@ AGENT = AgentManager(lambda: PROJECT.root, lambda: PROJECT.list_files(), lambda 
 GITSYNC = GitSync(lambda: PROJECT.root, lambda: PROJECT.config.outdir, busy=lambda: AGENT.busy(), writes=SAVE_LOCK)
 AGENT.on_start = GITSYNC.before_turn
 AGENT.on_changed = lambda paths, why: GITSYNC.after_turn(paths, why)
+AGENT.on_pin = GITSYNC.pin_version
 AGENT.writes = SAVE_LOCK
 
 
@@ -347,6 +349,16 @@ class Handler(httpbase.Handler):
             return self._json({"commits": GITSYNC.log(q["path"])})
         if path == "/api/git/show":
             return self._json(GITSYNC.show(q["rev"], q["path"]))
+        # The project's versions (versions.py): for the History panel and the agent's tools.
+        if path == "/api/history":
+            v = versions.Versions(GITSYNC)
+            # commits folded by pinned version (groups), for the History panel and the agent
+            folded = v.grouped(q.get("path") or None, int(q.get("limit") or 40))
+            return self._json({"pins": v.pins(), **folded, "sync": GITSYNC.enabled})
+        if path == "/api/history/show":
+            return self._json(versions.Versions(GITSYNC).show(q["rev"], q.get("path") or None))
+        if path == "/api/history/diff":
+            return self._json(versions.Versions(GITSYNC).diff(q["rev"], q.get("to") or None, q.get("path") or None))
         if path == "/api/config":
             cfg = PROJECT.config
             return self._json({"main": cfg.project_main, "outdir": cfg.outdir, "modes": cfg.modes,
@@ -454,6 +466,48 @@ class Handler(httpbase.Handler):
     def post(self, path, body):
         return self._post(path, body)      # errors: httpbase._answer
 
+    def _history(self, path, body):
+        """Pin, unpin and restore versions. From the page: not during an agent's turn (the
+        files would change under it), and committed (GitSync). From the agent's tools
+        (by: agent): only in an Edit turn; a restore writes the files as the turn's own
+        changes (its diff and Undo have them, its commit records them), a pin is made when
+        the turn ends (AgentManager.queue_pin)."""
+        agent = body.get("by") == "agent"
+        if agent and not AGENT.editing():
+            raise Refused("Restoring or pinning versions is available only during an Edit turn", 403)
+        if not agent and path != "/api/history/unpin" and PROJECT.busy():
+            raise Conflict("Wait until the agent's turn or the build has finished.")
+        if path == "/api/history/restore":
+            rev, paths = str(body.get("rev") or ""), _paths(body.get("paths"))
+            if not agent:
+                return GITSYNC.restore_version(rev, paths)
+            job = AGENT.active
+
+            def writable(rel: str) -> bool:     # the turn's @-mentioned files, else any project file
+                if job.scope:
+                    return rel in job.scope
+                try:
+                    PROJECT.resolve(rel, editable_only=False)
+                    return True
+                except ValueError:
+                    return False
+            with SAVE_LOCK:
+                return versions.Versions(GITSYNC).restore(rev, paths, writable=writable)
+        if path == "/api/history/pin":
+            name, note = str(body.get("name") or "").strip(), str(body.get("note") or "")
+            if not agent:
+                return GITSYNC.pin_version(name, note)
+            versions.Versions(GITSYNC).free(name)
+            r = AGENT.queue_pin(name, note)
+            if "error" in r:
+                raise Conflict(r["error"])
+            return r
+        if path == "/api/history/unpin":
+            if agent:
+                raise Refused("The agent cannot unpin versions; the author can, in the History panel", 403)
+            return GITSYNC.unpin_version(str(body.get("name") or ""))
+        raise NotFound("not found")
+
     def _foreign_project(self, q=None):
         """A page of another project (the port was reused) is refused. It names its project
         in a header, or in the query where it cannot add one (a tab it opens, the pop-out PDF)."""
@@ -482,6 +536,8 @@ class Handler(httpbase.Handler):
                                         list(body.get("leave_out") or []), files_lock=SAVE_LOCK)
             GITSYNC.recheck()                   # a repository exists now
             return self._json({**r, "sync": GITSYNC.status()}, 502 if "error" in r else 200)
+        if path == "/api/history/restore" or path == "/api/history/pin" or path == "/api/history/unpin":
+            return self._json(self._history(path, body))
         if path == "/api/git/recheck":
             GITSYNC.recheck()
             return self._json(GITSYNC.status())
@@ -609,6 +665,14 @@ class Handler(httpbase.Handler):
         if path == "/api/build/stop":
             return self._json({"ok": PROJECT.stop_build()})
         return self._err(404, "not found")
+
+
+def _paths(value) -> list[str] | None:
+    if value in (None, "", []):
+        return None
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise Refused("paths: a list of the project's files or folders")
+    return value
 
 
 def is_scratch(root: Path) -> bool:

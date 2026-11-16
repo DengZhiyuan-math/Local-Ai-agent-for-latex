@@ -215,7 +215,16 @@ def account_problem(info: dict, allowed: str) -> str | None:
 # get these tools at all: it then reads, searches and edits with its own tools instead of
 # cat, sed or rm, and leaves compiling to the editor.
 SHELL_TOOLS = ("Bash", "PowerShell", "Monitor")
-COMPILE_TOOL = "mcp__prism__compile"       # mcp_compile.py, as Claude Code names it
+PRISM_TOOLS = "mcp__prism__"                # mcp_compile.py's tools, as Claude Code names them
+COMPILE_TOOL = PRISM_TOOLS + "compile"
+
+
+def _label(name: str) -> str:
+    """How the panel names a tool: the editor's own tools by what they do."""
+    import mcp_compile
+    if name and name.startswith(PRISM_TOOLS):
+        return mcp_compile.LABELS.get(name[len(PRISM_TOOLS):], name)
+    return name
 
 
 def shell_rules(root: Path | None) -> list[str]:
@@ -237,9 +246,10 @@ def shell_rules(root: Path | None) -> list[str]:
 
 
 def _loads_compile_tool(block: dict) -> bool:
-    """Claude Code loading the compile tool before its first use: not a step to show."""
+    """Claude Code loading the editor's tools before their first use: not a step to show."""
     q = str((block.get("input") or {}).get("query") or "")
-    return block.get("name") == "ToolSearch" and COMPILE_TOOL in q         and all(COMPILE_TOOL == t.strip() for t in q.removeprefix("select:").split(","))
+    return block.get("name") == "ToolSearch" and PRISM_TOOLS in q \
+        and all(t.strip().startswith(PRISM_TOOLS) for t in q.removeprefix("select:").split(","))
 
 
 def context_tokens(usage: dict | None) -> int:
@@ -485,11 +495,11 @@ class ClaudeCode(CliBackend):
                "--append-system-prompt", self.system_text()]
         allowed = self.scope_rules(job.scope) if job.scope else []
         cmd += ["--strict-mcp-config"]
-        if job.may_compile:
-            # The compile tool (mcp_compile.py): the editor's own build, no shell needed.
+        if job.has_tools:
+            # The editor's tools (mcp_compile.py): its own build, the project's history.
             import mcp_compile
-            cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": mcp_compile.config(job.server_url)}})]
-            allowed.append(COMPILE_TOOL)
+            cmd += ["--mcp-config", json.dumps({"mcpServers": {"prism": mcp_compile.config(job.server_url, job.mode)}})]
+            allowed += [PRISM_TOOLS + n for n in mcp_compile.names_for(job.mode)]
         else:
             cmd += ["--mcp-config", json.dumps({"mcpServers": {}})]
         if allowed:
@@ -622,7 +632,7 @@ class ClaudeCode(CliBackend):
                     fields["old"] = LiveInput("old_string")
                 st.setdefault("live", {})[ev.get("index")] = (block.get("id"), fields)
                 job.emit({"t": "tool_start", "id": block.get("id"),
-                          "name": "Compile" if name == COMPILE_TOOL else name})
+                          "name": _label(name)})
             elif et == "content_block_delta" and delta.get("type") == "input_json_delta":
                 tid, fields = st.get("live", {}).get(ev.get("index"), (None, {}))
                 if fields:
@@ -654,7 +664,7 @@ class ClaudeCode(CliBackend):
                     if _loads_compile_tool(block):
                         continue
                     name, args = block.get("name", ""), block.get("input") or {}
-                    job.tool(block.get("id"), "Compile" if name == COMPILE_TOOL else name,
+                    job.tool(block.get("id"), _label(name),
                              _summarize_tool(name, args, job.root), **_tool_place(name, args, job.root))
         elif t == "user" and d.get("parent_tool_use_id") is None:
             for block in (d.get("message") or {}).get("content", []):

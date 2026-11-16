@@ -298,7 +298,11 @@ class CompileContract(unittest.TestCase):
         codex = Codex("codex", {"bin": "codex"})
         for mode in ("edit", "ask"):
             cmd, _ = codex.command(job_for(mode=mode, server_url="http://127.0.0.1:9/"))
-            self.assertEqual(any("mcp_compile.py" in arg for arg in cmd), mode == "edit")
+            # The editor's tools in every turn: the history to look at; compile in Edit only.
+            self.assertTrue(any("mcp_compile.py" in arg for arg in cmd))
+            enabled = next(a for a in cmd if a.startswith("mcp_servers.prism.enabled_tools="))
+            self.assertEqual('"compile"' in enabled, mode == "edit")
+            self.assertIn('"versions"', enabled)
         api = OpenAICompat("api", {"base_url": "http://unused"})
         job = job_for(mode="edit", server_url="http://127.0.0.1:9/")
         with mock.patch("mcp_compile.build", return_value={"exit": 1, "diagnostics": []}):
@@ -311,6 +315,21 @@ class CompileContract(unittest.TestCase):
 
 
 class DeepCodeContract(unittest.TestCase):
+    def test_ask_has_only_read_only_editor_tools_and_keeps_write_denials(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        job = job_for(root=root, mode="ask", server_url="http://127.0.0.1:9/")
+        with mock.patch("backend_deepcode.user_settings", return_value={}):
+            with DeepCode("deepcode").turn_settings(job):
+                config = json.loads((root / ".deepcode/settings.json").read_text())
+                self.assertEqual(config["mcpServers"]["prism"]["args"][-2:], ["--mode", "ask"])
+                deny = config["permissions"]["deny"]
+                self.assertNotIn("mcp", deny)
+                self.assertIn("write-in-cwd", deny)
+                self.assertIn("delete-in-cwd", deny)
+                self.assertEqual(mcp_compile.names_for("ask"), ["versions", "version_show", "version_diff"])
+
     def test_resumed_turn_refreshes_native_tools_and_project_key_is_accepted(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -287,8 +287,18 @@ class CompileTool(unittest.TestCase):
         cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
         args = cfg["mcpServers"]["prism"]["args"]
         self.assertTrue(args[0].endswith("mcp_compile.py"))
-        self.assertEqual(args[1:], ["--url", "http://127.0.0.1:9/"])
-        self.assertIn(backend_claude.COMPILE_TOOL, cmd[cmd.index("--allowedTools") + 1:])
+        self.assertEqual(args[1:], ["--url", "http://127.0.0.1:9/", "--mode", "edit"])
+        allowed = cmd[cmd.index("--allowedTools") + 1:]
+        self.assertIn(backend_claude.COMPILE_TOOL, allowed)
+        self.assertIn("mcp__prism__version_restore", allowed)
+        # An Ask turn gets the history to look at, and neither compile nor restore.
+        cmd, _ = cc.command(job_for(mode="ask", root=tmpdir(), server_url="http://127.0.0.1:9/"))
+        cfg = json.loads(cmd[cmd.index("--mcp-config") + 1])
+        self.assertEqual(cfg["mcpServers"]["prism"]["args"][-2:], ["--mode", "ask"])
+        allowed = cmd[cmd.index("--allowedTools") + 1:]
+        self.assertIn("mcp__prism__versions", allowed)
+        self.assertNotIn(backend_claude.COMPILE_TOOL, allowed)
+        self.assertNotIn("mcp__prism__version_restore", allowed)
 
     def test_protocol(self):
         a = mcp_compile.answer({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -296,7 +306,9 @@ class CompileTool(unittest.TestCase):
         self.assertEqual(a["result"]["protocolVersion"], "2025-06-18")
         self.assertIsNone(mcp_compile.answer({"jsonrpc": "2.0", "method": "notifications/initialized"}, "u"))
         tools = mcp_compile.answer({"jsonrpc": "2.0", "id": 2, "method": "tools/list"}, "u")
-        self.assertEqual([t["name"] for t in tools["result"]["tools"]], ["compile"])
+        self.assertEqual([t["name"] for t in tools["result"]["tools"]][0], "compile")
+        ask = mcp_compile.answer({"jsonrpc": "2.0", "id": 3, "method": "tools/list"}, "u", "ask")
+        self.assertNotIn("compile", [t["name"] for t in ask["result"]["tools"]])
 
     def test_report_lists_errors_with_lines(self):
         text, failed = mcp_compile.report({"exit": 1, "engine": "pdflatex", "seconds": 2.1, "diagnostics": [

@@ -45,7 +45,8 @@ NO_PROMPTS = {"GCM_INTERACTIVE": "never", "GIT_ASKPASS": "", "SSH_ASKPASS_REQUIR
 
 
 def git(cwd: str | Path, *args: str, timeout: float = 60, binary: bool = False,
-        check: bool = False, interactive: bool = False) -> subprocess.CompletedProcess:
+        check: bool = False, interactive: bool = False,
+        index_file: Path | None = None) -> subprocess.CompletedProcess:
     """`git args` in `cwd`. Output is str (UTF-8, undecodable bytes replaced), or bytes with
     binary=True. Raises subprocess.TimeoutExpired after `timeout` seconds, OSError when git
     cannot start, and subprocess.CalledProcessError on failure with check=True; otherwise
@@ -53,6 +54,8 @@ def git(cwd: str | Path, *args: str, timeout: float = 60, binary: bool = False,
     credential helper ask you to log in."""
     text = {} if binary else {"text": True, "encoding": "utf-8", "errors": "replace"}
     env = git_env() if interactive else {**git_env(), **NO_PROMPTS}
+    if index_file is not None:               # explicit internal temporary index, never inherited
+        env["GIT_INDEX_FILE"] = str(index_file.resolve())
     try:
         return proc.run(["git", "--no-optional-locks", *args], cwd=cwd, stdin=subprocess.DEVNULL,
                         timeout=timeout, check=check, env=env, **text)

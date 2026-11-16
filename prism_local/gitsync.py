@@ -34,6 +34,7 @@ import functools
 import json
 import subprocess
 import threading
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +46,7 @@ import registry
 import gitenv
 import repoview
 import diskwatch
+import versions
 from errors import say
 from repository import SHARED_MARKER, FilesLock, Place, RepoBusy, Repository, locate, refs_stamp, shared_marker  # noqa: F401
 from synctarget import (RepoSettings, cached, github_url, public_target, redact_url,  # noqa: F401
@@ -361,7 +363,22 @@ class GitSync:
                 self._ok("add", "-A", "--", *paths)
                 if self.git("diff", "--cached", "--quiet", "--", *paths).returncode == 0:
                     return False
-                self._ok("commit", "-q", "-m", msg, "--", *paths)
+                chosen = set(paths)
+                layout_change = any(parent.as_posix() in chosen for p in paths for parent in Path(p).parents
+                                    if parent != Path("."))
+                if layout_change:
+                    # git commit -- paths cannot handle a file becoming a directory.
+                    # Build an index from HEAD containing only our chosen paths, so an
+                    # unrelated staged edit (including another shared project) stays out.
+                    with tempfile.TemporaryDirectory(prefix="prism-index-", dir=self.git_dir) as directory:
+                        index = Path(directory) / "index"
+                        for args in (("read-tree", "HEAD"), ("add", "-A", "--", *paths),
+                                     ("commit", "-q", "-m", msg)):
+                            r = gitenv.git(self.top, *args, index_file=index)
+                            if r.returncode:
+                                raise RuntimeError((r.stderr or r.stdout).strip()[-400:])
+                else:
+                    self._ok("commit", "-q", "-m", msg, "--", *paths)
                 h = self._ok("rev-parse", "--short", "HEAD").strip()
                 self.last_commit = {"at": time.time(), "message": msg, "hash": h}
                 self.error = None
@@ -427,9 +444,14 @@ class GitSync:
             if t is None:
                 return None
             self.upstream = f"{t['remote']}/{t['branch_ref'].removeprefix('refs/heads/')}"
-            return self.git("fetch", "-q", "--no-tags", "--no-recurse-submodules", "--",
-                            t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}", timeout=120,
+            tag_prefix = versions.Versions(self).tag_prefix
+            r = self.git("fetch", "-q", "--prune", "--no-tags", "--no-recurse-submodules", "--",
+                            t["remote"], f"+{t['branch_ref']}:{self.tracking_ref}",
+                            f"refs/tags/{tag_prefix}*:refs/prism-local/fetched-tags/{tag_prefix}*", timeout=120,
                             interactive=manual)
+            if r.returncode == 0:
+                versions.Versions(self).import_pins()
+            return r
 
     def _checked_target(self) -> dict | None:
         """The sync target as the configuration names it now, checked (validate_target,
@@ -485,7 +507,12 @@ class GitSync:
                 if not manual and not self.enabled:
                     return Outcome("local", "Automatic sync is off.")
                 if not self.ahead:
-                    return Outcome("synced")
+                    pending_tags = bool(versions.Versions(self).pending())
+                else:
+                    pending_tags = False
+                ahead = self.ahead
+            if not ahead:
+                return self._push_pending_tags(manual) if pending_tags else Outcome("synced")
             self.state = "pushing"
             try:
                 with self.repo.transferring():
@@ -500,7 +527,7 @@ class GitSync:
                 with self.lock:
                     self.last_push, self.error = time.time(), None
                     self._remote_state()
-                return Outcome("synced")
+                return self._push_pending_tags(manual)
             msg = safe_git_message((r.stderr or r.stdout).strip())
             # GitHub has commits this copy lacks: GitHub said so, or the guard did (it stops
             # such a push before GitHub sees it).
@@ -977,3 +1004,76 @@ class GitSync:
         diff = self.git("show", "--format=", "--no-color", rev, "--", name, timeout=30)
         return {"content": content.stdout if content.returncode == 0 else None, "diff": diff.stdout,
                 "path": name[len(self.prefix):] if name.startswith(self.prefix) else name}
+
+    # ------------------------------------------------------------ versions (versions.py)
+    def pin_version(self, name: str, note: str = "") -> dict:
+        """Pin the project as it is now under `name` (v1): what is not committed yet is
+        committed first (also with sync off: the pin is of these files), then the commit
+        is tagged, and the tag pushed when the project syncs with GitHub."""
+        with self.lock, self._changing():
+            v = versions.Versions(self)
+            v.free(name)                       # a bad or taken name: before anything is committed
+            committed = self._record(self.changes, lambda paths: f"Pinned as {name}: {_names(paths)}")
+            if not v._has_head():
+                raise versions.VersionError("Nothing to pin yet: the project has no commit.")
+            pinned = v.pin(name, note)
+        pinned["committed"] = committed
+        if self.enabled and self.has_remote:
+            # The network in the background: the commit first, then the pin that names it.
+            threading.Thread(target=lambda: self._safe(self.push), daemon=True).start()
+            pinned["upload"] = "It is being uploaded to GitHub."
+        else:
+            pinned["upload"] = "Kept in this copy" + (" (sync with GitHub is off)." if not self.enabled else ".")
+        return pinned
+
+    def unpin_version(self, name: str) -> dict:
+        """Remove the pin `name` here (its commit stays in the history). A pin GitHub has
+        stays there: this copy never deletes anything on GitHub."""
+        with self.lock, self._changing():
+            r = versions.Versions(self).unpin(name)
+        if self.has_remote:
+            r["note"] = (f"Unpinned here. If {name} was uploaded to GitHub, it is still there "
+                         "(Prism never deletes anything on GitHub).")
+        return r
+
+    def restore_version(self, rev: str, paths: list[str] | None = None) -> dict:
+        """Put the project (or `paths`) back as it was in version `rev`, as new commits:
+        what is not committed yet is committed first ("Before restoring v1"), then the
+        restored files ("Restored v1"). History is never rewritten: going back is itself a
+        version, and the one before it is still there to return to."""
+        with self.lock, self._changing():
+            v = versions.Versions(self)
+            h = v.resolve(rev)
+            # A pin keeps its name in the message; anything else (HEAD~2) by its commit.
+            label = rev if any(p["name"] == rev for p in v.pins()) else h[:7]
+            saved = self._record(self.changes, lambda p: f"Before restoring {label}: {_names(p)}")
+            r = v.restore(h, paths)
+            touched = r["written"] + r["deleted"]
+            r["saved_before"] = saved
+            r["committed"] = bool(touched) and self._record(
+                lambda: [self.rel(p) for p in touched],
+                lambda _: f"Restored {label}" + ("" if label == h[:7] else f" ({h[:7]})")
+                + ("" if not paths else f": {_names(touched)}"))
+        if r["committed"] and self.enabled:
+            self.schedule.edited()             # pushed with the next sync step
+        return r
+
+    def _push_pending_tags(self, manual: bool = False) -> Outcome:
+        """Retry pinned versions even after a restart or a branch-only successful push."""
+        with self.repo.transferring():
+            t = self._checked_target()
+            if t is None or (not manual and not self.enabled):
+                return Outcome("local", "Pinned versions are kept in this copy until sync is available.")
+            v = versions.Versions(self)
+            for ref, obj, queued in v.pending():
+                # Push the queued object, not a ref another window could have moved.
+                r = self.git("push", "-q", "--no-follow-tags", "--recurse-submodules=no", "--",
+                             t["remote"], f"{obj}:{ref}", timeout=120, interactive=manual)
+                if r.returncode:
+                    self.schedule.push_failed()
+                    return self._failed("Could not upload a pinned version; it will be retried.\n" +
+                                        safe_git_message((r.stderr or r.stdout).strip())[-300:])
+                v._git("update-ref", "-d", queued, obj)
+        with self.lock:
+            self.last_push, self.error = time.time(), None
+        return Outcome("synced")

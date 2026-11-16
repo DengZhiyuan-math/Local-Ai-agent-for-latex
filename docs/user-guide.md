@@ -134,7 +134,8 @@ there by itself:
   last save changed;
 - **Pin this version…** (GitHub menu, or the History tab) gives the project as it is now a
   name, such as `v1` or `submitted`, after committing what is not committed yet. A pin is
-  a git tag (in a repository shared by several projects, `<folder>/v1`), uploaded to GitHub
+  a git tag (in a repository shared by several projects, `<folder>/v1`, with folder names
+  escaped where Git ref rules require it), uploaded to GitHub
   when the project syncs there;
 - **Versions of the project…** (or **Project** in the History tab) lists the pinned versions
   and the project's commits. Pick one to see what it changed and which files it had, to
@@ -564,7 +565,7 @@ directory that appeared anywhere in the project. Nothing is deleted: remove it i
 Ask grants no project writes and no compile tool. The adapter requires a CLI supporting
 named profiles, `--ignore-user-config` and `--ignore-rules` on both new and resumed turns;
 it checks compatibility and login before a turn.
-It supplies only the editor's compile MCP, without loading user MCP configuration,
+It supplies only the editor's mode-specific MCP tools, without loading user MCP configuration,
 and turns Codex hooks off for editor turns (`features.hooks=false`): `--ignore-user-config`
 alone still runs hooks from `~/.codex/hooks.json`. Your terminal hook settings are unchanged.
 On Windows the adapter explicitly selects the native `elevated` sandbox, since ignoring
@@ -590,7 +591,9 @@ permissions); prism-local passes `DEEPSEEK_API_KEY` on when Deep Code has no key
 and `/model` (`deepseek-v4-pro`, `deepseek-flash`) and `/effort` (`low`, `high`, `max`).
 Deep Code prints only its final reply, so the panel shows the tools it used once the turn
 ends. Each turn refreshes native tool instructions. A temporary project settings overlay
-registers the editor compile MCP for Edit and denies write/delete/MCP categories for Ask.
+registers the editor's MCP tools for both modes. Ask exposes only history queries and
+denies write/delete categories; Edit also exposes compile, restore and pin. User MCP
+servers are excluded so enabling history does not enable unrelated tools.
 The overlay restores the exact original settings bytes after the turn; concurrent edits are
 kept and reported. User MCP servers require a separate clean Deep Code profile.
 Deep Code category checks are not an OS sandbox and cannot restrict writes to single files.

@@ -21,6 +21,8 @@ const ARGS = {
   forward: ["a.tex", 3], inverse: [1, 10.5, 20.25],
   sync: ["pull"], recheck: [], github: [], publishInfo: [], publish: [{ name: "p", leave_out: [] }],
   theirs: ["a.tex"], log: ["a.tex"], show: ["abc", "a.tex"],
+  history: ["a.tex", 300], historyShow: ["v1", "a.tex"], historyDiff: ["v1", "v2", "a.tex"],
+  historyRestore: ["v1", ["a.tex"]], historyPin: ["v1", "note"], historyUnpin: ["v1"],
   agent: [{ prompt: "hi" }], events: [7, 3], stop: [7], undo: [7], info: [], usage: ["claude"],
   account: ["claude"], commands: ["claude", true],
   models: ["claude", true], configure: ["claude", "sonnet", "high"], permission: [7, "r1", "allow", "once"],

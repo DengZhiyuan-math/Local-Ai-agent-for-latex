@@ -97,6 +97,11 @@ SYSTEM_AFTER_TOOLS = """\
   Compile after substantial edits and fix the errors your changes caused.
   Never run pdflatex or latexmk yourself. Without the tool, do not compile:
   the author compiles in the editor.
+- The project's history (every autosave and agent turn is a commit; the author
+  pins key versions as v1, v2, ...): use the version tools when you have them:
+  versions, version_show and version_diff to look at earlier versions, and in edit
+  mode version_restore to put files back as they were and version_pin to pin the
+  project under a name, each only when the author asks. Do not read .git yourself.
 - Never commit, push, or run git commands that modify the repository.
 - Lines between "% [prism-local]" comment lines hold two co-authors' versions of the same
   passage, kept when they wrote it at the same time. Never delete those marker lines or
@@ -252,6 +257,9 @@ class Job:
         self.snapshot_issues: set[str] = set()
         self.metadata_before: set[str] = set()   # .git, .codex… present when it started
         self.attachments: list[str] = []
+        # Versions the agent asked to pin (name, note): pinned when the turn ends, after
+        # its changes are committed, so that the pin has them (AgentManager.queue_pin).
+        self.pins: list[tuple[str, str]] = []
         self.errors_shown = 0                    # error events the page has had (emit)
 
     def emit(self, ev: dict) -> None:
@@ -268,6 +276,12 @@ class Job:
     def may_compile(self) -> bool:
         """Whether the turn has the editor's compile tool: an Edit turn, with the editor's server."""
         return self.mode == "edit" and bool(self.server_url)
+
+    @property
+    def has_tools(self) -> bool:
+        """Whether the turn has the editor's tools (mcp_compile.py): the project's history in
+        every turn, compile, restore and pin in Edit turns. Needs the editor's server."""
+        return bool(self.server_url)
 
     def tool(self, tid, name, summary="", path=None, lines=None) -> None:
         """A tool the agent called (the event's form is kept here, whatever shape the
